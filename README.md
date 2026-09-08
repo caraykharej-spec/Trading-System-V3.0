@@ -16,11 +16,11 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current phase
 
-**Phase 02 — Domain and Data Foundation**
+**Phase 04 — Universe and Instrument Registry**
 
-Completed foundations include normalized instrument/live-price/OHLCV contracts, provider interfaces, live-price freshness validation, account/equity accounting, and restart-safe SQLite position persistence.
+Completed foundations include normalized market-data contracts, provider adapters, live-price freshness validation, account/equity accounting, restart-safe SQLite position persistence, and a canonical instrument registry with explicit provider symbol mappings and contract specifications.
 
-See `docs/architecture/01_foundation.md` and `docs/architecture/02_domain_data.md`.
+See `docs/architecture/01_foundation.md`, `docs/architecture/02_domain_data.md`, and `docs/architecture/04_universe.md`.
 
 ## Run from PyCharm
 
@@ -30,7 +30,7 @@ Use the project root as the working directory and run:
 python main.py
 ```
 
-The local smoke runner is intentionally non-trading. It demonstrates the mandatory position-safety phase and account accounting before live provider integration.
+The local smoke runner is intentionally non-trading. It demonstrates the mandatory position-safety phase and account accounting before live execution is enabled.
 
 ## Risk constants
 
@@ -53,3 +53,5 @@ The V3 source boundary currently reserves adapters for:
 - Yahoo Finance
 
 Pyth is deliberately excluded.
+
+The configured universe is intentionally empty until provider catalogs and symbol mappings are verified. V3 does not copy a hard-coded asset count from the legacy system.
