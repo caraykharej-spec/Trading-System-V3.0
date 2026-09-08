@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+*.log
+logs/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+config/credentials.yaml
+
+# Local runtime data
+data/runtime/
+data/cache/
+storage/local/
+*.db
+*.sqlite
+*.sqlite3
+
+# OS files
+.DS_Store
+Thumbs.db
