@@ -9,7 +9,7 @@ def test_stale_live_price_is_rejected():
     price = LivePrice(
         symbol="BTC/USDT",
         price=Decimal("70000"),
-        timestamp=datetime.now(timezone.utc) - timedelta(minutes=3),
+        as_of=datetime.now(timezone.utc) - timedelta(minutes=3),
         provider="test",
     )
     result = validate_live_price(price)
@@ -20,7 +20,7 @@ def test_stale_live_price_is_rejected():
 def test_invalid_candle_ohlc_is_rejected():
     candle = Candle(
         symbol="BTC/USDT",
-        interval="1h",
+        timeframe="1h",
         timestamp=datetime.now(timezone.utc),
         open=Decimal("110"),
         high=Decimal("100"),
