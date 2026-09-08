@@ -1,30 +1,35 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Iterable
 from uuid import uuid4
 
 from app.core.enums import CycleStatus
 from app.core.models import CycleResult, Position
 from app.core.position_monitor import LivePriceProvider, monitor_open_positions
+from app.portfolio.account import Account
 
 
 @dataclass
 class ApplicationRunner:
     positions: list[Position]
     live_price_provider: LivePriceProvider
+    account: Account
 
     def run_cycle(self) -> CycleResult:
-        started_at = datetime.now().astimezone()
+        """Run the mandatory position-safety phase before future strategy phases."""
+        started_at = datetime.now(timezone.utc)
         cycle_id = str(uuid4())
 
         monitor = monitor_open_positions(self.positions, self.live_price_provider)
-        finished_at = datetime.now().astimezone()
+        for result in monitor.results:
+            self.account.apply_realized_pnl(result.realized_pnl)
 
+        finished_at = datetime.now(timezone.utc)
         notes = tuple(
-            f"Stopped {result.position_id} at {result.exit_price}; P&L={result.realized_pnl}"
+            f"Stopped {result.position_id} at {result.exit_price}; "
+            f"P&L={result.realized_pnl}; equity={self.account.equity}"
             for result in monitor.results
         )
 
@@ -60,4 +65,8 @@ def build_demo_runner() -> ApplicationRunner:
             leverage=Decimal("7"),
         )
     ]
-    return ApplicationRunner(positions=positions, live_price_provider=demo_price_provider)
+    return ApplicationRunner(
+        positions=positions,
+        live_price_provider=demo_price_provider,
+        account=Account(starting_equity=Decimal("10000")),
+    )
