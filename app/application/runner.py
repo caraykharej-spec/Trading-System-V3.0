@@ -9,11 +9,12 @@ from app.core.enums import CycleStatus
 from app.core.models import CycleResult, Position
 from app.core.position_monitor import LivePriceProvider, monitor_open_positions
 from app.portfolio.account import Account
+from app.storage.repositories.position_repository import PositionRepository
 
 
 @dataclass
 class ApplicationRunner:
-    positions: list[Position]
+    position_repository: PositionRepository
     live_price_provider: LivePriceProvider
     account: Account
 
@@ -21,8 +22,11 @@ class ApplicationRunner:
         """Run the mandatory position-safety phase before future strategy phases."""
         started_at = datetime.now(timezone.utc)
         cycle_id = str(uuid4())
+        positions = self.position_repository.list_open()
 
-        monitor = monitor_open_positions(self.positions, self.live_price_provider)
+        monitor = monitor_open_positions(positions, self.live_price_provider)
+        for position in positions:
+            self.position_repository.save(position)
         for result in monitor.results:
             self.account.apply_realized_pnl(result.realized_pnl)
 
@@ -52,6 +56,7 @@ def demo_price_provider(symbol: str) -> Decimal:
 
 def build_demo_runner() -> ApplicationRunner:
     from app.core.enums import PositionSide
+    from app.storage.repositories.in_memory_position_repository import InMemoryPositionRepository
 
     positions = [
         Position(
@@ -66,7 +71,7 @@ def build_demo_runner() -> ApplicationRunner:
         )
     ]
     return ApplicationRunner(
-        positions=positions,
+        position_repository=InMemoryPositionRepository(positions),
         live_price_provider=demo_price_provider,
         account=Account(starting_equity=Decimal("10000")),
     )
