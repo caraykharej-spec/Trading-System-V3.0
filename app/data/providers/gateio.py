@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from datetime import datetime, timezone
 
-from app.data.market_data import Candle, LivePrice
+from app.data.market_data import Candle, LivePrice, MarketDataRequest
+from app.data.providers.base import MarketDataProvider
 from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_now
 
 
 @dataclass(frozen=True)
-class GateIOProvider:
+class GateIOProvider(MarketDataProvider):
+    name: str = "gateio"
     base_url: str = "https://api.gateio.ws/api/v4"
     client: HttpClient = HttpClient()
 
@@ -17,30 +19,37 @@ class GateIOProvider:
         payload = self.client.get_json(f"{self.base_url}/spot/tickers?currency_pair={pair}")
         if not isinstance(payload, list) or not payload:
             raise ProviderError(f"Gate.io ticker not found: {symbol}")
-        price = to_decimal(payload[0].get("last"))
+        record = payload[0]
+        price = to_decimal(record.get("last"))
         if price <= 0:
             raise ProviderError(f"Gate.io returned non-positive price for {symbol}")
-        return LivePrice(symbol=symbol, price=price, timestamp=utc_now(), provider="gateio")
+        as_of = utc_now()
+        return LivePrice(symbol=symbol, price=price, as_of=as_of, provider=self.name)
 
-    def get_candles(self, symbol: str, interval: str, limit: int = 500) -> tuple[Candle, ...]:
-        pair = symbol.replace("/", "_").upper()
-        url = f"{self.base_url}/spot/candlesticks?currency_pair={pair}&interval={interval}&limit={limit}"
+    def get_candles(self, request: MarketDataRequest) -> list[Candle]:
+        timeframe = request.timeframe or "1h"
+        pair = request.symbol.replace("/", "_").upper()
+        limit = max(1, min(request.limit, 1000))
+        url = f"{self.base_url}/spot/candlesticks?currency_pair={pair}&interval={timeframe}&limit={limit}"
         payload = self.client.get_json(url)
         if not isinstance(payload, list):
-            raise ProviderError(f"Gate.io candles invalid for {symbol}")
+            raise ProviderError(f"Gate.io candles invalid for {request.symbol}")
         candles: list[Candle] = []
         for row in payload:
             if not isinstance(row, list) or len(row) < 6:
                 continue
-            ts = row[0]
-            candles.append(Candle(
-                symbol=symbol,
-                interval=interval,
-                timestamp=__import__("datetime").datetime.fromtimestamp(float(ts), tz=__import__("datetime").timezone.utc),
-                open=to_decimal(row[5]),
-                high=to_decimal(row[3]),
-                low=to_decimal(row[4]),
-                close=to_decimal(row[2]),
-                volume=to_decimal(row[1]),
-            ))
-        return tuple(sorted(candles, key=lambda c: c.timestamp))
+            try:
+                ts = float(row[0])
+                candles.append(Candle(
+                    symbol=request.symbol,
+                    timeframe=timeframe,
+                    timestamp=datetime.fromtimestamp(ts, tz=timezone.utc),
+                    open=to_decimal(row[5]),
+                    high=to_decimal(row[3]),
+                    low=to_decimal(row[4]),
+                    close=to_decimal(row[2]),
+                    volume=to_decimal(row[1]),
+                ))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ProviderError(f"Gate.io invalid candle for {request.symbol}") from exc
+        return sorted(candles, key=lambda candle: candle.timestamp)
