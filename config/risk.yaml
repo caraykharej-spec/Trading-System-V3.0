@@ -1,0 +1,17 @@
+risk:
+  max_risk_per_trade_percent: 1.0
+  max_aggregate_open_risk_percent: 4.0
+  max_storm_sl_loss_percent_of_position_amount: 10.0
+  min_risk_reward: 2.5
+  max_open_positions: null
+
+portfolio:
+  max_futures_capital_percent: 50.0
+  max_correlated_risk_percent: 2.0
+
+strategy:
+  minimum_score: 90.0
+  minimum_confidence: 90.0
+
+ranking:
+  top_n: 10
