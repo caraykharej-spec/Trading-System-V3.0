@@ -1,0 +1,12 @@
+{
+  "policy": {
+    "canonical_symbol_format": "BASE/QUOTE",
+    "supported_asset_classes": ["CRYPTO", "EQUITY", "COMMODITY", "FOREX"],
+    "data_timeframes": ["15m", "1h", "4h", "1d"],
+    "ranking_limit": 10,
+    "pyth_enabled": false
+  },
+  "instruments": [],
+  "mappings": [],
+  "contract_specs": []
+}
