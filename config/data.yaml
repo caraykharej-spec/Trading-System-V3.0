@@ -1,0 +1,14 @@
+data:
+  live_price_max_age_seconds: 30
+  default_candle_limit: 200
+  timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
+  providers:
+    primary:
+      - storm
+      - gateio
+      - yahoo
+  pyth_enabled: false
