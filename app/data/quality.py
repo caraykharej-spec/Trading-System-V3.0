@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 
 from app.data.market_data import Candle, LivePrice
 
@@ -16,7 +15,7 @@ class DataQuality:
 def validate_live_price(price: LivePrice, max_age_seconds: int = 120) -> DataQuality:
     reasons: list[str] = []
     now = datetime.now(timezone.utc)
-    timestamp = price.timestamp.astimezone(timezone.utc)
+    timestamp = price.as_of.astimezone(timezone.utc)
     if price.price <= 0:
         reasons.append("price must be positive")
     if timestamp > now + timedelta(seconds=5):
@@ -29,8 +28,7 @@ def validate_live_price(price: LivePrice, max_age_seconds: int = 120) -> DataQua
 def validate_candles(candles: tuple[Candle, ...]) -> DataQuality:
     reasons: list[str] = []
     if not candles:
-        reasons.append("no candles")
-        return DataQuality(False, tuple(reasons))
+        return DataQuality(False, ("no candles",))
     previous = None
     for candle in candles:
         if candle.high < candle.low:
@@ -41,7 +39,7 @@ def validate_candles(candles: tuple[Candle, ...]) -> DataQuality:
             reasons.append(f"close outside range at {candle.timestamp.isoformat()}")
         if candle.volume < 0:
             reasons.append(f"negative volume at {candle.timestamp.isoformat()}")
-        if previous and candle.timestamp <= previous:
+        if previous is not None and candle.timestamp <= previous:
             reasons.append("candles are not strictly chronological")
         previous = candle.timestamp
     return DataQuality(not reasons, tuple(reasons))
