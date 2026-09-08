@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from app.data.market_data import LivePrice
+from app.data.market_data import LivePrice, MarketDataRequest, Candle
+from app.data.providers.base import MarketDataProvider
 from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_now
 
 
 @dataclass(frozen=True)
-class StormProvider:
+class StormProvider(MarketDataProvider):
+    name: str = "storm"
     base_url: str = "https://api5.storm.tg/api"
     client: HttpClient = HttpClient()
 
@@ -22,7 +24,11 @@ class StormProvider:
         price = self._extract_price(record)
         if price <= 0:
             raise ProviderError(f"Storm returned non-positive price for {symbol}")
-        return LivePrice(symbol=symbol, price=price, timestamp=utc_now(), provider="storm")
+        as_of = self._extract_timestamp(record) or utc_now()
+        return LivePrice(symbol=symbol, price=price, as_of=as_of, provider=self.name)
+
+    def get_candles(self, request: MarketDataRequest) -> list[Candle]:
+        raise ProviderError("Storm OHLCV adapter is not enabled until its candle endpoint is verified")
 
     @staticmethod
     def _find_market(payload: Any, symbol: str) -> dict[str, Any] | None:
@@ -46,3 +52,18 @@ class StormProvider:
             if record.get(key) is not None:
                 return to_decimal(record[key])
         raise ProviderError("Storm market record has no supported price field")
+
+    @staticmethod
+    def _extract_timestamp(record: dict[str, Any]) -> datetime | None:
+        for key in ("timestamp", "updatedAt", "updated_at", "time"):
+            value = record.get(key)
+            if value is None:
+                continue
+            try:
+                numeric = float(value)
+                if numeric > 10_000_000_000:
+                    numeric /= 1000
+                return datetime.fromtimestamp(numeric, tz=timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                continue
+        return None
