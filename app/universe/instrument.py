@@ -21,6 +21,7 @@ class Instrument:
     tradable: bool = True
     min_quantity: Decimal | None = None
     quantity_step: Decimal | None = None
+    price_tick: Decimal | None = None
 
     def validate(self) -> None:
         if not self.symbol or not self.base_asset or not self.quote_asset:
@@ -29,3 +30,5 @@ class Instrument:
             raise ValueError("min_quantity cannot be negative")
         if self.quantity_step is not None and self.quantity_step <= 0:
             raise ValueError("quantity_step must be positive")
+        if self.price_tick is not None and self.price_tick <= 0:
+            raise ValueError("price_tick must be positive")
