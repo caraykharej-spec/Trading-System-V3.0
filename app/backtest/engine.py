@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from app.core.enums import PositionSide
 from app.data.market_data import Candle
 from app.market.analysis import MarketSnapshot, analyze_market
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
@@ -30,17 +29,12 @@ class _OpenTrade:
 
 
 class BacktestEngine:
-    """Deterministic OHLC backtester using only completed candles at each decision point.
-
-    Signals are generated on a completed 15m candle and filled at the next 15m
-    candle open. Intrabar SL/TP is simulated from OHLC; if both are touched in
-    one candle, SL wins as the conservative assumption.
-    """
+    """Deterministic OHLC backtester using only completed candles at each decision point."""
 
     def __init__(self, config: BacktestConfig | None = None) -> None:
         self.config = config or BacktestConfig()
 
-    def run(self, symbol: str, candles_by_timeframe: dict[str, list[Candle]]) -> BacktestResult:
+    def run(self, symbol: str, candles_by_timeframe: dict[str, list[Candle]], evaluation_start: datetime | None = None) -> BacktestResult:
         candles = self._prepare(symbol, candles_by_timeframe)
         fifteen = candles["15m"]
         equity = self.config.initial_equity
@@ -51,9 +45,10 @@ class BacktestEngine:
         rejected = 0
         max_concurrent = 0
 
-        for index, bar in enumerate(fifteen):
-            # 1) Fill a signal generated on the previous completed 15m candle.
-            if pending_signal is not None:
+        for bar in fifteen:
+            in_test = evaluation_start is None or bar.timestamp >= evaluation_start
+
+            if in_test and pending_signal is not None:
                 if pending_signal.direction == "SHORT" and not self.config.allow_short:
                     rejected += 1
                 else:
@@ -64,7 +59,6 @@ class BacktestEngine:
                         max_concurrent = max(max_concurrent, len(open_trades))
                 pending_signal = None
 
-            # 2) Manage existing positions against the current OHLC bar.
             remaining: list[_OpenTrade] = []
             for trade in open_trades:
                 exit_price, reason = self._intrabar_exit(trade, bar)
@@ -76,35 +70,18 @@ class BacktestEngine:
                 exit_commission = trade.total_amount * self.config.commission_percent / Decimal("100")
                 net_pnl = gross_pnl - exit_commission
                 equity += net_pnl
-                trades.append(TradeRecord(
-                    position_id=trade.position_id,
-                    symbol=symbol,
-                    direction=trade.signal.direction,
-                    setup=trade.signal.setup,
-                    entry_time=trade.entry_time,
-                    entry_price=trade.entry_price,
-                    exit_time=bar.timestamp + self._duration("15m"),
-                    exit_price=exit_price,
-                    stop_loss=trade.signal.stop_loss,
-                    target=trade.signal.target,
-                    quantity=trade.quantity,
-                    total_amount=trade.total_amount,
-                    leverage=trade.leverage,
-                    realized_pnl=net_pnl,
-                    commission=trade.entry_commission + exit_commission,
-                    exit_reason=reason,
-                ))
+                trades.append(self._trade_record(symbol, trade, bar, exit_price, net_pnl, exit_commission, reason))
             open_trades = remaining
             equity_curve.append(equity)
 
-            # 3) Generate the next-bar signal using completed candles only.
+            if not in_test:
+                continue
+
             decision_time = bar.timestamp + self._duration("15m")
             snapshots = self._snapshots_at(symbol, candles, decision_time)
             if snapshots is not None:
                 try:
-                    signal = evaluate_strategy(
-                        snapshots["1d"], snapshots["4h"], snapshots["1h"], snapshots["15m"]
-                    )
+                    signal = evaluate_strategy(snapshots["1d"], snapshots["4h"], snapshots["1h"], snapshots["15m"])
                     if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
                         pending_signal = signal
                     else:
@@ -112,34 +89,17 @@ class BacktestEngine:
                 except (ValueError, ArithmeticError, IndexError):
                     rejected += 1
 
-        # Close anything still open at the final available close.
+        # In an OOS run, only positions opened in the evaluation interval exist,
+        # so marking them at the final test close is valid and cannot leak future data.
         if open_trades:
             final_bar = fifteen[-1]
             for trade in open_trades:
-                exit_price = final_bar.close
-                exit_price = self._apply_exit_slippage(trade.signal.direction, exit_price)
+                exit_price = self._apply_exit_slippage(trade.signal.direction, final_bar.close)
                 gross_pnl = self._pnl(trade, exit_price)
                 exit_commission = trade.total_amount * self.config.commission_percent / Decimal("100")
                 net_pnl = gross_pnl - exit_commission
                 equity += net_pnl
-                trades.append(TradeRecord(
-                    position_id=trade.position_id,
-                    symbol=symbol,
-                    direction=trade.signal.direction,
-                    setup=trade.signal.setup,
-                    entry_time=trade.entry_time,
-                    entry_price=trade.entry_price,
-                    exit_time=final_bar.timestamp + self._duration("15m"),
-                    exit_price=exit_price,
-                    stop_loss=trade.signal.stop_loss,
-                    target=trade.signal.target,
-                    quantity=trade.quantity,
-                    total_amount=trade.total_amount,
-                    leverage=trade.leverage,
-                    realized_pnl=net_pnl,
-                    commission=trade.entry_commission + exit_commission,
-                    exit_reason="END_OF_TEST",
-                ))
+                trades.append(self._trade_record(symbol, trade, final_bar, exit_price, net_pnl, exit_commission, "END_OF_TEST"))
             open_trades = []
             equity_curve.append(equity)
 
@@ -188,10 +148,10 @@ class BacktestEngine:
         if distance <= 0 or signal.stop_loss <= 0:
             return None
         risk_cash = equity * self.config.risk_per_trade_percent / Decimal("100")
-        amount = risk_cash / (distance * Decimal("1"))
         current_risk = sum(self._risk_cash(t) for t in existing)
         if current_risk + risk_cash > equity * self.config.max_aggregate_risk_percent / Decimal("100"):
             return None
+        amount = risk_cash / distance
         current_capital = sum(t.total_amount for t in existing)
         if current_capital + amount > equity * self.config.max_futures_capital_percent / Decimal("100"):
             return None
@@ -235,6 +195,27 @@ class BacktestEngine:
     def _apply_exit_slippage(self, direction: str, price: Decimal) -> Decimal:
         slip = self.config.slippage_percent / Decimal("100")
         return price * (Decimal("1") - slip) if direction == "LONG" else price * (Decimal("1") + slip)
+
+    @staticmethod
+    def _trade_record(symbol: str, trade: _OpenTrade, bar: Candle, exit_price: Decimal, net_pnl: Decimal, exit_commission: Decimal, reason: str) -> TradeRecord:
+        return TradeRecord(
+            position_id=trade.position_id,
+            symbol=symbol,
+            direction=trade.signal.direction,
+            setup=trade.signal.setup,
+            entry_time=trade.entry_time,
+            entry_price=trade.entry_price,
+            exit_time=bar.timestamp + timedelta(minutes=15),
+            exit_price=exit_price,
+            stop_loss=trade.signal.stop_loss,
+            target=trade.signal.target,
+            quantity=trade.quantity,
+            total_amount=trade.total_amount,
+            leverage=trade.leverage,
+            realized_pnl=net_pnl,
+            commission=trade.entry_commission + exit_commission,
+            exit_reason=reason,
+        )
 
     @staticmethod
     def _duration(timeframe: str) -> timedelta:
