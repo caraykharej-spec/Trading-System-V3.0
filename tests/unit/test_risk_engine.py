@@ -33,8 +33,8 @@ def test_storm_loss_is_price_distance_times_leverage() -> None:
 
 def test_position_size_respects_one_percent_equity_risk() -> None:
     quantity, amount = calculate_position_size(equity=Decimal("10000"), entry=Decimal("100"), stop_loss=Decimal("99"), leverage=Decimal("1"), risk_percent=Decimal("1"), contract=contract())
-    assert quantity == Decimal("1.00")
-    assert amount == Decimal("100.00")
+    assert quantity == Decimal("100.00")
+    assert amount == Decimal("10000.00")
 
 
 def test_risk_engine_allows_within_budget() -> None:
