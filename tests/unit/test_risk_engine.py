@@ -49,3 +49,9 @@ def test_aggregate_risk_blocks_new_trade() -> None:
     result = assess_risk(account=Account(Decimal("10000")), positions=[existing], signal=signal(), instrument=instrument(), contract=contract(), leverage=Decimal("1"))
     assert not result.approved
     assert "aggregate open risk exceeds portfolio limit" in result.reasons
+
+
+def test_storm_hard_sl_limit_blocks_above_ten_percent() -> None:
+    result = assess_risk(account=Account(Decimal("10000")), positions=[], signal=signal(), instrument=instrument(), contract=contract(), leverage=Decimal("6"), provider="STORM")
+    assert not result.approved
+    assert "Storm SL loss exceeds hard 10% position-amount limit" in result.reasons
