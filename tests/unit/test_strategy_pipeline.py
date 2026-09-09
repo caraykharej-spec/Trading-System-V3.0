@@ -1,7 +1,6 @@
 from decimal import Decimal
 
 from app.application.strategy_pipeline import StrategyPipeline
-from app.core.enums import PositionSide
 from app.market.analysis import MarketSnapshot
 from app.market.indicators import IndicatorSnapshot
 from app.market.liquidity import LiquidityResult
@@ -14,7 +13,7 @@ def snapshot(symbol: str, timeframe: str, direction: str) -> MarketSnapshot:
     return MarketSnapshot(
         symbol=symbol,
         timeframe=timeframe,
-        indicators=IndicatorSnapshot(Decimal("100"), Decimal("99"), Decimal("95"), Decimal("55"), Decimal("2")),
+        indicators=IndicatorSnapshot(Decimal("100"), Decimal("99"), Decimal("95"), Decimal("55"), Decimal("2"), Decimal("100")),
         trend=TrendResult(direction, Decimal("100")),
         structure=StructureResult(Decimal("98"), Decimal("102"), False, False, False, False, Decimal("100")),
         regime=RegimeResult("TRENDING_BULL" if direction == "BULLISH" else "TRENDING_BEAR", "NORMAL", Decimal("100")),
