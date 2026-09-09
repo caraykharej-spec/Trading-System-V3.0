@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 
-from app.core.enums import PositionSide
-
-from .models import OrderRequest, OrderResult, OrderStatus, OrderType
+from .models import OrderResult, OrderStatus, OrderType
 from .paper_executor import PaperExecutor
 from .pending_order_repository import PendingOrderRepository
-from .pending_orders import PendingOrder
 
 
 @dataclass(frozen=True)
@@ -18,7 +14,7 @@ class PendingOrderUpdate:
 
 
 class PendingOrderManager:
-    """Rechecks accepted limit orders after restart and converts fills to results."""
+    """Rechecks accepted limit orders without resubmitting them as new orders."""
 
     def __init__(self, repository: PendingOrderRepository, executor: PaperExecutor) -> None:
         self.repository = repository
@@ -28,13 +24,17 @@ class PendingOrderManager:
         filled: list[OrderResult] = []
         active = self.repository.list_active()
         for pending in active:
-            result = self.executor.submit(pending.order)
+            if pending.order.order_type is not OrderType.LIMIT:
+                pending.reject("pending manager only supports limit orders")
+                self.repository.save(pending)
+                continue
+
+            result = self.executor.check_limit(pending.order)
             if result.status is OrderStatus.FILLED:
                 filled.append(result)
                 self.repository.remove(pending.order.order_id)
             elif result.status is OrderStatus.REJECTED:
-                pending.status = OrderStatus.REJECTED
-                pending.updated_at = result.filled_at or pending.updated_at
+                pending.reject(result.reason)
                 self.repository.save(pending)
             else:
                 self.repository.save(pending)
