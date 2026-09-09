@@ -10,11 +10,7 @@ def make_candles(n=220):
     result = []
     for i in range(n):
         close = Decimal("100") + Decimal(i) / Decimal("10")
-        result.append(Candle(
-            symbol="TEST/USDT", interval="1h", timestamp=start + timedelta(hours=i),
-            open=close - Decimal("0.2"), high=close + Decimal("0.5"),
-            low=close - Decimal("0.5"), close=close, volume=Decimal("1000")
-        ))
+        result.append(Candle(symbol="TEST/USDT", timeframe="1h", timestamp=start + timedelta(hours=i), open=close - Decimal("0.2"), high=close + Decimal("0.5"), low=close - Decimal("0.5"), close=close, volume=Decimal("1000")))
     return result
 
 
