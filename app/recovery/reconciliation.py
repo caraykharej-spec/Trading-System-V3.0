@@ -15,6 +15,7 @@ class OrderStore(Protocol):
 class PositionStore(Protocol):
     def list_open(self) -> list[Position]: ...
     def save(self, position: Position) -> None: ...
+    def exists(self, position_id: str) -> bool: ...
 
 
 class FillStore(Protocol):
@@ -40,7 +41,7 @@ class RecoveryReconciler:
 
     Recovery never invents an execution fact. A position is rebuilt only from
     a persisted FILLED order plus exactly one fill-ledger record. Existing
-    positions are never overwritten.
+    positions, including closed positions, are never overwritten or reopened.
     """
 
     def __init__(self, orders: OrderStore, fills: FillStore, positions: PositionStore) -> None:
@@ -49,7 +50,6 @@ class RecoveryReconciler:
         self.positions = positions
 
     def reconcile(self, order_ids: list[str]) -> ReconciliationResult:
-        existing = {position.position_id for position in self.positions.list_open()}
         repaired = 0
         issues: list[ReconciliationIssue] = []
 
@@ -73,12 +73,11 @@ class RecoveryReconciler:
             if len(fills) > 1:
                 issues.append(ReconciliationIssue(order_id, "MULTIPLE_FILLS", "multiple fills require position aggregation before recovery"))
                 continue
-            if order_id in existing:
+            if self.positions.exists(order_id):
                 continue
 
             position = position_from_fill(order, result)
             self.positions.save(position)
-            existing.add(position.position_id)
             repaired += 1
 
         return ReconciliationResult(len(order_ids), repaired, tuple(issues))
