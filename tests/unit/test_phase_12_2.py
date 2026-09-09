@@ -46,11 +46,12 @@ def test_sqlite_order_fill_and_position_persist(tmp_path):
 def test_atomic_service_rolls_back_all_writes_when_position_fails(tmp_path):
     path = tmp_path / "state.db"
     conn = connect(path)
-    orders = SQLiteOrderRepository(conn)
+    orders = SQLiteOrderRepository(conn, auto_commit=False)
     fills = SQLiteFillRepository(conn, auto_commit=False)
     positions = SQLitePositionRepository(conn, auto_commit=False)
     order = make_order("o-rollback")
     orders.save_request(order)
+    conn.commit()
 
     class FailingPositionWriter:
         def save(self, position):
