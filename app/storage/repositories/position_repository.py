@@ -15,3 +15,7 @@ class PositionRepository(ABC):
     @abstractmethod
     def save(self, position: Position) -> None:
         raise NotImplementedError
+
+    @abstractmethod
+    def exists(self, position_id: str) -> bool:
+        raise NotImplementedError
