@@ -17,16 +17,7 @@ from app.universe.instrument import AssetClass, Instrument
 
 
 def snapshot(symbol: str, timeframe: str) -> MarketSnapshot:
-    return MarketSnapshot(
-        symbol=symbol,
-        timeframe=timeframe,
-        indicators=IndicatorSnapshot(Decimal("100"), Decimal("99"), Decimal("95"), Decimal("55"), Decimal("2")),
-        trend=TrendResult("BULLISH", Decimal("100")),
-        structure=StructureResult(Decimal("98"), Decimal("102"), False, False, False, False, Decimal("100")),
-        regime=RegimeResult("TRENDING_BULL", "NORMAL", Decimal("100")),
-        liquidity=LiquidityResult(Decimal("100"), Decimal("100"), Decimal("1"), Decimal("100")),
-        score=Decimal("100"),
-    )
+    return MarketSnapshot(symbol, timeframe, IndicatorSnapshot(Decimal("100"), Decimal("99"), Decimal("95"), Decimal("55"), Decimal("2"), Decimal("100")), TrendResult("BULLISH", Decimal("100")), StructureResult(Decimal("98"), Decimal("102"), False, False, False, False, Decimal("100")), RegimeResult("TRENDING_BULL", "NORMAL", Decimal("100")), LiquidityResult(Decimal("100"), Decimal("100"), Decimal("1"), Decimal("100")), Decimal("100"))
 
 
 def snapshots(symbol: str):
@@ -48,11 +39,7 @@ def test_storm_hard_limit_rejects_before_portfolio():
 
 
 def test_portfolio_gate_can_be_stricter_than_risk_gate():
-    result = OpportunityPipeline(
-        StrategyPipeline(lambda symbol: snapshots(symbol)),
-        lambda symbol: context(),
-        portfolio_policy=PortfolioPolicy(max_aggregate_risk_percent=Decimal("0.5")),
-    ).evaluate(["S"])
+    result = OpportunityPipeline(StrategyPipeline(lambda symbol: snapshots(symbol)), lambda symbol: context(), portfolio_policy=PortfolioPolicy(max_aggregate_risk_percent=Decimal("0.5"))).evaluate(["S"])
     assert result.strategy_qualified == 1
     assert result.risk_rejected == 0
     assert result.portfolio_rejected == 1
