@@ -20,11 +20,22 @@ CREATE TABLE IF NOT EXISTS positions (
     realized_pnl TEXT,
     close_reason TEXT
 );
+
+CREATE TABLE IF NOT EXISTS cycle_audits (
+    cycle_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    monitored_positions INTEGER NOT NULL DEFAULT 0,
+    stopped_positions INTEGER NOT NULL DEFAULT 0,
+    filled_orders INTEGER NOT NULL DEFAULT 0,
+    notes TEXT NOT NULL DEFAULT ''
+);
 """
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
-    """Open SQLite and ensure the current position schema exists."""
+    """Open SQLite and ensure all current persistence tables exist."""
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
