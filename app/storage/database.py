@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS fills (
     FOREIGN KEY (order_id) REFERENCES orders(order_id)
 );
 
+CREATE TABLE IF NOT EXISTS account_state (
+    account_id TEXT PRIMARY KEY,
+    equity TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_fills_order_id ON fills(order_id);
 CREATE INDEX IF NOT EXISTS idx_fills_filled_at ON fills(filled_at);
