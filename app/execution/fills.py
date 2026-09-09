@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -25,11 +25,9 @@ class Fill:
     quantity: Decimal
     price: Decimal
     commission: Decimal = Decimal("0")
-    filled_at: datetime = None  # type: ignore[assignment]
+    filled_at: datetime = field(default_factory=utc_now)
 
     def __post_init__(self) -> None:
-        if self.filled_at is None:
-            object.__setattr__(self, "filled_at", utc_now())
         if not self.fill_id or not self.order_id or not self.symbol:
             raise ValueError("fill_id, order_id, and symbol are required")
         if self.quantity <= 0:
