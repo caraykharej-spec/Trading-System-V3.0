@@ -45,6 +45,11 @@ class SQLitePositionRepository(PositionRepository):
         if self.auto_commit:
             self.connection.commit()
 
+    def exists(self, position_id: str) -> bool:
+        return self.connection.execute(
+            "SELECT 1 FROM positions WHERE position_id = ?", (position_id,)
+        ).fetchone() is not None
+
     @staticmethod
     def _from_row(row: tuple[object, ...]) -> Position:
         (
