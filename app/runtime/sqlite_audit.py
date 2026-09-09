@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import datetime
 
 from .audit import AuditStatus, CycleAudit, CycleAuditRepository
 
@@ -65,8 +66,8 @@ class SQLiteCycleAuditRepository(CycleAuditRepository):
         return CycleAudit(
             cycle_id=str(cycle_id),
             status=AuditStatus(str(status)),
-            started_at=__import__("datetime").datetime.fromisoformat(str(started_at)),
-            finished_at=(__import__("datetime").datetime.fromisoformat(str(finished_at)) if finished_at else None),
+            started_at=datetime.fromisoformat(str(started_at)),
+            finished_at=datetime.fromisoformat(str(finished_at)) if finished_at else None,
             monitored_positions=int(monitored),
             stopped_positions=int(stopped),
             filled_orders=int(filled),
