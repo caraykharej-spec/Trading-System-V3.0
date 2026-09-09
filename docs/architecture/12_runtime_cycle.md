@@ -1,11 +1,13 @@
 # Phase 12 Runtime Cycle
 
-The implemented runtime boundary is restart-aware and persists cycle state.
+The runtime boundary is restart-aware and now integrates persisted execution recovery.
 
 ## Current cycle
 
 ```text
 START
+  ↓
+Recovery reconciliation
   ↓
 Load persisted open positions
   ↓
@@ -15,25 +17,30 @@ Persist changed positions
   ↓
 Apply realized P&L to account
   ↓
-Reconcile persisted pending limit orders (when configured)
+Reconcile pending limit orders
+  ↓
+Persist pending fills atomically: Order → Fill → Position
+  ↓
+Remove pending order only after durable fill persistence
   ↓
 Persist COMPLETED audit
 ```
 
 If an exception occurs, the cycle is persisted as `FAILED` and the exception is re-raised.
 
-## Recovery invariant
+## Restart invariants
 
-A cycle may be retried with the same `cycle_id`. If the persisted audit is already `COMPLETED`, the result is returned without running the cycle again. If the cycle was `STARTED` and the process crashed, the cycle can resume from persisted state.
-
-Closed positions are excluded by the position repository on the next run, so an already-persisted stop/take-profit cannot be applied a second time by the position-management stage.
+- A completed `cycle_id` is replayed without executing the cycle again.
+- A previously `STARTED` cycle can resume from durable state.
+- Recovery repairs a missing position only when a persisted `FILLED` order has exactly one fill record.
+- Multiple fills are reported as an explicit reconciliation issue; recovery does not guess how to aggregate them.
+- Pending limit fills are persisted before their pending record is removed. If the process crashes after persistence but before removal, the next cycle can safely repeat the fill check because the order/fill/position persistence is idempotent.
+- Recovery never mutates account equity merely because a position was reconstructed; realized P&L must come from the exit lifecycle.
 
 ## Persistence
 
-SQLite now contains a `cycle_audits` table alongside the existing position table. The dedicated `SQLiteCycleAuditRepository` also creates the table defensively when initialized.
+SQLite contains durable order, fill, position, account-state, and cycle-audit records. Atomic execution requires the participating SQLite repositories to share the same connection with transaction commits disabled at the repository level.
 
 ## Deliberate boundary
-
-This phase does **not** yet create positions from pending fills because `OrderResult` currently does not carry the authoritative `OrderRequest` metadata required for SL/TP and leverage reconstruction. The next execution-persistence step should add a persistent order repository and make the fill-to-position bridge consume that stored request.
 
 Market scanning, strategy, risk, portfolio approval, and new-order execution remain later runtime stages. Live broker/exchange execution is not enabled.
