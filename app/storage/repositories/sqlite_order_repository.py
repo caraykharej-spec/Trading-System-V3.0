@@ -88,12 +88,14 @@ class SQLiteOrderRepository(OrderRepository):
             take_profit=Decimal(str(row[7])) if row[7] is not None else None,
             leverage=Decimal(str(row[8])), created_at=datetime.fromisoformat(str(row[9])),
         )
-        result = None if row[10] is OrderStatus.PENDING.value else OrderResult(
-            order_id=str(row[0]), status=OrderStatus(str(row[10])), symbol=str(row[1]),
-            filled_price=Decimal(str(row[11])) if row[11] is not None else None,
-            reason=str(row[12]) if row[12] is not None else None,
-            filled_at=datetime.fromisoformat(str(row[13])) if row[13] else None,
-        )
+        result = None if row[10] != OrderStatus.PENDING.value else None
+        if row[10] != OrderStatus.PENDING.value:
+            result = OrderResult(
+                order_id=str(row[0]), status=OrderStatus(str(row[10])), symbol=str(row[1]),
+                filled_price=Decimal(str(row[11])) if row[11] is not None else None,
+                reason=str(row[12]) if row[12] is not None else None,
+                filled_at=datetime.fromisoformat(str(row[13])) if row[13] else None,
+            )
         return request, result
 
     def exists(self, order_id: str) -> bool:
