@@ -16,11 +16,11 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current phase
 
-**Phase 04 — Universe and Instrument Registry**
+**Phase 12 — Runtime Integration, Persistence, and Recovery**
 
-Completed foundations include normalized market-data contracts, provider adapters, live-price freshness validation, account/equity accounting, restart-safe SQLite position persistence, and a canonical instrument registry with explicit provider symbol mappings and contract specifications.
+Completed foundations include normalized market-data contracts, provider adapters, canonical instrument identity, market analysis, strategy/risk/portfolio layers, backtesting, execution boundaries, restart-safe position persistence, and confirmed-fill-to-position conversion.
 
-See `docs/architecture/01_foundation.md`, `docs/architecture/02_domain_data.md`, and `docs/architecture/04_universe.md`.
+Phase 12 is hardening the application boundary so persisted state remains authoritative across restarts. See `docs/architecture/12_runtime_persistence_recovery.md`.
 
 ## Run from PyCharm
 
@@ -30,7 +30,7 @@ Use the project root as the working directory and run:
 python main.py
 ```
 
-The local smoke runner is intentionally non-trading. It demonstrates the mandatory position-safety phase and account accounting before live execution is enabled.
+The local smoke runner is intentionally non-trading. Live broker/exchange execution is not enabled.
 
 ## Risk constants
 
@@ -54,4 +54,4 @@ The V3 source boundary currently reserves adapters for:
 
 Pyth is deliberately excluded.
 
-The configured universe is intentionally empty until provider catalogs and symbol mappings are verified. V3 does not copy a hard-coded asset count from the legacy system.
+The configured universe is intentionally not hard-coded by asset count; provider catalogs and symbol mappings must be verified before populating it.
