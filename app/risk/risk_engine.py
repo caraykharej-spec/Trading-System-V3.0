@@ -5,7 +5,6 @@ from decimal import Decimal
 
 from app.core.models import Position
 from app.portfolio.account import Account
-from app.portfolio.portfolio_engine import assess_portfolio
 from app.strategy.strategy_engine import StrategySignal, StrategyState
 from app.universe.contract_specs import ContractSpec
 from app.universe.instrument import AssetClass, Instrument
@@ -76,7 +75,6 @@ def assess_risk(*, account: Account, positions: list[Position], signal: Strategy
         if futures_capital > policy.max_futures_capital_percent:
             reasons.append("futures capital exceeds portfolio limit")
 
-    portfolio = assess_portfolio(equity=equity, positions=positions, new_risk=new_risk, new_notional=total_amount, correlation=Decimal("0"), correlated_open_risk=correlated_open_risk) if False else None
     aggregate = existing + new_risk
     if risk_percent > policy.max_risk_per_trade_percent:
         reasons.append("new trade risk exceeds per-trade limit")
