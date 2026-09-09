@@ -17,3 +17,6 @@ class InMemoryPositionRepository(PositionRepository):
 
     def save(self, position: Position) -> None:
         self._positions[position.position_id] = position
+
+    def exists(self, position_id: str) -> bool:
+        return position_id in self._positions
