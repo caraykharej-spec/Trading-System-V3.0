@@ -45,7 +45,7 @@ def test_risk_engine_allows_within_budget() -> None:
 
 
 def test_aggregate_risk_blocks_new_trade() -> None:
-    existing = Position("P1", "ETH/USDT", PositionSide.LONG, Decimal("100"), Decimal("90"), Decimal("400"), Decimal("4"), Decimal("1"))
+    existing = Position("P1", "ETH/USDT", PositionSide.LONG, Decimal("100"), Decimal("90"), Decimal("3200"), Decimal("32"), Decimal("1"))
     result = assess_risk(account=Account(Decimal("10000")), positions=[existing], signal=signal(), instrument=instrument(), contract=contract(), leverage=Decimal("1"))
     assert not result.approved
     assert "aggregate open risk exceeds portfolio limit" in result.reasons
