@@ -16,7 +16,8 @@ class SQLitePositionRepository(PositionRepository):
     def list_open(self) -> list[Position]:
         rows = self.connection.execute(
             "SELECT position_id, symbol, side, entry_price, stop_loss, total_amount, "
-            "quantity, leverage, status, opened_at, closed_at, exit_price, realized_pnl, close_reason "
+            "quantity, leverage, take_profit, status, opened_at, closed_at, exit_price, "
+            "realized_pnl, close_reason "
             "FROM positions WHERE status = ? ORDER BY opened_at",
             (PositionStatus.OPEN.value,),
         ).fetchall()
@@ -26,9 +27,9 @@ class SQLitePositionRepository(PositionRepository):
         self.connection.execute(
             """INSERT OR REPLACE INTO positions (
                 position_id, symbol, side, entry_price, stop_loss, total_amount,
-                quantity, leverage, status, opened_at, closed_at, exit_price,
+                quantity, leverage, take_profit, status, opened_at, closed_at, exit_price,
                 realized_pnl, close_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 position.position_id,
                 position.symbol,
@@ -38,6 +39,7 @@ class SQLitePositionRepository(PositionRepository):
                 str(position.total_amount),
                 str(position.quantity),
                 str(position.leverage),
+                str(position.take_profit) if position.take_profit is not None else None,
                 position.status.value,
                 position.opened_at.isoformat(),
                 position.closed_at.isoformat() if position.closed_at else None,
@@ -52,7 +54,7 @@ class SQLitePositionRepository(PositionRepository):
     def _from_row(row: tuple[object, ...]) -> Position:
         (
             position_id, symbol, side, entry_price, stop_loss, total_amount,
-            quantity, leverage, status, opened_at, closed_at, exit_price,
+            quantity, leverage, take_profit, status, opened_at, closed_at, exit_price,
             realized_pnl, close_reason,
         ) = row
         return Position(
@@ -64,10 +66,11 @@ class SQLitePositionRepository(PositionRepository):
             total_amount=Decimal(str(total_amount)),
             quantity=Decimal(str(quantity)),
             leverage=Decimal(str(leverage)),
+            take_profit=Decimal(str(take_profit)) if take_profit is not None else None,
             status=PositionStatus(str(status)),
             opened_at=datetime.fromisoformat(str(opened_at)),
             closed_at=datetime.fromisoformat(str(closed_at)) if closed_at else None,
-            exit_price=Decimal(str(exit_price)) if exit_price else None,
-            realized_pnl=Decimal(str(realized_pnl)) if realized_pnl else None,
+            exit_price=Decimal(str(exit_price)) if exit_price is not None else None,
+            realized_pnl=Decimal(str(realized_pnl)) if realized_pnl is not None else None,
             close_reason=str(close_reason) if close_reason else None,
         )
