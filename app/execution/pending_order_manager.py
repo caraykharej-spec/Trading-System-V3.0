@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
-from .models import OrderResult, OrderStatus, OrderType
+from .models import OrderRequest, OrderResult, OrderStatus, OrderType
 from .paper_executor import PaperExecutor
 from .pending_order_repository import PendingOrderRepository
 
@@ -16,9 +17,15 @@ class PendingOrderUpdate:
 class PendingOrderManager:
     """Rechecks accepted limit orders without resubmitting them as new orders."""
 
-    def __init__(self, repository: PendingOrderRepository, executor: PaperExecutor) -> None:
+    def __init__(
+        self,
+        repository: PendingOrderRepository,
+        executor: PaperExecutor,
+        fill_handler: Callable[[OrderRequest, OrderResult], None] | None = None,
+    ) -> None:
         self.repository = repository
         self.executor = executor
+        self.fill_handler = fill_handler
 
     def check(self) -> PendingOrderUpdate:
         filled: list[OrderResult] = []
@@ -31,6 +38,8 @@ class PendingOrderManager:
 
             result = self.executor.check_limit(pending.order)
             if result.status is OrderStatus.FILLED:
+                if self.fill_handler is not None:
+                    self.fill_handler(pending.order, result)
                 filled.append(result)
                 self.repository.remove(pending.order.order_id)
             elif result.status is OrderStatus.REJECTED:
