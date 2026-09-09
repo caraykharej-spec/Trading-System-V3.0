@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from typing import Optional
 
-from .models import OrderRequest, OrderResult
+from .models import OrderRequest, OrderResult, OrderStatus
 from .order_repository import OrderRepository
+
+
+_ALLOWED_TRANSITIONS = {
+    OrderStatus.PENDING: {OrderStatus.ACCEPTED, OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELLED},
+    OrderStatus.ACCEPTED: {OrderStatus.FILLED, OrderStatus.REJECTED, OrderStatus.CANCELLED},
+    OrderStatus.FILLED: set(),
+    OrderStatus.REJECTED: set(),
+    OrderStatus.CANCELLED: set(),
+}
 
 
 class InMemoryOrderRepository(OrderRepository):
@@ -19,11 +28,15 @@ class InMemoryOrderRepository(OrderRepository):
         self._requests[order.order_id] = order
 
     def save_result(self, result: OrderResult) -> None:
-        if result.order_id not in self._requests:
+        request = self._requests.get(result.order_id)
+        if request is None:
             raise ValueError(f"Unknown order: {result.order_id}")
         existing = self._results.get(result.order_id)
-        if existing is not None and existing != result:
-            raise ValueError(f"Conflicting result for order: {result.order_id}")
+        if existing is not None:
+            if existing == result:
+                return
+            if result.status not in _ALLOWED_TRANSITIONS[existing.status]:
+                raise ValueError(f"Invalid order transition: {existing.status} -> {result.status}")
         self._results[result.order_id] = result
 
     def get(self, order_id: str) -> Optional[tuple[OrderRequest, Optional[OrderResult]]]:
