@@ -25,6 +25,7 @@ class Position:
     total_amount: Decimal
     quantity: Decimal
     leverage: Decimal = Decimal("1")
+    take_profit: Optional[Decimal] = None
     status: PositionStatus = PositionStatus.OPEN
     opened_at: datetime = field(default_factory=utc_now)
     closed_at: Optional[datetime] = None
