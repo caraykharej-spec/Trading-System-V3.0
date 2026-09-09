@@ -26,6 +26,7 @@ class RiskAssessment:
     total_amount: Decimal
     storm_sl_loss_percent: Decimal | None
     futures_capital_percent: Decimal
+    leverage: Decimal = Decimal("1")
 
 
 def _candidate_risk(*, total_amount: Decimal, entry: Decimal, stop_loss: Decimal, leverage: Decimal) -> Decimal:
@@ -83,4 +84,4 @@ def assess_risk(*, account: Account, positions: list[Position], signal: Strategy
     if correlated_open_risk + new_risk > equity * policy.max_correlated_risk_percent / Decimal("100"):
         reasons.append("correlated risk exceeds portfolio limit")
 
-    return RiskAssessment(not reasons, tuple(reasons), equity, existing, new_risk, aggregate, risk_percent, quantity, total_amount, storm_loss, futures_capital)
+    return RiskAssessment(not reasons, tuple(reasons), equity, existing, new_risk, aggregate, risk_percent, quantity, total_amount, storm_loss, futures_capital, leverage)
