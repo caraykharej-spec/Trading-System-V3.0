@@ -12,8 +12,9 @@ from app.execution.fills import Fill
 class SQLiteFillRepository(FillRepository):
     """Append-only SQLite execution ledger with unique fill IDs."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, *, auto_commit: bool = True) -> None:
         self.connection = connection
+        self.auto_commit = auto_commit
 
     def save(self, fill: Fill) -> None:
         existing = self.connection.execute(
@@ -37,17 +38,13 @@ class SQLiteFillRepository(FillRepository):
                 fill_id, order_id, symbol, side, quantity, price, commission, filled_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                fill.fill_id,
-                fill.order_id,
-                fill.symbol,
-                fill.side.value,
-                str(fill.quantity),
-                str(fill.price),
-                str(fill.commission),
+                fill.fill_id, fill.order_id, fill.symbol, fill.side.value,
+                str(fill.quantity), str(fill.price), str(fill.commission),
                 fill.filled_at.isoformat(),
             ),
         )
-        self.connection.commit()
+        if self.auto_commit:
+            self.connection.commit()
 
     def get(self, fill_id: str) -> Fill | None:
         row = self.connection.execute(
@@ -68,12 +65,8 @@ class SQLiteFillRepository(FillRepository):
     @staticmethod
     def _from_row(row: tuple[object, ...]) -> Fill:
         return Fill(
-            fill_id=str(row[0]),
-            order_id=str(row[1]),
-            symbol=str(row[2]),
-            side=PositionSide(str(row[3])),
-            quantity=Decimal(str(row[4])),
-            price=Decimal(str(row[5])),
-            commission=Decimal(str(row[6])),
+            fill_id=str(row[0]), order_id=str(row[1]), symbol=str(row[2]),
+            side=PositionSide(str(row[3])), quantity=Decimal(str(row[4])),
+            price=Decimal(str(row[5])), commission=Decimal(str(row[6])),
             filled_at=datetime.fromisoformat(str(row[7])),
         )
