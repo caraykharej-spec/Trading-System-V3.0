@@ -38,8 +38,9 @@ class ReconciliationResult:
 class RecoveryReconciler:
     """Repairs deterministic execution/position gaps after restart.
 
-    It only creates a position when the persisted order is FILLED and a fill
-    exists. Existing positions are never overwritten by recovery.
+    Recovery never invents an execution fact. A position is rebuilt only from
+    a persisted FILLED order plus exactly one fill-ledger record. Existing
+    positions are never overwritten.
     """
 
     def __init__(self, orders: OrderStore, fills: FillStore, positions: PositionStore) -> None:
@@ -66,8 +67,11 @@ class RecoveryReconciler:
                 if fills:
                     issues.append(ReconciliationIssue(order_id, "NON_FILLED_WITH_FILL", "fill exists for a non-filled order"))
                 continue
-            if not fills:
+            if len(fills) == 0:
                 issues.append(ReconciliationIssue(order_id, "FILLED_WITHOUT_FILL", "filled order has no fill ledger record"))
+                continue
+            if len(fills) > 1:
+                issues.append(ReconciliationIssue(order_id, "MULTIPLE_FILLS", "multiple fills require position aggregation before recovery"))
                 continue
             if order_id in existing:
                 continue
