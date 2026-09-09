@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-import sqlite3
 
 import pytest
 
@@ -16,19 +15,11 @@ from app.storage.repositories.sqlite_position_repository import SQLitePositionRe
 
 
 def make_order(order_id: str = "o-1") -> OrderRequest:
-    return OrderRequest(
-        order_id=order_id, symbol="BTC/USD", side=PositionSide.LONG,
-        order_type=OrderType.MARKET, quantity=Decimal("0.01"), requested_price=None,
-        stop_loss=Decimal("70000"), take_profit=Decimal("90000"), leverage=Decimal("7"),
-        created_at=datetime(2026, 9, 9, tzinfo=timezone.utc),
-    )
+    return OrderRequest(order_id=order_id, symbol="BTC/USD", side=PositionSide.LONG, order_type=OrderType.MARKET, quantity=Decimal("0.01"), requested_price=None, stop_loss=Decimal("70000"), take_profit=Decimal("90000"), leverage=Decimal("7"), created_at=datetime(2026, 9, 9, tzinfo=timezone.utc))
 
 
 def make_result(order_id: str = "o-1") -> OrderResult:
-    return OrderResult(
-        order_id=order_id, status=OrderStatus.FILLED, symbol="BTC/USD",
-        filled_price=Decimal("80000"), filled_at=datetime(2026, 9, 9, 12, tzinfo=timezone.utc),
-    )
+    return OrderResult(order_id=order_id, status=OrderStatus.FILLED, symbol="BTC/USD", filled_price=Decimal("80000"), filled_at=datetime(2026, 9, 9, 12, tzinfo=timezone.utc))
 
 
 def test_sqlite_order_fill_and_position_persist(tmp_path):
@@ -55,7 +46,7 @@ def test_sqlite_order_fill_and_position_persist(tmp_path):
 def test_atomic_service_rolls_back_all_writes_when_position_fails(tmp_path):
     path = tmp_path / "state.db"
     conn = connect(path)
-    orders = SQLiteOrderRepository(conn, auto_commit=False)
+    orders = SQLiteOrderRepository(conn)
     fills = SQLiteFillRepository(conn, auto_commit=False)
     positions = SQLitePositionRepository(conn, auto_commit=False)
     order = make_order("o-rollback")
@@ -69,7 +60,8 @@ def test_atomic_service_rolls_back_all_writes_when_position_fails(tmp_path):
     with pytest.raises(RuntimeError):
         service.apply_fill(order, make_result("o-rollback"), fill_id="f-rollback")
 
-    assert SQLiteOrderRepository(conn).get("o-rollback")[1] is None
+    persisted = SQLiteOrderRepository(conn).get("o-rollback")
+    assert persisted is not None and persisted[1] is None
     assert SQLiteFillRepository(conn).get("f-rollback") is None
     conn.close()
 
