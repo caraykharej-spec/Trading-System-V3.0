@@ -11,11 +11,12 @@ from .position_builder import position_from_fill
 
 
 class TransactionConnection(Protocol):
-    def execute(self, sql: str, parameters: tuple[object, ...] = ...) -> object: ...
-
     def commit(self) -> None: ...
-
     def rollback(self) -> None: ...
+
+
+class OrderWriter(Protocol):
+    def save_result(self, result: OrderResult) -> None: ...
 
 
 class PositionWriter(Protocol):
@@ -35,15 +36,17 @@ class AtomicExecutionResult:
 
 
 class AtomicExecutionService:
-    """Coordinates fill persistence and position creation as one local transaction."""
+    """Coordinates order result, fill, and position persistence in one transaction."""
 
     def __init__(
         self,
         connection: TransactionConnection,
+        order_writer: OrderWriter,
         fill_writer: FillWriter,
         position_writer: PositionWriter,
     ) -> None:
         self.connection = connection
+        self.order_writer = order_writer
         self.fill_writer = fill_writer
         self.position_writer = position_writer
 
@@ -75,6 +78,7 @@ class AtomicExecutionService:
         )
 
         try:
+            self.order_writer.save_result(result)
             self.fill_writer.save(fill)
             self.position_writer.save(position)
             self.connection.commit()
