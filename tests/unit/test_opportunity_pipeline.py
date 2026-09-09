@@ -17,7 +17,9 @@ from app.universe.instrument import AssetClass, Instrument
 
 
 def snapshot(symbol: str, timeframe: str) -> MarketSnapshot:
-    return MarketSnapshot(symbol, timeframe, IndicatorSnapshot(Decimal("100"), Decimal("99"), Decimal("95"), Decimal("55"), Decimal("2"), Decimal("100")), TrendResult("BULLISH", Decimal("100")), StructureResult(Decimal("98"), Decimal("102"), False, False, False, False, Decimal("100")), RegimeResult("TRENDING_BULL", "NORMAL", Decimal("100")), LiquidityResult(Decimal("100"), Decimal("100"), Decimal("1"), Decimal("100")), Decimal("100"))
+    indicators = IndicatorSnapshot(Decimal("100"), Decimal("99"), Decimal("95"), Decimal("55"), Decimal("2"), Decimal("100"))
+    trend = TrendResult("BULLISH", "STRONG", Decimal("100"), indicators)
+    return MarketSnapshot(symbol, timeframe, indicators, trend, StructureResult(Decimal("98"), Decimal("102"), False, False, False, False, Decimal("100")), RegimeResult("TRENDING_BULL", "NORMAL", Decimal("100")), LiquidityResult(Decimal("100"), Decimal("100"), Decimal("1"), Decimal("100")), Decimal("100"))
 
 
 def snapshots(symbol: str):
