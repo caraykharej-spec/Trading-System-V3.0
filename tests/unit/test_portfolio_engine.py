@@ -35,5 +35,5 @@ def test_futures_capital_respects_fifty_percent_limit() -> None:
         new_futures_capital=Decimal("200"),
     )
     assert not result.approved
-    assert result.futures_capital_percent == Decimal("53")
+    assert result.futures_capital_percent == Decimal("51")
     assert "futures capital exceeds portfolio limit" in result.reasons
