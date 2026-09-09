@@ -31,6 +31,39 @@ CREATE TABLE IF NOT EXISTS cycle_audits (
     filled_orders INTEGER NOT NULL DEFAULT 0,
     notes TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS orders (
+    order_id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    order_type TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    requested_price TEXT,
+    stop_loss TEXT NOT NULL,
+    take_profit TEXT,
+    leverage TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    filled_price TEXT,
+    reason TEXT,
+    filled_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS fills (
+    fill_id TEXT PRIMARY KEY,
+    order_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    price TEXT NOT NULL,
+    commission TEXT NOT NULL DEFAULT '0',
+    filled_at TEXT NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(order_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_fills_order_id ON fills(order_id);
+CREATE INDEX IF NOT EXISTS idx_fills_filled_at ON fills(filled_at);
 """
 
 
