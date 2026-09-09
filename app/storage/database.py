@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import sqlite3
 from pathlib import Path
 
@@ -14,6 +12,7 @@ CREATE TABLE IF NOT EXISTS positions (
     total_amount TEXT NOT NULL,
     quantity TEXT NOT NULL,
     leverage TEXT NOT NULL,
+    take_profit TEXT,
     status TEXT NOT NULL,
     opened_at TEXT NOT NULL,
     closed_at TEXT,
@@ -25,11 +24,15 @@ CREATE TABLE IF NOT EXISTS positions (
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
-    """Open a SQLite connection and ensure the domain schema exists."""
+    """Open SQLite and ensure the current position schema exists."""
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
+
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(positions)")}
+    if "take_profit" not in columns:
+        connection.execute("ALTER TABLE positions ADD COLUMN take_profit TEXT")
     connection.commit()
     return connection
