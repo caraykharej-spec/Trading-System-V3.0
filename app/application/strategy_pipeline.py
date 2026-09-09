@@ -23,21 +23,26 @@ SnapshotLoader = Callable[[str], tuple[MarketSnapshot, MarketSnapshot, MarketSna
 
 
 class StrategyPipeline:
-    """Runs the deterministic strategy stage without executing orders.
+    """Runs the deterministic strategy stage without risk or execution.
 
-    Risk and portfolio approval remain explicit downstream gates. This class
-    only turns complete multi-timeframe market snapshots into qualified
-    strategy opportunities and ranks them for later risk review.
+    The strategy stage produces candidates in descending opportunity quality.
+    Risk and portfolio approval are downstream hard gates and must be applied
+    before the final Top-N list is presented to a user.
     """
 
     def __init__(self, snapshot_loader: SnapshotLoader) -> None:
         self.snapshot_loader = snapshot_loader
 
-    def evaluate(self, symbols: Iterable[str], top_n: int = 10) -> StrategyPipelineResult:
-        if top_n < 1:
-            raise ValueError("top_n must be positive")
+    @staticmethod
+    def _rank(signals: list[StrategySignal]) -> list[StrategySignal]:
+        signals.sort(
+            key=lambda signal: (signal.score, signal.confidence, signal.rr),
+            reverse=True,
+        )
+        return signals
 
-        opportunities: list[StrategySignal] = []
+    def evaluate_all(self, symbols: Iterable[str]) -> tuple[int, tuple[StrategySignal, ...]]:
+        signals: list[StrategySignal] = []
         evaluated = 0
         for symbol in symbols:
             evaluated += 1
@@ -47,14 +52,15 @@ class StrategyPipeline:
             except (ValueError, KeyError):
                 continue
             if signal.state.value == "READY_FOR_RISK_REVIEW":
-                opportunities.append(signal)
+                signals.append(signal)
+        return evaluated, tuple(self._rank(signals))
 
-        opportunities.sort(
-            key=lambda signal: (signal.score, signal.confidence, signal.rr),
-            reverse=True,
-        )
+    def evaluate(self, symbols: Iterable[str], top_n: int = 10) -> StrategyPipelineResult:
+        if top_n < 1:
+            raise ValueError("top_n must be positive")
+        evaluated, signals = self.evaluate_all(symbols)
         selected = tuple(
             Opportunity(signal=signal, rank=index)
-            for index, signal in enumerate(opportunities[:top_n], start=1)
+            for index, signal in enumerate(signals[:top_n], start=1)
         )
         return StrategyPipelineResult(evaluated=evaluated, qualified=selected)
