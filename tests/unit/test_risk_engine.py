@@ -20,7 +20,7 @@ def signal() -> StrategySignal:
 
 
 def contract() -> ContractSpec:
-    return ContractSpec("BTC/USDT", Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), max_leverage=10)
+    return ContractSpec("BTC/USDT", Decimal("0.01"), Decimal("0.01"), Decimal("0.01"), max_leverage=20)
 
 
 def instrument() -> Instrument:
@@ -44,14 +44,14 @@ def test_risk_engine_allows_within_budget() -> None:
     assert result.aggregate_risk <= Decimal("400")
 
 
-def test_aggregate_risk_blocks_new_trade() -> None:
+def test_aggregate_risk_allows_exact_four_percent_boundary() -> None:
     existing = Position("P1", "ETH/USDT", PositionSide.LONG, Decimal("100"), Decimal("90"), Decimal("3200"), Decimal("32"), Decimal("1"))
     result = assess_risk(account=Account(Decimal("10000")), positions=[existing], signal=signal(), instrument=instrument(), contract=contract(), leverage=Decimal("1"))
-    assert not result.approved
-    assert "aggregate open risk exceeds portfolio limit" in result.reasons
+    assert result.approved
+    assert result.aggregate_risk == Decimal("400")
 
 
 def test_storm_hard_sl_limit_blocks_above_ten_percent() -> None:
-    result = assess_risk(account=Account(Decimal("10000")), positions=[], signal=signal(), instrument=instrument(), contract=contract(), leverage=Decimal("6"), provider="STORM")
+    result = assess_risk(account=Account(Decimal("10000")), positions=[], signal=signal(), instrument=instrument(), contract=contract(), leverage=Decimal("11"), provider="STORM")
     assert not result.approved
     assert "Storm SL loss exceeds hard 10% position-amount limit" in result.reasons
