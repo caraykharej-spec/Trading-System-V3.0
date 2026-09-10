@@ -18,7 +18,6 @@ def classify_regime(candles: list[Candle], trend: TrendResult) -> RegimeResult:
     ordered = sorted(candles, key=lambda x: x.timestamp)
     if not ordered or trend.direction == "UNKNOWN":
         return RegimeResult("UNKNOWN", "UNKNOWN", Decimal("0"))
-    last = ordered[-1].close
     ranges = [(c.high - c.low) / c.close for c in ordered[-20:] if c.close > 0]
     avg_range = sum(ranges) / Decimal(len(ranges)) if ranges else Decimal("0")
     if avg_range >= Decimal("0.03"):
