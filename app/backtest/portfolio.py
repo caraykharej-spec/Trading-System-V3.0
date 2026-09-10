@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.data.market_data import Candle
 from app.risk.risk_math import risk_budget_amount
+from app.strategy.rules import DEFAULT_RULES, StrategyRules
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
 
 from .engine import BacktestEngine, _OpenTrade
@@ -41,10 +42,13 @@ class PortfolioBacktestEngine:
         self,
         config: BacktestConfig | None = None,
         correlations: dict[tuple[str, str], Decimal] | None = None,
+        *,
+        rules: StrategyRules = DEFAULT_RULES,
     ) -> None:
         self.config = config or BacktestConfig()
         self.correlations = correlations or {}
-        self._helpers = BacktestEngine(self.config)
+        self.rules = rules
+        self._helpers = BacktestEngine(self.config, rules=rules)
 
     def run(
         self, candles_by_symbol: dict[str, dict[str, list[Candle]]]
@@ -126,9 +130,7 @@ class PortfolioBacktestEngine:
                         trade.signal.direction, raw_exit
                     )
                     gross = self._helpers._pnl(trade, exit_price)
-                    exit_commission = self._helpers.costs.commission(
-                        trade.total_amount
-                    )
+                    exit_commission = self._helpers.costs.commission(trade.total_amount)
                     net = (
                         gross
                         - trade.entry_commission
@@ -163,6 +165,7 @@ class PortfolioBacktestEngine:
                         snapshots["4h"],
                         snapshots["1h"],
                         snapshots["15m"],
+                        rules=self.rules,
                     )
                     if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
                         states[symbol].pending = signal
@@ -180,9 +183,7 @@ class PortfolioBacktestEngine:
                     trade.signal.direction, final_bar.close
                 )
                 gross = self._helpers._pnl(trade, exit_price)
-                exit_commission = self._helpers.costs.commission(
-                    trade.total_amount
-                )
+                exit_commission = self._helpers.costs.commission(trade.total_amount)
                 net = (
                     gross
                     - trade.entry_commission
@@ -209,9 +210,7 @@ class PortfolioBacktestEngine:
         for symbol, state in states.items():
             trades = tuple(state.trades)
             all_trades.extend(trades)
-            pnl = sum(
-                (trade.realized_pnl for trade in trades), Decimal("0")
-            )
+            pnl = sum((trade.realized_pnl for trade in trades), Decimal("0"))
             final = self.config.initial_equity + pnl
             win, profit_factor, drawdown, total_return = calculate_metrics(
                 self.config.initial_equity,
@@ -259,15 +258,11 @@ class PortfolioBacktestEngine:
     ) -> _OpenTrade | None:
         if existing or equity <= 0:
             return None
-        entry = self._helpers._apply_entry_slippage(
-            signal.direction, bar.open
-        )
+        entry = self._helpers._apply_entry_slippage(signal.direction, bar.open)
         distance = abs(entry - signal.stop_loss) / entry
         if distance <= 0 or signal.stop_loss <= 0:
             return None
-        risk_cash = risk_budget_amount(
-            equity, self.config.risk_per_trade_percent
-        )
+        risk_cash = risk_budget_amount(equity, self.config.risk_per_trade_percent)
         current_risk = sum(
             (
                 self._helpers._risk_cash(trade)
@@ -322,25 +317,18 @@ class PortfolioBacktestEngine:
                 (symbol, other),
                 self.correlations.get((other, symbol), Decimal("0")),
             )
-            correlation = max(
-                Decimal("-1"), min(Decimal("1"), correlation)
-            )
+            correlation = max(Decimal("-1"), min(Decimal("1"), correlation))
             if correlation <= 0:
                 continue
             existing = sum(
-                (
-                    self._helpers._risk_cash(trade)
-                    for trade in state.open_trades
-                ),
+                (self._helpers._risk_cash(trade) for trade in state.open_trades),
                 Decimal("0"),
             )
             total += existing * correlation
         return total
 
     @staticmethod
-    def _bar_at(
-        bars: list[Candle], timestamp: datetime
-    ) -> Candle | None:
+    def _bar_at(bars: list[Candle], timestamp: datetime) -> Candle | None:
         for bar in bars:
             if bar.timestamp == timestamp:
                 return bar
