@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from app.backtest.models import BacktestConfig, BacktestResult
+from app.backtest.models import BacktestResult
 from app.research.engine import ResearchRunner
 from app.research.models import (
     DatasetRole,
