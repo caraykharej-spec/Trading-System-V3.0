@@ -11,7 +11,8 @@ from app.storage.repositories.position_repository import PositionRepository
 
 _COLUMNS = (
     "position_id, symbol, side, entry_price, stop_loss, total_amount, quantity, leverage, "
-    "take_profit, status, opened_at, closed_at, exit_price, realized_pnl, close_reason"
+    "take_profit, status, opened_at, closed_at, exit_price, realized_pnl, close_reason, "
+    "decision_snapshot"
 )
 
 
@@ -40,44 +41,73 @@ class SQLitePositionRepository(PositionRepository):
             """INSERT OR REPLACE INTO positions (
                 position_id, symbol, side, entry_price, stop_loss, total_amount,
                 quantity, leverage, take_profit, status, opened_at, closed_at, exit_price,
-                realized_pnl, close_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                realized_pnl, close_reason, decision_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                position.position_id, position.symbol, position.side.value,
-                str(position.entry_price), str(position.stop_loss), str(position.total_amount),
-                str(position.quantity), str(position.leverage),
+                position.position_id,
+                position.symbol,
+                position.side.value,
+                str(position.entry_price),
+                str(position.stop_loss),
+                str(position.total_amount),
+                str(position.quantity),
+                str(position.leverage),
                 str(position.take_profit) if position.take_profit is not None else None,
-                position.status.value, position.opened_at.isoformat(),
+                position.status.value,
+                position.opened_at.isoformat(),
                 position.closed_at.isoformat() if position.closed_at else None,
                 str(position.exit_price) if position.exit_price is not None else None,
                 str(position.realized_pnl) if position.realized_pnl is not None else None,
                 position.close_reason,
+                position.decision_snapshot,
             ),
         )
         if self.auto_commit:
             self.connection.commit()
 
     def exists(self, position_id: str) -> bool:
-        return self.connection.execute(
-            "SELECT 1 FROM positions WHERE position_id = ?", (position_id,)
-        ).fetchone() is not None
+        return (
+            self.connection.execute(
+                "SELECT 1 FROM positions WHERE position_id = ?", (position_id,)
+            ).fetchone()
+            is not None
+        )
 
     @staticmethod
     def _from_row(row: tuple[object, ...]) -> Position:
         (
-            position_id, symbol, side, entry_price, stop_loss, total_amount,
-            quantity, leverage, take_profit, status, opened_at, closed_at, exit_price,
-            realized_pnl, close_reason,
+            position_id,
+            symbol,
+            side,
+            entry_price,
+            stop_loss,
+            total_amount,
+            quantity,
+            leverage,
+            take_profit,
+            status,
+            opened_at,
+            closed_at,
+            exit_price,
+            realized_pnl,
+            close_reason,
+            decision_snapshot,
         ) = row
         return Position(
-            position_id=str(position_id), symbol=str(symbol), side=PositionSide(str(side)),
-            entry_price=Decimal(str(entry_price)), stop_loss=Decimal(str(stop_loss)),
-            total_amount=Decimal(str(total_amount)), quantity=Decimal(str(quantity)),
+            position_id=str(position_id),
+            symbol=str(symbol),
+            side=PositionSide(str(side)),
+            entry_price=Decimal(str(entry_price)),
+            stop_loss=Decimal(str(stop_loss)),
+            total_amount=Decimal(str(total_amount)),
+            quantity=Decimal(str(quantity)),
             leverage=Decimal(str(leverage)),
             take_profit=Decimal(str(take_profit)) if take_profit is not None else None,
-            status=PositionStatus(str(status)), opened_at=datetime.fromisoformat(str(opened_at)),
+            status=PositionStatus(str(status)),
+            opened_at=datetime.fromisoformat(str(opened_at)),
             closed_at=datetime.fromisoformat(str(closed_at)) if closed_at else None,
             exit_price=Decimal(str(exit_price)) if exit_price is not None else None,
             realized_pnl=Decimal(str(realized_pnl)) if realized_pnl is not None else None,
             close_reason=str(close_reason) if close_reason else None,
+            decision_snapshot=(str(decision_snapshot) if decision_snapshot is not None else None),
         )
