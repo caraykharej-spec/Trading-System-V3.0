@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
-import sqlite3
 from typing import Callable
 
 from app.analytics.service import AnalyticsService
-from app.application.opportunity_pipeline import OpportunityPipeline, RiskContext
+from app.application.opportunity_pipeline import (
+    GatedOpportunity,
+    OpportunityPipeline,
+    RiskContext,
+)
 from app.application.runtime_cycle import RuntimeCycleOrchestrator
 from app.application.strategy_pipeline import StrategyPipeline
 from app.context.context_engine import ContextEngine
@@ -42,6 +46,7 @@ from app.storage.repositories.sqlite_fill_repository import SQLiteFillRepository
 from app.storage.repositories.sqlite_order_repository import SQLiteOrderRepository
 from app.storage.repositories.sqlite_position_repository import SQLitePositionRepository
 from app.universe.config_loader import load_universe
+from app.universe.contract_specs import ContractSpec
 from app.universe.registry import InstrumentRegistry
 from app.universe.symbol_mapping import SymbolMapper
 from interfaces.api.service import TradingApiService
@@ -110,7 +115,7 @@ def _initialize_account(
 def _validate_universe(
     registry: InstrumentRegistry,
     mapper: SymbolMapper,
-    contract_specs: dict,
+    contract_specs: dict[str, ContractSpec],
 ) -> None:
     instruments = registry.all(tradable_only=True)
     if not instruments:
@@ -119,7 +124,10 @@ def _validate_universe(
         symbol = instrument.symbol
         if symbol.upper() not in contract_specs:
             raise ValueError(f"missing contract specification for {symbol}")
-        if not any(mapper.has_mapping(symbol, provider) for provider in ("storm", "gateio", "yahoo")):
+        if not any(
+            mapper.has_mapping(symbol, provider)
+            for provider in ("storm", "gateio", "yahoo")
+        ):
             raise ValueError(f"missing market-data mapping for {symbol}")
 
 
@@ -147,7 +155,9 @@ def build_paper_application(
     storm = MappedMarketProvider(StormProvider(), mapper)
     gateio = MappedMarketProvider(GateIOProvider(), mapper)
     yahoo = MappedMarketProvider(YahooFinanceProvider(), mapper)
-    live_router = ProviderRouter((storm, gateio, yahoo), max_live_age_seconds=120)
+    live_router = ProviderRouter(
+        (storm, gateio, yahoo), max_live_age_seconds=120
+    )
     candle_router = ProviderRouter((gateio, yahoo))
 
     position_repository = SQLitePositionRepository(connection)
@@ -169,13 +179,22 @@ def build_paper_application(
 
     def snapshot_loader(
         symbol: str,
-    ) -> tuple[MarketSnapshot, MarketSnapshot, MarketSnapshot, MarketSnapshot]:
+    ) -> tuple[
+        MarketSnapshot,
+        MarketSnapshot,
+        MarketSnapshot,
+        MarketSnapshot,
+    ]:
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
             candles = candle_router.get_candles(
-                MarketDataRequest(symbol=symbol, timeframe=timeframe, limit=260)
+                MarketDataRequest(
+                    symbol=symbol, timeframe=timeframe, limit=260
+                )
             )
-            snapshots[timeframe] = analyze_market(symbol, timeframe, candles)
+            snapshots[timeframe] = analyze_market(
+                symbol, timeframe, candles
+            )
         return (
             snapshots["1d"],
             snapshots["4h"],
@@ -188,7 +207,10 @@ def build_paper_application(
     effective_context_loader = context_loader or (
         lambda symbol: context_engine.assess(symbol)
     )
-    leverage_map = {key.upper(): value for key, value in (leverage_by_symbol or {}).items()}
+    leverage_map = {
+        key.upper(): value
+        for key, value in (leverage_by_symbol or {}).items()
+    }
     matrix = correlation_matrix or CorrelationMatrix()
 
     def risk_context_loader(symbol: str) -> RiskContext:
@@ -197,7 +219,9 @@ def build_paper_application(
         leverage = leverage_map.get(symbol.upper(), Decimal("1"))
         if leverage <= 0:
             raise ValueError(f"invalid configured leverage for {symbol}")
-        active_pending = [pending.order for pending in pending_repository.list_active()]
+        active_pending = [
+            pending.order for pending in pending_repository.list_active()
+        ]
         reservation = reserve_pending_order_risk(
             active_pending, market_price_provider=live_price
         )
@@ -206,7 +230,9 @@ def build_paper_application(
                 "cannot quantify pending order risk: "
                 + ",".join(reservation.unresolved_order_ids)
             )
-        execution_venue = "STORM" if mapper.has_mapping(symbol, "storm") else None
+        execution_venue = (
+            "STORM" if mapper.has_mapping(symbol, "storm") else None
+        )
         return RiskContext(
             account=account,
             positions=position_repository.list_open(),
@@ -241,8 +267,12 @@ def build_paper_application(
         pending_repository,
         atomic_execution,
     )
-    pending_manager = PendingOrderManager(pending_repository, paper_executor)
-    recovery = RecoveryReconciler(order_repository, fill_repository, position_repository)
+    pending_manager = PendingOrderManager(
+        pending_repository, paper_executor
+    )
+    recovery = RecoveryReconciler(
+        order_repository, fill_repository, position_repository
+    )
     settlement = PositionSettlementService(
         connection=connection,
         position_repository=position_writer,
@@ -253,7 +283,10 @@ def build_paper_application(
     )
     selection_queue = ExplicitPaperSelectionQueue()
 
-    symbols = [instrument.symbol for instrument in registry.all(tradable_only=True)]
+    symbols = [
+        instrument.symbol
+        for instrument in registry.all(tradable_only=True)
+    ]
     runtime = RuntimeCycleOrchestrator(
         position_repository=position_repository,
         live_price_provider=live_price,
@@ -263,7 +296,9 @@ def build_paper_application(
         recovery_reconciler=recovery,
         recovery_order_ids_provider=lambda: [
             str(row[0])
-            for row in connection.execute("SELECT order_id FROM orders ORDER BY order_id")
+            for row in connection.execute(
+                "SELECT order_id FROM orders ORDER BY order_id"
+            )
         ],
         atomic_execution_service=atomic_execution,
         opportunity_pipeline=opportunity_pipeline,
@@ -286,8 +321,10 @@ def build_paper_application(
         pending_repository=pending_repository,
     )
 
-    def opportunities() -> list:
-        return list(opportunity_pipeline.evaluate(symbols, top_n=10).qualified)
+    def opportunities() -> list[GatedOpportunity]:
+        return list(
+            opportunity_pipeline.evaluate(symbols, top_n=10).qualified
+        )
 
     api = TradingApiService(
         mode=SystemMode.PAPER,
