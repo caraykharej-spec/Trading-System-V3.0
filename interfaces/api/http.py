@@ -34,6 +34,8 @@ class TradingHttpHandler(BaseHTTPRequestHandler):
             service = self._service()
             if parsed.path == "/health":
                 self._write(service.health())
+            elif parsed.path == "/ready":
+                self._write(service.readiness())
             elif parsed.path == "/positions":
                 self._write(service.positions())
             elif parsed.path == "/opportunities":
