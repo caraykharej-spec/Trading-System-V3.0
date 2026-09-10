@@ -4,8 +4,8 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Architecture principles
 
-- Strategy, risk, portfolio, execution, storage, and presentation are separate concerns.
-- Hard eligibility gates are separate from opportunity scoring.
+- Strategy, risk, portfolio, execution, storage, research, and presentation are separate concerns.
+- Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Open-position stop-loss monitoring runs at the beginning of every trading-state cycle after restart/recovery checks.
 - Realized P&L is calculated from the position's total amount/notional model, with provider-specific contract rules isolated from generic portfolio logic.
 - No fixed maximum number of open positions. Portfolio limits are risk, exposure, correlation, margin, leverage, and capital constraints.
@@ -16,13 +16,17 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current phase
 
-**Phase 22.5 — Architecture Hardening and Strategy Fidelity**
+**Phase 23 — Research / Optimization Framework**
 
-Phase 22.5 hardens the existing Phase 1–22 system rather than adding live trading. It strengthens indicator/strategy evidence fidelity, pending-risk reservation, correlation accounting, atomic settlement, provider/data-quality contracts, portfolio-backtest state typing, runtime composition, packaging, and CI quality enforcement.
+Phase 23 adds bounded and reproducible parameter research on top of the validated backtest stack. Experiments record strategy version, dataset fingerprints, explicit parameter spaces, objectives, constraints, search method, seed, trial budget, validation degradation, and complete trial outcomes.
 
-The current quality pipeline requires editable installation, compile checks, Ruff, strict mypy, the full pytest suite, and at least 70% branch-aware coverage across `app` and `interfaces`.
+The default research policy is deny-by-default. Only `min_rr`, `min_score`, and `min_confidence` are exposed, and research can only keep or tighten the declared floors of 2.5, 90, and 90. Risk limits, scoring weights, setup logic, structural stops, and execution settings are not tunable through the Phase 23 optimization surface.
 
-See `docs/architecture/22_5_architecture_hardening.md` for the detailed scope and invariants. Phase 22 journal/analytics remains documented in `docs/architecture/22_journal_analytics.md`.
+Research adapters reuse the existing Backtest, Portfolio Backtest, and Walk-Forward engines. Grid search is bounded; random search is deterministic from the experiment seed; final holdout data is identified in the experiment manifest but is intentionally not exposed to the optimization runner.
+
+See `docs/architecture/23_research_optimization.md` for the detailed scope. The preceding architecture hardening milestone remains documented in `docs/architecture/22_5_architecture_hardening.md`.
+
+The repository quality pipeline requires editable installation, compile checks, Ruff, strict mypy, the full pytest suite, and at least 70% branch-aware coverage across `app` and `interfaces`.
 
 ## Run from PyCharm or terminal
 
@@ -68,7 +72,7 @@ The initial policy is:
 - Minimum score: **90 / 100**
 - Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI or research code.
 
 ## Strategy evidence
 
@@ -86,6 +90,20 @@ The opportunity score remains a 100-point ranking model after hard gates:
 
 Score and confidence remain independent.
 
+## Research boundary
+
+Phase 23 research is reproducible and controlled:
+
+- candle datasets can be content-fingerprinted with SHA-256,
+- experiment and trial identities are deterministic,
+- grid and random candidate generation are bounded by `max_trials`,
+- validation is explicit and can enforce a maximum generalization degradation,
+- holdout data is not callable from the optimization loop,
+- parameter sensitivity can be analyzed after a run,
+- experiment results can be persisted idempotently in memory or SQLite.
+
+Research never overrides strategy, risk, portfolio, or execution hard gates.
+
 ## Data sources
 
 The V3 source boundary currently contains adapters for:
@@ -101,4 +119,4 @@ The configured universe is not hard-coded by asset count; canonical instruments,
 
 ## Safety and execution boundary
 
-There is no live-execution adapter in the Phase 22.5 composition root. Runtime execution remains PAPER/SHADOW with explicit user/application selection before paper submission. Structural stop-loss, aggregate-risk, correlated-risk, futures-capital, and provider-specific risk rules remain separate hard gates.
+There is no live-execution adapter in the current composition root. Runtime execution remains PAPER/SHADOW with explicit user/application selection before paper submission. Structural stop-loss, aggregate-risk, correlated-risk, futures-capital, and provider-specific risk rules remain separate hard gates.

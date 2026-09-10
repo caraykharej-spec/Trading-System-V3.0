@@ -8,6 +8,7 @@ from uuid import uuid4
 from app.data.market_data import Candle
 from app.market.analysis import MarketSnapshot, analyze_market
 from app.risk.risk_math import candidate_risk_amount, risk_budget_amount
+from app.strategy.rules import DEFAULT_RULES, StrategyRules
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
 
 from .costs import BacktestCostModel
@@ -34,8 +35,14 @@ class _OpenTrade:
 class BacktestEngine:
     """Deterministic OHLC backtester sharing strategy and core risk arithmetic."""
 
-    def __init__(self, config: BacktestConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: BacktestConfig | None = None,
+        *,
+        rules: StrategyRules = DEFAULT_RULES,
+    ) -> None:
         self.config = config or BacktestConfig()
+        self.rules = rules
         self.costs = BacktestCostModel(
             commission_percent=self.config.commission_percent,
             spread_percent=self.config.spread_percent,
@@ -118,6 +125,7 @@ class BacktestEngine:
                         snapshots["4h"],
                         snapshots["1h"],
                         snapshots["15m"],
+                        rules=self.rules,
                     )
                     if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
                         pending_signal = signal
