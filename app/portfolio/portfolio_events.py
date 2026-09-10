@@ -6,11 +6,20 @@ from datetime import datetime
 
 @dataclass
 class PortfolioUpdatedEvent:
+    portfolio_id: str
     equity: float
-    timestamp: datetime = datetime.utcnow()
+    timestamp: datetime
 
 
 @dataclass
 class BalanceUpdatedEvent:
-    balance: float
-    timestamp: datetime = datetime.utcnow()
+    total_balance: float
+    available_balance: float
+    timestamp: datetime
+
+
+@dataclass
+class EquityChangedEvent:
+    previous_equity: float
+    current_equity: float
+    timestamp: datetime
