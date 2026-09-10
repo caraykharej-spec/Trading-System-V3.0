@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from app.data.market_data import Candle
@@ -9,7 +10,7 @@ from app.data.market_data import Candle
 @dataclass(frozen=True)
 class SwingPoint:
     kind: str
-    timestamp: object
+    timestamp: datetime
     price: Decimal
     index: int
 
@@ -19,7 +20,7 @@ class StructureBreak:
     direction: str
     kind: str
     level: Decimal
-    timestamp: object
+    timestamp: datetime
 
 
 @dataclass(frozen=True)
