@@ -11,7 +11,8 @@ from app.journal.repository import JournalRepository
 
 _COLUMNS = (
     "position_id, cycle_id, symbol, side, entry_price, exit_price, stop_loss, take_profit, "
-    "total_amount, quantity, leverage, realized_pnl, opened_at, closed_at, close_reason"
+    "total_amount, quantity, leverage, realized_pnl, opened_at, closed_at, close_reason, "
+    "decision_snapshot"
 )
 
 
@@ -30,8 +31,8 @@ class SQLiteJournalRepository(JournalRepository):
             """INSERT INTO trade_journal (
                 position_id, cycle_id, symbol, side, entry_price, exit_price, stop_loss,
                 take_profit, total_amount, quantity, leverage, realized_pnl, opened_at,
-                closed_at, close_reason
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                closed_at, close_reason, decision_snapshot
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 entry.position_id,
                 entry.cycle_id,
@@ -48,6 +49,7 @@ class SQLiteJournalRepository(JournalRepository):
                 entry.opened_at.isoformat(),
                 entry.closed_at.isoformat(),
                 entry.close_reason,
+                entry.decision_snapshot,
             ),
         )
         if self.auto_commit:
@@ -92,6 +94,7 @@ class SQLiteJournalRepository(JournalRepository):
             opened_at,
             closed_at,
             close_reason,
+            decision_snapshot,
         ) = row
         return JournalEntry(
             position_id=str(position_id),
@@ -109,4 +112,5 @@ class SQLiteJournalRepository(JournalRepository):
             opened_at=datetime.fromisoformat(str(opened_at)),
             closed_at=datetime.fromisoformat(str(closed_at)),
             close_reason=str(close_reason),
+            decision_snapshot=(str(decision_snapshot) if decision_snapshot is not None else None),
         )
