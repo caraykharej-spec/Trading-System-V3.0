@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, phase-22-5-final-pr]
+    branches: [main, "phase-*"]
   pull_request:
     branches: [main]
 
