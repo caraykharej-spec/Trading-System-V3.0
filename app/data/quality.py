@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-import math
 
 from app.data.market_data import Candle, LivePrice
 
@@ -17,6 +16,16 @@ TIMEFRAME_SECONDS: dict[str, int] = {
     "2h": 7200,
     "4h": 14400,
     "1d": 86400,
+}
+DEFAULT_CANDLE_MAX_AGE_SECONDS: dict[str, int] = {
+    "1m": 180,
+    "5m": 900,
+    "15m": 2700,
+    "30m": 5400,
+    "1h": 10800,
+    "2h": 21600,
+    "4h": 43200,
+    "1d": 259200,
 }
 
 
@@ -45,6 +54,13 @@ class DataQuality:
 def timeframe_seconds(timeframe: str) -> int:
     try:
         return TIMEFRAME_SECONDS[timeframe]
+    except KeyError as exc:
+        raise ValueError(f"unsupported timeframe: {timeframe}") from exc
+
+
+def default_candle_max_age_seconds(timeframe: str) -> int:
+    try:
+        return DEFAULT_CANDLE_MAX_AGE_SECONDS[timeframe]
     except KeyError as exc:
         raise ValueError(f"unsupported timeframe: {timeframe}") from exc
 
