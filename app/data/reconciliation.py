@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.data.market_data import Candle, LivePrice
-from app.data.quality import DataQuality, detect_price_outliers, validate_candles, validate_live_price
+from app.data.quality import detect_price_outliers, validate_candles, validate_live_price
 
 
 @dataclass(frozen=True)
