@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-import sqlite3
-from typing import Protocol
+from typing import Protocol, Sequence
 
 from app.data.provider_router import ProviderRouter
 from app.runtime.audit import AuditStatus, CycleAudit
@@ -42,11 +42,11 @@ class AuditReader(Protocol):
 
 
 class PositionReader(Protocol):
-    def list_open(self) -> list[object]: ...
+    def list_open(self) -> Sequence[object]: ...
 
 
 class PendingReader(Protocol):
-    def list_active(self) -> list[object]: ...
+    def list_active(self) -> Sequence[object]: ...
 
 
 class SystemHealthService:
@@ -90,13 +90,19 @@ class SystemHealthService:
             self._runtime_health(),
             self._position_health(),
         )
-        if any(component.state is HealthState.NOT_READY for component in components):
+        if any(
+            component.state is HealthState.NOT_READY for component in components
+        ):
             state = HealthState.NOT_READY
-        elif any(component.state is HealthState.DEGRADED for component in components):
+        elif any(
+            component.state is HealthState.DEGRADED for component in components
+        ):
             state = HealthState.DEGRADED
         else:
             state = HealthState.READY
-        return SystemHealthReport(state, datetime.now(timezone.utc), components)
+        return SystemHealthReport(
+            state, datetime.now(timezone.utc), components
+        )
 
     def _database_health(self) -> ComponentHealth:
         try:
@@ -112,11 +118,17 @@ class SystemHealthService:
                     {},
                 )
             return ComponentHealth(
-                "database", HealthState.READY, "SQLite is queryable", {"equity": str(account[0])}
+                "database",
+                HealthState.READY,
+                "SQLite is queryable",
+                {"equity": str(account[0])},
             )
         except sqlite3.Error as exc:
             return ComponentHealth(
-                "database", HealthState.NOT_READY, "SQLite check failed", {"error": str(exc)}
+                "database",
+                HealthState.NOT_READY,
+                "SQLite check failed",
+                {"error": str(exc)},
             )
 
     def _universe_health(self) -> ComponentHealth:
@@ -128,7 +140,10 @@ class SystemHealthService:
         ]
         if not instruments:
             return ComponentHealth(
-                "universe", HealthState.NOT_READY, "tradable universe is empty", {}
+                "universe",
+                HealthState.NOT_READY,
+                "tradable universe is empty",
+                {},
             )
         if missing:
             return ComponentHealth(
@@ -171,13 +186,19 @@ class SystemHealthService:
                     max(previous[1], status.consecutive_failures),
                 )
         open_names = [name for name, values in unique.items() if values[0]]
-        details = {
-            name: {"circuit_open": values[0], "consecutive_failures": values[1]}
+        details: dict[str, object] = {
+            name: {
+                "circuit_open": values[0],
+                "consecutive_failures": values[1],
+            }
             for name, values in sorted(unique.items())
         }
         if unique and len(open_names) == len(unique):
             return ComponentHealth(
-                "providers", HealthState.NOT_READY, "all provider circuits are open", details
+                "providers",
+                HealthState.NOT_READY,
+                "all provider circuits are open",
+                details,
             )
         if open_names or any(values[1] for values in unique.values()):
             return ComponentHealth(
@@ -187,13 +208,19 @@ class SystemHealthService:
                 details,
             )
         return ComponentHealth(
-            "providers", HealthState.READY, "provider circuits are available", details
+            "providers",
+            HealthState.READY,
+            "provider circuits are available",
+            details,
         )
 
     def _runtime_health(self) -> ComponentHealth:
         if self.audit_repository is None:
             return ComponentHealth(
-                "runtime", HealthState.DEGRADED, "runtime audit repository is not configured", {}
+                "runtime",
+                HealthState.DEGRADED,
+                "runtime audit repository is not configured",
+                {},
             )
         latest = self.audit_repository.latest()
         if latest is None:
@@ -203,16 +230,26 @@ class SystemHealthService:
                 "runtime has not executed a cycle yet",
                 {"last_cycle": None},
             )
-        state = HealthState.DEGRADED if latest.status is AuditStatus.FAILED else HealthState.READY
+        state = (
+            HealthState.DEGRADED
+            if latest.status is AuditStatus.FAILED
+            else HealthState.READY
+        )
         return ComponentHealth(
             "runtime",
             state,
-            "latest cycle failed" if state is HealthState.DEGRADED else "latest cycle completed",
+            "latest cycle failed"
+            if state is HealthState.DEGRADED
+            else "latest cycle completed",
             {
                 "cycle_id": latest.cycle_id,
                 "status": latest.status.value,
                 "started_at": latest.started_at.isoformat(),
-                "finished_at": latest.finished_at.isoformat() if latest.finished_at else None,
+                "finished_at": (
+                    latest.finished_at.isoformat()
+                    if latest.finished_at
+                    else None
+                ),
             },
         )
 
