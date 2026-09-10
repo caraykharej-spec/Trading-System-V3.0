@@ -22,10 +22,16 @@ def analyze_structure(candles: list[Candle], lookback: int = 20) -> StructureRes
     if len(ordered) < lookback:
         return StructureResult("UNKNOWN", None, None, Decimal("0"))
     result = analyze_advanced_structure(ordered[-lookback:], pivot=max(1, min(2, lookback // 4)))
+    support, resistance = result.support, result.resistance
+    last = ordered[-1].close
     if result.structure == "BOS":
         state = "BREAKOUT_UP" if result.last_break and result.last_break.direction == "UP" else "BREAKOUT_DOWN"
     elif result.structure == "CHOCH":
         state = "CHOCH_UP" if result.last_break and result.last_break.direction == "UP" else "CHOCH_DOWN"
+    elif support is not None and last <= support * Decimal("1.005"):
+        state = "NEAR_SUPPORT"
+    elif resistance is not None and last >= resistance * Decimal("0.995"):
+        state = "NEAR_RESISTANCE"
     elif result.trend == "BULLISH":
         state = "BULLISH_STRUCTURE"
     elif result.trend == "BEARISH":
@@ -34,4 +40,4 @@ def analyze_structure(candles: list[Candle], lookback: int = 20) -> StructureRes
         state = "TRANSITION"
     else:
         state = "RANGE"
-    return StructureResult(state, result.support, result.resistance, result.score)
+    return StructureResult(state, support, resistance, result.score)
