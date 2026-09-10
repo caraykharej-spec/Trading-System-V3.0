@@ -32,6 +32,7 @@ class Position:
     exit_price: Optional[Decimal] = None
     realized_pnl: Optional[Decimal] = None
     close_reason: Optional[str] = None
+    decision_snapshot: Optional[str] = None
 
 
 @dataclass(frozen=True)
