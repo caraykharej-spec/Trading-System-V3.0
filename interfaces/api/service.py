@@ -25,6 +25,7 @@ class TradingApiService:
         positions_provider: Callable[[], list[Any]] | None = None,
         opportunities_provider: Callable[[], list[Any]] | None = None,
         analytics_provider: Callable[[], Any] | None = None,
+        readiness_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
@@ -32,10 +33,19 @@ class TradingApiService:
         self._positions_provider = positions_provider or (lambda: [])
         self._opportunities_provider = opportunities_provider or (lambda: [])
         self._analytics_provider = analytics_provider
+        self._readiness_provider = readiness_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
         return ApiResponse.ok(response.to_dict())
+
+    def readiness(self) -> ApiResponse:
+        if self._readiness_provider is None:
+            return ApiResponse.conflict(
+                "READINESS_UNAVAILABLE", "readiness diagnostics are not configured"
+            )
+        report = self._readiness_provider()
+        return ApiResponse.ok({"readiness": self._serialize(report)})
 
     def positions(self) -> ApiResponse:
         return ApiResponse.ok(
@@ -68,7 +78,9 @@ class TradingApiService:
         if isinstance(value, Enum):
             return value.value
         if isinstance(value, dict):
-            return {str(key): TradingApiService._serialize(item) for key, item in value.items()}
+            return {
+                str(key): TradingApiService._serialize(item) for key, item in value.items()
+            }
         if isinstance(value, (list, tuple)):
             return [TradingApiService._serialize(item) for item in value]
         if is_dataclass(value):
