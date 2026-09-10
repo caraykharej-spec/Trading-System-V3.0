@@ -22,6 +22,9 @@ class DecisionEvidence:
     planned_rr: Decimal
     score_components: dict[str, Decimal]
     strategy_quality: dict[str, Decimal]
+    market_regime: str
+    htf_trend: str
+    structure_state: str
     context_news: str
     context_event: str
     context_blocking: bool
@@ -56,6 +59,9 @@ class DecisionEvidence:
             "rr_quality": breakdown.rr_quality,
         }
         strategy_quality: dict[str, Decimal] = {}
+        market_regime = "UNKNOWN"
+        htf_trend = "UNKNOWN"
+        structure_state = "UNKNOWN"
         if signal.evidence is not None:
             strategy_quality = {
                 "data_quality": signal.evidence.data_quality,
@@ -67,6 +73,9 @@ class DecisionEvidence:
                 "volatility": signal.evidence.volatility_quality,
                 "rr": signal.evidence.rr_quality,
             }
+            market_regime = signal.evidence.market_regime
+            htf_trend = signal.evidence.htf_trend
+            structure_state = signal.evidence.structure_state
         return cls(
             symbol=signal.symbol,
             direction=signal.direction,
@@ -76,6 +85,9 @@ class DecisionEvidence:
             planned_rr=signal.rr,
             score_components=score_components,
             strategy_quality=strategy_quality,
+            market_regime=market_regime,
+            htf_trend=htf_trend,
+            structure_state=structure_state,
             context_news=context.news.value if context is not None else "UNKNOWN",
             context_event=context.event.value if context is not None else "NONE",
             context_blocking=context.blocking if context is not None else False,
@@ -98,6 +110,9 @@ class DecisionEvidence:
             "score": str(self.score),
             "confidence": str(self.confidence),
             "planned_rr": str(self.planned_rr),
+            "market_regime": self.market_regime,
+            "htf_trend": self.htf_trend,
+            "structure_state": self.structure_state,
             "score_components": {
                 key: str(value) for key, value in self.score_components.items()
             },
