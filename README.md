@@ -6,31 +6,55 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 - Strategy, risk, portfolio, execution, storage, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring.
-- Open-position stop-loss monitoring runs at the beginning of every system cycle.
+- Open-position stop-loss monitoring runs at the beginning of every trading-state cycle after restart/recovery checks.
 - Realized P&L is calculated from the position's total amount/notional model, with provider-specific contract rules isolated from generic portfolio logic.
 - No fixed maximum number of open positions. Portfolio limits are risk, exposure, correlation, margin, leverage, and capital constraints.
 - Top 10 is a ranking presentation limit, not a trade-count limit.
 - Pyth is not part of the V3 data-source architecture.
-- Initial execution mode is paper/shadow; live execution is a later, explicitly enabled capability.
+- Execution mode is paper/shadow; live execution is not enabled.
 - The core is UI-independent so the same Python domain can run from PyCharm, a server, or behind an Android-facing API.
 
 ## Current phase
 
-**Phase 22 — Trade Journal and Performance Analytics**
+**Phase 22.5 — Architecture Hardening and Strategy Fidelity**
 
-Completed foundations include normalized market-data contracts, provider adapters, canonical instrument identity, market analysis, strategy/risk/portfolio layers, context/news/events, realistic backtesting, execution boundaries, restart-safe persistence/recovery, paper runtime, the thin API boundary, and immutable completed-position journaling with read-only performance analytics.
+Phase 22.5 hardens the existing Phase 1–22 system rather than adding live trading. It strengthens indicator/strategy evidence fidelity, pending-risk reservation, correlation accounting, atomic settlement, provider/data-quality contracts, portfolio-backtest state typing, runtime composition, packaging, and CI quality enforcement.
 
-Phase 22 persists completed position facts, repairs missing journal rows from authoritative closed-position state, computes deterministic performance metrics, and exposes an optional analytics read endpoint without moving business rules into HTTP. See `docs/architecture/22_journal_analytics.md`.
+The current quality pipeline requires editable installation, compile checks, Ruff, strict mypy, the full pytest suite, and at least 70% branch-aware coverage across `app` and `interfaces`.
 
-## Run from PyCharm
+See `docs/architecture/22_5_architecture_hardening.md` for the detailed scope and invariants. Phase 22 journal/analytics remains documented in `docs/architecture/22_journal_analytics.md`.
 
-Use the project root as the working directory and run:
+## Run from PyCharm or terminal
+
+Use the project root as the working directory.
+
+Passive local status only:
 
 ```bash
 python main.py
 ```
 
-The local smoke runner is intentionally non-trading. Live broker/exchange execution is not enabled.
+or explicitly:
+
+```bash
+python main.py status
+```
+
+This builds the PAPER application, reads local state, and runs passive readiness diagnostics without starting a market-data/runtime cycle.
+
+To explicitly run one PAPER runtime cycle:
+
+```bash
+python main.py cycle
+```
+
+The runtime may request market data, but it still cannot submit live orders. The paper-selection queue is empty unless a caller explicitly places selected PAPER orders into it; Top-10 opportunities are never auto-submitted.
+
+Optional paths:
+
+```bash
+python main.py status --db data/trading_system_v3.db --universe config/universe.json
+```
 
 ## Risk constants
 
@@ -41,12 +65,30 @@ The initial policy is:
 - Storm-specific maximum SL loss relative to position amount: **10%**
 - No fixed maximum open-position count
 - Minimum R:R: **2.5**
+- Minimum score: **90 / 100**
+- Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk layer, not scattered across strategy or UI code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI code.
+
+## Strategy evidence
+
+The V3 analysis/evidence stack includes EMA 20/50/200, SMA 50, RSI 14, MACD, ATR 14, ADX 14, Supertrend direction, rolling VWAP, volume confirmation, and Bollinger Bands.
+
+The opportunity score remains a 100-point ranking model after hard gates:
+
+- HTF trend alignment: 20
+- Market structure: 15
+- Setup quality: 25
+- Entry confirmation: 15
+- Volume/liquidity: 10
+- Volatility quality: 5
+- R:R quality: 10
+
+Score and confidence remain independent.
 
 ## Data sources
 
-The V3 source boundary currently reserves adapters for:
+The V3 source boundary currently contains adapters for:
 
 - Storm
 - Gate.io
@@ -55,4 +97,8 @@ The V3 source boundary currently reserves adapters for:
 
 Pyth is deliberately excluded.
 
-The configured universe is intentionally not hard-coded by asset count; provider catalogs and symbol mappings must be verified before populating it.
+The configured universe is not hard-coded by asset count; canonical instruments, provider mappings, and contract specifications are loaded from configuration.
+
+## Safety and execution boundary
+
+There is no live-execution adapter in the Phase 22.5 composition root. Runtime execution remains PAPER/SHADOW with explicit user/application selection before paper submission. Structural stop-loss, aggregate-risk, correlated-risk, futures-capital, and provider-specific risk rules remain separate hard gates.
