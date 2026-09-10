@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS positions (
     closed_at TEXT,
     exit_price TEXT,
     realized_pnl TEXT,
-    close_reason TEXT
+    close_reason TEXT,
+    decision_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cycle_audits (
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS orders (
     status TEXT NOT NULL DEFAULT 'PENDING',
     filled_price TEXT,
     reason TEXT,
-    filled_at TEXT
+    filled_at TEXT,
+    decision_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS fills (
@@ -76,6 +78,17 @@ CREATE TABLE IF NOT EXISTS account_state (
     equity TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS account_ledger (
+    ledger_id TEXT PRIMARY KEY,
+    position_id TEXT NOT NULL UNIQUE,
+    cycle_id TEXT,
+    realized_pnl TEXT NOT NULL,
+    equity_before TEXT NOT NULL,
+    equity_after TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (position_id) REFERENCES positions(position_id)
+);
+
 CREATE TABLE IF NOT EXISTS trade_journal (
     position_id TEXT PRIMARY KEY,
     cycle_id TEXT,
@@ -91,28 +104,38 @@ CREATE TABLE IF NOT EXISTS trade_journal (
     realized_pnl TEXT NOT NULL,
     opened_at TEXT NOT NULL,
     closed_at TEXT NOT NULL,
-    close_reason TEXT NOT NULL
+    close_reason TEXT NOT NULL,
+    decision_snapshot TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_fills_order_id ON fills(order_id);
 CREATE INDEX IF NOT EXISTS idx_fills_filled_at ON fills(filled_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON pending_orders(status);
+CREATE INDEX IF NOT EXISTS idx_account_ledger_created_at ON account_ledger(created_at);
 CREATE INDEX IF NOT EXISTS idx_trade_journal_closed_at ON trade_journal(closed_at);
 CREATE INDEX IF NOT EXISTS idx_trade_journal_symbol ON trade_journal(symbol);
 """
 
 
+def _ensure_column(
+    connection: sqlite3.Connection, table: str, column: str, declaration: str
+) -> None:
+    columns = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
-    """Open SQLite and ensure all current persistence tables exist."""
+    """Open SQLite and apply backward-compatible schema migrations."""
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
     connection.execute("PRAGMA foreign_keys = ON")
     connection.executescript(SCHEMA)
-
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(positions)")}
-    if "take_profit" not in columns:
-        connection.execute("ALTER TABLE positions ADD COLUMN take_profit TEXT")
+    _ensure_column(connection, "positions", "take_profit", "TEXT")
+    _ensure_column(connection, "positions", "decision_snapshot", "TEXT")
+    _ensure_column(connection, "orders", "decision_snapshot", "TEXT")
+    _ensure_column(connection, "trade_journal", "decision_snapshot", "TEXT")
     connection.commit()
     return connection
