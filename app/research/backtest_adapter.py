@@ -51,7 +51,8 @@ class BacktestResearchEvaluator:
         self._base_config = base_config
         self._bindings = dict(bindings)
 
-    def _config_for(self, parameters: ParameterSet) -> BacktestConfig:
+    def config_for(self, parameters: ParameterSet) -> BacktestConfig:
+        """Project an explicit ParameterSet into a new validated BacktestConfig."""
         provided = parameters.as_dict()
         unbound = set(provided) - set(self._bindings)
         if unbound:
@@ -113,5 +114,5 @@ class BacktestResearchEvaluator:
         role: DatasetRole,
     ) -> BacktestResult:
         del seed  # BacktestEngine is deterministic; seed remains part of experiment provenance.
-        config = self._config_for(parameters)
+        config = self.config_for(parameters)
         return BacktestEngine(config).run(self._symbol, self._datasets[role])
