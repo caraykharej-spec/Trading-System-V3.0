@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.core.models import Position
-from app.portfolio.correlation import correlated_risk
+from app.portfolio.correlation import CorrelationMatrix, correlated_risk
 from app.portfolio.exposure import total_notional, total_risk
 
 
@@ -33,6 +33,8 @@ class PortfolioAssessment:
     notional: Decimal
     reasons: tuple[str, ...]
     futures_capital_percent: Decimal = Decimal("0")
+    reserved_pending_risk: Decimal = Decimal("0")
+    correlation_members: tuple[str, ...] = ()
 
 
 def assess_portfolio(
@@ -44,13 +46,34 @@ def assess_portfolio(
     correlation: Decimal = Decimal("0"),
     policy: PortfolioPolicy = PortfolioPolicy(),
     new_futures_capital: Decimal = Decimal("0"),
+    reserved_pending_risk: Decimal = Decimal("0"),
+    candidate_symbol: str | None = None,
+    correlation_matrix: CorrelationMatrix | None = None,
 ) -> PortfolioAssessment:
-    if equity <= 0 or new_risk < 0 or new_notional < 0 or new_futures_capital < 0:
+    if (
+        equity <= 0
+        or new_risk < 0
+        or new_notional < 0
+        or new_futures_capital < 0
+        or reserved_pending_risk < 0
+    ):
         raise ValueError("equity and portfolio values must be valid")
     policy.validate()
+
     existing_risk = total_risk(positions)
-    aggregate = existing_risk + new_risk
-    correlated = correlated_risk(new_risk, existing_risk, correlation)
+    aggregate = existing_risk + reserved_pending_risk + new_risk
+    correlation_members: tuple[str, ...] = ()
+    if correlation_matrix is not None and candidate_symbol:
+        exposure = correlation_matrix.candidate_exposure(
+            candidate_symbol=candidate_symbol,
+            new_risk=new_risk,
+            positions=positions,
+        )
+        correlated = exposure.correlated_risk
+        correlation_members = exposure.members
+    else:
+        correlated = correlated_risk(new_risk, existing_risk, correlation)
+
     aggregate_pct = aggregate / equity * Decimal("100")
     correlated_pct = correlated / equity * Decimal("100")
     existing_futures = sum(
@@ -66,6 +89,7 @@ def assess_portfolio(
         reasons.append("correlated risk exceeds portfolio limit")
     if futures_pct > policy.max_futures_capital_percent:
         reasons.append("futures capital exceeds portfolio limit")
+
     return PortfolioAssessment(
         not reasons,
         aggregate,
@@ -75,4 +99,6 @@ def assess_portfolio(
         total_notional(positions) + new_notional,
         tuple(reasons),
         futures_pct,
+        reserved_pending_risk,
+        correlation_members,
     )
