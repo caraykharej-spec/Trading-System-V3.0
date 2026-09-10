@@ -112,6 +112,8 @@ def validate_candles(
     items = tuple(candles)
     if not items:
         return DataQuality(False, ("no candles",))
+
+    step: int | None
     if expected_timeframe is not None:
         try:
             step = timeframe_seconds(expected_timeframe)
@@ -129,7 +131,9 @@ def validate_candles(
         if candle.timeframe not in TIMEFRAME_SECONDS:
             reasons.append(f"unsupported timeframe at {candle.timestamp.isoformat()}")
         if expected_timeframe and candle.timeframe != expected_timeframe:
-            reasons.append(f"unexpected timeframe {candle.timeframe}; expected {expected_timeframe}")
+            reasons.append(
+                f"unexpected timeframe {candle.timeframe}; expected {expected_timeframe}"
+            )
         try:
             timestamp = _utc(candle.timestamp)
         except ValueError as exc:
@@ -188,43 +192,17 @@ def detect_price_outliers(
     candles: tuple[Candle, ...] | list[Candle],
     *,
     max_return: Decimal = Decimal("0.50"),
-    max_range: Decimal = Decimal("1.00"),
 ) -> DataQuality:
-    if max_return <= 0 or max_range <= 0:
-        raise ValueError("outlier thresholds must be positive")
+    if max_return <= 0:
+        raise ValueError("max_return must be positive")
     reasons: list[str] = []
-    previous_close: Decimal | None = None
+    previous: Candle | None = None
     for candle in candles:
-        if candle.close <= 0 or candle.low <= 0:
-            reasons.append(f"non-positive price at {candle.timestamp.isoformat()}")
-            previous_close = candle.close
-            continue
-        candle_range = (candle.high - candle.low) / candle.low
-        if candle_range > max_range:
-            reasons.append(f"extreme candle range at {candle.timestamp.isoformat()}")
-        if previous_close and previous_close > 0:
-            move = abs(candle.close - previous_close) / previous_close
+        if previous is not None and previous.close > 0:
+            move = abs(candle.close - previous.close) / previous.close
             if move > max_return:
-                reasons.append(f"extreme close-to-close move at {candle.timestamp.isoformat()}")
-        previous_close = candle.close
+                reasons.append(
+                    f"price outlier detected at {candle.timestamp.isoformat()}: {move}"
+                )
+        previous = candle
     return DataQuality(not reasons, tuple(reasons))
-
-
-def detect_volume_anomalies(
-    candles: tuple[Candle, ...] | list[Candle],
-    *,
-    multiplier: Decimal = Decimal("100"),
-) -> DataQuality:
-    if multiplier <= 0:
-        raise ValueError("multiplier must be positive")
-    positive = [c.volume for c in candles if c.volume > 0 and c.volume.is_finite()]
-    if len(positive) < 2:
-        return DataQuality(
-            True, (), ("insufficient positive volume history for anomaly detection",)
-        )
-    baseline = sum(positive[:-1], Decimal("0")) / Decimal(len(positive) - 1)
-    if baseline <= 0:
-        return DataQuality(True, (), ("zero volume baseline",))
-    if positive[-1] > baseline * multiplier:
-        return DataQuality(True, (), ("latest volume is an extreme outlier",))
-    return DataQuality(True)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
+from dataclasses import is_dataclass
 from enum import Enum
 from typing import Any, Callable
 
@@ -54,20 +54,28 @@ class TradingApiService:
 
     def opportunities(self, limit: int = 10) -> ApiResponse:
         if limit < 1 or limit > 100:
-            return ApiResponse.bad_request("INVALID_LIMIT", "limit must be between 1 and 100")
+            return ApiResponse.bad_request(
+                "INVALID_LIMIT", "limit must be between 1 and 100"
+            )
         items = self._opportunities_provider()[:limit]
-        return ApiResponse.ok({"opportunities": [self._serialize(item) for item in items]})
+        return ApiResponse.ok(
+            {"opportunities": [self._serialize(item) for item in items]}
+        )
 
     def performance(self) -> ApiResponse:
         if self._analytics_provider is None:
             return ApiResponse.conflict(
                 "ANALYTICS_UNAVAILABLE", "performance analytics are not configured"
             )
-        return ApiResponse.ok({"performance": self._serialize(self._analytics_provider())})
+        return ApiResponse.ok(
+            {"performance": self._serialize(self._analytics_provider())}
+        )
 
     def run_cycle(self) -> ApiResponse:
         if self._cycle_runner is None:
-            return ApiResponse.conflict("CYCLE_UNAVAILABLE", "runtime cycle is not configured")
+            return ApiResponse.conflict(
+                "CYCLE_UNAVAILABLE", "runtime cycle is not configured"
+            )
         result = self._cycle_runner()
         return ApiResponse.ok({"cycle": self._serialize(result)})
 
@@ -79,12 +87,13 @@ class TradingApiService:
             return value.value
         if isinstance(value, dict):
             return {
-                str(key): TradingApiService._serialize(item) for key, item in value.items()
+                str(key): TradingApiService._serialize(item)
+                for key, item in value.items()
             }
         if isinstance(value, (list, tuple)):
             return [TradingApiService._serialize(item) for item in value]
-        if is_dataclass(value):
-            return TradingApiService._serialize(asdict(value))
+        if is_dataclass(value) and not isinstance(value, type):
+            return TradingApiService._serialize(vars(value))
         if hasattr(value, "isoformat"):
             return value.isoformat()
         if hasattr(value, "__dict__"):

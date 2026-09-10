@@ -1,25 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, Sequence
 
 from app.core.models import Position
+from app.execution.fills import Fill
 from app.execution.models import OrderRequest, OrderResult, OrderStatus
 from app.execution.position_builder import position_from_fill
 
 
 class OrderStore(Protocol):
-    def get(self, order_id: str) -> tuple[OrderRequest, OrderResult | None] | None: ...
+    def get(
+        self, order_id: str
+    ) -> tuple[OrderRequest, OrderResult | None] | None: ...
 
 
 class PositionStore(Protocol):
-    def list_open(self) -> list[Position]: ...
+    def list_open(self) -> Sequence[Position]: ...
+
     def save(self, position: Position) -> None: ...
+
     def exists(self, position_id: str) -> bool: ...
 
 
 class FillStore(Protocol):
-    def list_for_order(self, order_id: str) -> list[object]: ...
+    def list_for_order(self, order_id: str) -> Sequence[Fill]: ...
 
 
 @dataclass(frozen=True)
@@ -44,7 +49,12 @@ class RecoveryReconciler:
     positions, including closed positions, are never overwritten or reopened.
     """
 
-    def __init__(self, orders: OrderStore, fills: FillStore, positions: PositionStore) -> None:
+    def __init__(
+        self,
+        orders: OrderStore,
+        fills: FillStore,
+        positions: PositionStore,
+    ) -> None:
         self.orders = orders
         self.fills = fills
         self.positions = positions
@@ -56,7 +66,13 @@ class RecoveryReconciler:
         for order_id in order_ids:
             record = self.orders.get(order_id)
             if record is None:
-                issues.append(ReconciliationIssue(order_id, "MISSING_ORDER", "order record not found"))
+                issues.append(
+                    ReconciliationIssue(
+                        order_id,
+                        "MISSING_ORDER",
+                        "order record not found",
+                    )
+                )
                 continue
             order, result = record
             fills = self.fills.list_for_order(order_id)
@@ -65,13 +81,31 @@ class RecoveryReconciler:
                 continue
             if result.status is not OrderStatus.FILLED:
                 if fills:
-                    issues.append(ReconciliationIssue(order_id, "NON_FILLED_WITH_FILL", "fill exists for a non-filled order"))
+                    issues.append(
+                        ReconciliationIssue(
+                            order_id,
+                            "NON_FILLED_WITH_FILL",
+                            "fill exists for a non-filled order",
+                        )
+                    )
                 continue
             if len(fills) == 0:
-                issues.append(ReconciliationIssue(order_id, "FILLED_WITHOUT_FILL", "filled order has no fill ledger record"))
+                issues.append(
+                    ReconciliationIssue(
+                        order_id,
+                        "FILLED_WITHOUT_FILL",
+                        "filled order has no fill ledger record",
+                    )
+                )
                 continue
             if len(fills) > 1:
-                issues.append(ReconciliationIssue(order_id, "MULTIPLE_FILLS", "multiple fills require position aggregation before recovery"))
+                issues.append(
+                    ReconciliationIssue(
+                        order_id,
+                        "MULTIPLE_FILLS",
+                        "multiple fills require position aggregation before recovery",
+                    )
+                )
                 continue
             if self.positions.exists(order_id):
                 continue
@@ -80,4 +114,6 @@ class RecoveryReconciler:
             self.positions.save(position)
             repaired += 1
 
-        return ReconciliationResult(len(order_ids), repaired, tuple(issues))
+        return ReconciliationResult(
+            len(order_ids), repaired, tuple(issues)
+        )

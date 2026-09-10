@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-import sqlite3
 
 from app.core.enums import PositionSide
 from app.execution.fills import Fill
@@ -41,7 +40,12 @@ def test_in_memory_order_lifecycle_allows_accepted_to_filled() -> None:
     order = make_order()
     repository.save_request(order)
     repository.save_result(
-        OrderResult(order_id=order.order_id, status=OrderStatus.ACCEPTED, symbol=order.symbol, reason="limit not fillable")
+        OrderResult(
+            order_id=order.order_id,
+            status=OrderStatus.ACCEPTED,
+            symbol=order.symbol,
+            reason="limit not fillable",
+        )
     )
     repository.save_result(filled_result())
     saved = repository.get(order.order_id)
@@ -89,10 +93,24 @@ def test_sqlite_fill_is_idempotent_but_rejects_conflict(tmp_path) -> None:
     order = make_order()
     orders.save_request(order)
     orders.save_result(filled_result())
-    fill = Fill("fill-1", order.order_id, order.symbol, order.side, order.quantity, Decimal("100"))
+    fill = Fill(
+        "fill-1",
+        order.order_id,
+        order.symbol,
+        order.side,
+        order.quantity,
+        Decimal("100"),
+    )
     fills.save(fill)
     fills.save(fill)
-    conflicting = Fill("fill-1", order.order_id, order.symbol, order.side, order.quantity, Decimal("101"))
+    conflicting = Fill(
+        "fill-1",
+        order.order_id,
+        order.symbol,
+        order.side,
+        order.quantity,
+        Decimal("101"),
+    )
     try:
         fills.save(conflicting)
     except ValueError:

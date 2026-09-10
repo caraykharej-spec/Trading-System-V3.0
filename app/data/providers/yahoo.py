@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 from urllib.parse import quote
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
@@ -25,7 +26,12 @@ class YahooFinanceProvider(MarketDataProvider):
         price = meta.get("regularMarketPrice")
         if price is None:
             raise ProviderError(f"Yahoo live price unavailable: {symbol}")
-        return LivePrice(symbol=symbol, price=to_decimal(price), as_of=utc_now(), provider=self.name)
+        return LivePrice(
+            symbol=symbol,
+            price=to_decimal(price),
+            as_of=utc_now(),
+            provider=self.name,
+        )
 
     def get_candles(self, request: MarketDataRequest) -> list[Candle]:
         requested = request.timeframe or "1h"
@@ -45,7 +51,9 @@ class YahooFinanceProvider(MarketDataProvider):
         return candles[-request.limit :]
 
     @staticmethod
-    def _parse_candles(data: dict, symbol: str, timeframe: str) -> list[Candle]:
+    def _parse_candles(
+        data: dict[str, Any], symbol: str, timeframe: str
+    ) -> list[Candle]:
         timestamps = data.get("timestamp") or []
         quotes = data.get("indicators", {}).get("quote") or []
         if not quotes:
@@ -53,7 +61,7 @@ class YahooFinanceProvider(MarketDataProvider):
         quote_data = quotes[0]
         candles: list[Candle] = []
         for index, raw_timestamp in enumerate(timestamps):
-            values = {}
+            values: dict[str, Any] = {}
             for key in ("open", "high", "low", "close", "volume"):
                 series = quote_data.get(key) or []
                 values[key] = series[index] if index < len(series) else None
@@ -63,7 +71,9 @@ class YahooFinanceProvider(MarketDataProvider):
                 Candle(
                     symbol=symbol,
                     timeframe=timeframe,
-                    timestamp=datetime.fromtimestamp(float(raw_timestamp), tz=timezone.utc),
+                    timestamp=datetime.fromtimestamp(
+                        float(raw_timestamp), tz=timezone.utc
+                    ),
                     open=to_decimal(values["open"]),
                     high=to_decimal(values["high"]),
                     low=to_decimal(values["low"]),
@@ -74,7 +84,9 @@ class YahooFinanceProvider(MarketDataProvider):
         return sorted(candles, key=lambda candle: candle.timestamp)
 
     @staticmethod
-    def _aggregate_four_hour(candles: list[Candle], symbol: str) -> list[Candle]:
+    def _aggregate_four_hour(
+        candles: list[Candle], symbol: str
+    ) -> list[Candle]:
         """Aggregate Yahoo-supported 1h bars into UTC-aligned 4h OHLCV bars."""
         buckets: dict[int, list[Candle]] = {}
         four_hours = 4 * 60 * 60
@@ -95,25 +107,34 @@ class YahooFinanceProvider(MarketDataProvider):
                     high=max(candle.high for candle in ordered),
                     low=min(candle.low for candle in ordered),
                     close=ordered[-1].close,
-                    volume=sum((candle.volume for candle in ordered), to_decimal(0)),
+                    volume=sum(
+                        (candle.volume for candle in ordered), to_decimal(0)
+                    ),
                 )
             )
         return result
 
-    def _chart(self, symbol: str, *, range_value: str, interval: str):
+    def _chart(
+        self, symbol: str, *, range_value: str, interval: str
+    ) -> dict[str, Any]:
         encoded = quote(symbol, safe="")
         url = (
             f"{self.base_url}/v8/finance/chart/{encoded}"
             f"?range={range_value}&interval={interval}"
         )
         payload = self.client.get_json(url)
-        error = payload.get("chart", {}).get("error") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            raise ProviderError(f"Yahoo response is not an object: {symbol}")
+        error = payload.get("chart", {}).get("error")
         if error:
             raise ProviderError(str(error))
         return payload
 
     @staticmethod
     def _default_range(interval: str) -> str:
-        return {"15m": "1mo", "1h": "3mo", "4h": "1y", "1d": "2y"}.get(
-            interval, "3mo"
-        )
+        return {
+            "15m": "1mo",
+            "1h": "3mo",
+            "4h": "1y",
+            "1d": "2y",
+        }.get(interval, "3mo")

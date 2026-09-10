@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Iterable
 from uuid import NAMESPACE_URL, uuid5
 
@@ -18,7 +19,13 @@ class PreparedOrder:
     order: OrderRequest
 
 
-def _stable_order_id(symbol: str, entry, stop_loss, target, side: PositionSide) -> str:
+def _stable_order_id(
+    symbol: str,
+    entry: Decimal,
+    stop_loss: Decimal,
+    target: Decimal,
+    side: PositionSide,
+) -> str:
     key = f"{symbol}|{side.value}|{entry}|{stop_loss}|{target}"
     return f"prep-{uuid5(NAMESPACE_URL, key)}"
 
@@ -40,24 +47,34 @@ def prepare_order(
     try:
         side = PositionSide(signal.direction)
     except ValueError as exc:
-        raise ValueError(f"unsupported signal direction: {signal.direction}") from exc
+        raise ValueError(
+            f"unsupported signal direction: {signal.direction}"
+        ) from exc
 
     order = OrderRequest(
         order_id=order_id
         or _stable_order_id(
-            signal.symbol, signal.entry, signal.stop_loss, signal.target, side
+            signal.symbol,
+            signal.entry,
+            signal.stop_loss,
+            signal.target,
+            side,
         ),
         symbol=signal.symbol,
         side=side,
         order_type=order_type,
         quantity=opportunity.risk.quantity,
-        requested_price=signal.entry if order_type is OrderType.LIMIT else None,
+        requested_price=(
+            signal.entry if order_type is OrderType.LIMIT else None
+        ),
         stop_loss=signal.stop_loss,
         take_profit=signal.target,
         leverage=opportunity.risk.leverage,
         created_at=created_at or datetime.now(timezone.utc),
         decision_snapshot=(
-            opportunity.evidence.to_json() if opportunity.evidence is not None else None
+            opportunity.evidence.to_json()
+            if opportunity.evidence is not None
+            else None
         ),
     )
     valid, reason = validate_order_request(order)
@@ -67,6 +84,10 @@ def prepare_order(
 
 
 def prepare_orders(
-    opportunities: Iterable[GatedOpportunity], *, order_type: OrderType = OrderType.LIMIT
+    opportunities: Iterable[GatedOpportunity],
+    *,
+    order_type: OrderType = OrderType.LIMIT,
 ) -> tuple[PreparedOrder, ...]:
-    return tuple(prepare_order(item, order_type=order_type) for item in opportunities)
+    return tuple(
+        prepare_order(item, order_type=order_type) for item in opportunities
+    )

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 
 from app.universe.contract_specs import ContractSpec
 from app.universe.instrument import Instrument

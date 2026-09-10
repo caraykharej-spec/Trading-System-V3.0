@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from app.core.models import Position
+
 from .fills import Fill
 from .models import OrderRequest, OrderResult, OrderStatus
 from .position_builder import position_from_fill
@@ -12,6 +13,7 @@ from .position_builder import position_from_fill
 
 class TransactionConnection(Protocol):
     def commit(self) -> None: ...
+
     def rollback(self) -> None: ...
 
 
@@ -62,6 +64,8 @@ class AtomicExecutionService:
             raise ValueError("atomic fill application requires a FILLED order result")
         if result.filled_price is None:
             raise ValueError("filled order has no fill price")
+        if result.filled_at is None:
+            raise ValueError("filled order has no fill timestamp")
         if commission < 0:
             raise ValueError("commission cannot be negative")
 

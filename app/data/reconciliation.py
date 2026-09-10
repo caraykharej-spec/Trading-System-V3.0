@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 
 from app.data.market_data import Candle, LivePrice
-from app.data.quality import DataQuality, detect_price_outliers, validate_candles, validate_live_price
+from app.data.quality import detect_price_outliers, validate_candles, validate_live_price
 
 
 @dataclass(frozen=True)
@@ -21,7 +22,7 @@ def reconcile_live_prices(
     *,
     max_age_seconds: int = 120,
     max_disagreement_ratio: Decimal = Decimal("0.01"),
-    now=None,
+    now: datetime | None = None,
 ) -> ReconciliationResult:
     if not prices:
         return ReconciliationResult(False, reasons=("no provider prices",))
@@ -31,22 +32,36 @@ def reconcile_live_prices(
     reasons: list[str] = []
     warnings: list[str] = []
     for price in prices:
-        quality = validate_live_price(price, max_age_seconds=max_age_seconds, now=now)
+        quality = validate_live_price(
+            price, max_age_seconds=max_age_seconds, now=now
+        )
         if quality.valid:
             valid.append(price)
         else:
-            reasons.extend(f"{price.provider}: {reason}" for reason in quality.reasons)
+            reasons.extend(
+                f"{price.provider}: {reason}" for reason in quality.reasons
+            )
     if not valid:
-        return ReconciliationResult(False, reasons=tuple(reasons or ("no valid provider prices",)))
+        return ReconciliationResult(
+            False, reasons=tuple(reasons or ("no valid provider prices",))
+        )
 
-    reference = sorted(valid, key=lambda p: p.provider)[0]
-    deviations = [abs(p.price - reference.price) / reference.price for p in valid if reference.price > 0]
+    reference = sorted(valid, key=lambda price: price.provider)[0]
+    deviations = [
+        abs(price.price - reference.price) / reference.price
+        for price in valid
+        if reference.price > 0
+    ]
     spread = max(deviations, default=Decimal("0"))
     if spread > max_disagreement_ratio:
-        reasons.append(f"provider price disagreement exceeds {max_disagreement_ratio}")
+        reasons.append(
+            f"provider price disagreement exceeds {max_disagreement_ratio}"
+        )
     if len(valid) == 1 and len(prices) > 1:
         warnings.append("only one provider produced a valid price")
-    return ReconciliationResult(not reasons, reference, spread, tuple(reasons), tuple(warnings))
+    return ReconciliationResult(
+        not reasons, reference, spread, tuple(reasons), tuple(warnings)
+    )
 
 
 def reconcile_candles(
@@ -54,11 +69,13 @@ def reconcile_candles(
     *,
     expected_timeframe: str,
     max_age_seconds: int | None = None,
-    now=None,
+    now: datetime | None = None,
     max_close_disagreement_ratio: Decimal = Decimal("0.01"),
 ) -> ReconciliationResult:
     if not series:
-        return ReconciliationResult(False, reasons=("no provider candle series",))
+        return ReconciliationResult(
+            False, reasons=("no provider candle series",)
+        )
     valid: dict[str, tuple[Candle, ...]] = {}
     reasons: list[str] = []
     warnings: list[str] = []
@@ -72,28 +89,36 @@ def reconcile_candles(
         if quality.valid:
             valid[provider] = tuple(candles)
         else:
-            reasons.extend(f"{provider}: {reason}" for reason in quality.reasons)
+            reasons.extend(
+                f"{provider}: {reason}" for reason in quality.reasons
+            )
     if not valid:
-        return ReconciliationResult(False, reasons=tuple(reasons or ("no valid candle series",)))
+        return ReconciliationResult(
+            False, reasons=tuple(reasons or ("no valid candle series",))
+        )
 
     providers = sorted(valid)
     reference_provider = providers[0]
     reference = valid[reference_provider]
-    by_timestamp = {c.timestamp: c for c in reference}
+    by_timestamp = {candle.timestamp: candle for candle in reference}
     max_disagreement = Decimal("0")
     for provider in providers[1:]:
-        other = {c.timestamp: c for c in valid[provider]}
+        other = {candle.timestamp: candle for candle in valid[provider]}
         common = set(by_timestamp) & set(other)
         if not common:
             warnings.append(f"{provider}: no overlapping candle timestamps")
             continue
         for timestamp in common:
-            a = by_timestamp[timestamp].close
-            b = other[timestamp].close
-            if a > 0:
-                max_disagreement = max(max_disagreement, abs(a - b) / a)
+            left = by_timestamp[timestamp].close
+            right = other[timestamp].close
+            if left > 0:
+                max_disagreement = max(
+                    max_disagreement, abs(left - right) / left
+                )
     if max_disagreement > max_close_disagreement_ratio:
-        reasons.append(f"provider candle disagreement exceeds {max_close_disagreement_ratio}")
+        reasons.append(
+            f"provider candle disagreement exceeds {max_close_disagreement_ratio}"
+        )
     if len(valid) == 1 and len(series) > 1:
         warnings.append("only one provider produced a valid candle series")
     return ReconciliationResult(
