@@ -5,8 +5,8 @@ from typing import Protocol
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.http import ProviderError
-from app.data.quality import validate_candles, validate_live_price
-from app.data.reliability import CircuitBreaker, CircuitOpenError, call_with_retry
+from app.data.quality import detect_price_outliers, validate_candles, validate_live_price
+from app.data.reliability import CircuitBreaker, call_with_retry
 
 
 class MarketProvider(Protocol):
@@ -52,7 +52,7 @@ class ProviderRouter:
                     raise ProviderError("; ".join(quality.reasons))
                 breaker.record_success()
                 return result
-            except (Exception, CircuitOpenError) as exc:
+            except Exception as exc:
                 breaker.record_failure()
                 errors.append(f"{name}: {exc}")
         raise ProviderError(f"No provider returned reliable live price for {symbol}; {' | '.join(errors)}")
@@ -73,12 +73,12 @@ class ProviderRouter:
                     candles,
                     expected_timeframe=request.timeframe,
                     max_age_seconds=max_age_seconds,
-                )
+                ).merge(detect_price_outliers(candles))
                 if not quality.valid:
                     raise ProviderError("; ".join(quality.reasons))
                 breaker.record_success()
                 return candles
-            except (Exception, CircuitOpenError) as exc:
+            except Exception as exc:
                 breaker.record_failure()
                 errors.append(f"{name}: {exc}")
         raise ProviderError(f"No provider returned reliable candles for {request.symbol}; {' | '.join(errors)}")
