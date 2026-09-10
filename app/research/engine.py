@@ -12,6 +12,7 @@ from .models import (
     DatasetRole,
     ExperimentResult,
     ExperimentSpec,
+    ObjectiveDirection,
     ParameterSensitivity,
     ParameterSet,
     ResearchTrial,
@@ -242,13 +243,19 @@ class ResearchRunner:
 
         oos_result: BacktestResult | None = None
         oos_objective: Decimal | None = None
+        oos_error: str | None = None
         if best_trial is not None:
-            oos_result = self._evaluator(
-                best_trial.parameters,
-                best_trial.seed,
-                DatasetRole.OOS,
-            )
-            oos_objective = objective_value(oos_result, spec.objective_metric)
+            try:
+                oos_result = self._evaluator(
+                    best_trial.parameters,
+                    best_trial.seed,
+                    DatasetRole.OOS,
+                )
+                oos_objective = objective_value(oos_result, spec.objective_metric)
+                if oos_objective is None:
+                    oos_error = "OOS_OBJECTIVE_UNDEFINED"
+            except (ValueError, ArithmeticError, IndexError, KeyError) as exc:
+                oos_error = f"OOS_{type(exc).__name__.upper()}"
 
         trial_tuple = tuple(trials)
         result = ExperimentResult(
@@ -258,9 +265,10 @@ class ResearchRunner:
             best_trial=best_trial,
             oos_result=oos_result,
             oos_objective=oos_objective,
+            oos_error=oos_error,
             sensitivity=_sensitivity(
                 trial_tuple,
-                maximize=spec.objective_direction.value == "MAXIMIZE",
+                maximize=spec.objective_direction is ObjectiveDirection.MAXIMIZE,
             ),
         )
         if self._registry is not None:
