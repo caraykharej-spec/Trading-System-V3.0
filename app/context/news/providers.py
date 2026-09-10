@@ -5,12 +5,15 @@ from app.context.news.rss import RSSNewsProvider
 
 
 # Public feeds: no paid API key is required for these sources.
+# Official sources are preferred for macro/regulatory context; public RSS is used for crypto.
 DEFAULT_NEWS_PROVIDERS: tuple[RSSNewsProvider, ...] = (
     RSSNewsProvider("federal_reserve", "https://www.federalreserve.gov/feeds/press_all.xml", source="Federal Reserve"),
     RSSNewsProvider("sec", "https://www.sec.gov/news/pressreleases.rss", source="SEC"),
-    RSSNewsProvider("ecb", "https://www.ecb.europa.eu/rss/press.html", source="ECB"),
+    RSSNewsProvider("ecb", "https://mid.ecb.europa.eu/rss/mid.xml", source="ECB"),
     RSSNewsProvider("bls", "https://www.bls.gov/feed/bls_latest.rss", source="BLS"),
-    RSSNewsProvider("crypto_news", "https://cryptocurrency.cv/api/rss", source="Crypto News Aggregator"),
+    RSSNewsProvider("coindesk", "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml", source="CoinDesk"),
+    RSSNewsProvider("cointelegraph", "https://cointelegraph.com/rss", source="Cointelegraph"),
+    RSSNewsProvider("cryptoslate", "https://cryptoslate.com/feed/", source="CryptoSlate"),
 )
 
 
