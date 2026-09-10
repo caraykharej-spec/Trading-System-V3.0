@@ -3,7 +3,6 @@ from decimal import Decimal
 from app.core.enums import PositionSide
 from app.execution.atomic_execution import AtomicExecutionService
 from app.execution.execution_engine import ExecutionEngine
-from app.execution.fills import Fill
 from app.execution.in_memory_fill_repository import InMemoryFillRepository
 from app.execution.in_memory_order_repository import InMemoryOrderRepository
 from app.execution.in_memory_pending_order_repository import InMemoryPendingOrderRepository
@@ -13,8 +12,8 @@ from app.execution.paper_runtime import PaperTradingRuntime
 from app.execution.pending_orders import PendingOrder
 from app.storage.database import connect
 from app.storage.repositories.in_memory_position_repository import InMemoryPositionRepository
+from app.execution.sqlite_pending_order_repository import SQLitePendingOrderRepository
 from app.storage.repositories.sqlite_order_repository import SQLiteOrderRepository
-from app.storage.repositories.sqlite_pending_order_repository import SQLitePendingOrderRepository
 
 
 def make_order(order_id="p-1", order_type=OrderType.MARKET, price=None):
