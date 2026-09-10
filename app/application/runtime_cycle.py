@@ -8,17 +8,20 @@ from app.application.opportunity_pipeline import OpportunityPipeline
 from app.core.enums import CycleStatus
 from app.core.models import CycleResult
 from app.execution.atomic_execution import AtomicExecutionService
+from app.execution.models import OrderRequest
+from app.execution.paper_runtime import PaperSubmissionResult, PaperTradingRuntime
 from app.execution.pending_order_manager import PendingOrderManager
 from app.portfolio.account import Account
 from app.position.manager import ExitPolicy, manage_open_positions
 from app.recovery.reconciliation import RecoveryReconciler
 from app.runtime.audit import AuditStatus, CycleAudit, CycleAuditRepository
+from app.storage.account_repository import AccountRepository
 from app.storage.repositories.position_repository import PositionRepository
 
 
 @dataclass
 class RuntimeCycleOrchestrator:
-    """Restart-safe runtime boundary for the currently implemented stages."""
+    """Restart-safe runtime boundary for monitoring, paper orders and positions."""
 
     position_repository: PositionRepository
     live_price_provider: object
@@ -32,6 +35,9 @@ class RuntimeCycleOrchestrator:
     opportunity_pipeline: OpportunityPipeline | None = None
     universe_provider: object | None = None
     opportunity_top_n: int = 10
+    paper_runtime: PaperTradingRuntime | None = None
+    selected_orders_provider: object | None = None
+    account_repository: AccountRepository | None = None
     _recovery_done_for_cycle: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -70,6 +76,21 @@ class RuntimeCycleOrchestrator:
             f"top_n={len(result.qualified)}"
         )
 
+    def _submit_selected_orders(self, notes: list[str]) -> int:
+        if self.paper_runtime is None or self.selected_orders_provider is None:
+            return 0
+        provider = self.selected_orders_provider
+        orders = provider() if callable(provider) else provider
+        submitted = 0
+        for order in orders:
+            if not isinstance(order, OrderRequest):
+                raise TypeError("selected_orders_provider must yield OrderRequest objects")
+            result: PaperSubmissionResult = self.paper_runtime.submit(order)
+            submitted += 1
+            state = "PENDING" if result.pending else result.result.status.value
+            notes.append(f"Paper order {order.order_id}: {state}")
+        return submitted
+
     def run(self, cycle_id: str | None = None) -> CycleResult:
         cycle_id = cycle_id or str(uuid4())
         started_at = datetime.now(timezone.utc)
@@ -88,12 +109,13 @@ class RuntimeCycleOrchestrator:
 
             positions = self.position_repository.list_open()
             management = manage_open_positions(positions, self.live_price_provider, self.exit_policy)
-
             for position in positions:
                 self.position_repository.save(position)
             for result in management.results:
                 self.account.apply_realized_pnl(result.realized_pnl)
                 notes.append(f"Exit {result.position_id} reason={result.reason} at {result.exit_price}; P&L={result.realized_pnl}")
+            if management.results and self.account_repository is not None:
+                self.account_repository.save_equity(self.account.equity)
 
             filled_orders = 0
             if self.pending_order_manager is not None:
@@ -102,9 +124,10 @@ class RuntimeCycleOrchestrator:
                 for result in pending.filled:
                     notes.append(f"Pending order filled: {result.order_id}")
 
-            # Strategy/Risk/Portfolio is deliberately after exit handling so
-            # the candidate gate sees the current account and open-risk state.
             self._run_opportunity_pipeline(notes)
+            submitted_orders = self._submit_selected_orders(notes)
+            if submitted_orders:
+                notes.append(f"Paper orders submitted={submitted_orders}")
 
             finished_at = datetime.now(timezone.utc)
             audit = CycleAudit(cycle_id=cycle_id, status=AuditStatus.COMPLETED, started_at=started_at, finished_at=finished_at, monitored_positions=management.monitored, stopped_positions=management.stop_loss_exits, filled_orders=filled_orders, notes=tuple(notes))
