@@ -67,9 +67,13 @@ class SQLiteCycleAuditRepository(CycleAuditRepository):
             cycle_id=str(cycle_id),
             status=AuditStatus(str(status)),
             started_at=datetime.fromisoformat(str(started_at)),
-            finished_at=datetime.fromisoformat(str(finished_at)) if finished_at else None,
-            monitored_positions=int(monitored),
-            stopped_positions=int(stopped),
-            filled_orders=int(filled),
+            finished_at=(
+                datetime.fromisoformat(str(finished_at))
+                if finished_at
+                else None
+            ),
+            monitored_positions=int(str(monitored)),
+            stopped_positions=int(str(stopped)),
+            filled_orders=int(str(filled)),
             notes=tuple(str(notes).split("\n")) if notes else (),
         )
