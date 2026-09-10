@@ -20,12 +20,7 @@ def _weighted(quality: Decimal, weight: Decimal) -> Decimal:
 
 @dataclass(frozen=True)
 class StrategyEvidence:
-    """Normalized factual evidence used to score one strategy opportunity.
-
-    Quality fields are all in the range 0..100. The weighted score is kept
-    separate from confidence so opportunity attractiveness and evidence
-    reliability remain independent concepts.
-    """
+    """Normalized factual evidence used to score one strategy opportunity."""
 
     data_quality: Decimal
     htf_alignment_quality: Decimal
@@ -37,6 +32,9 @@ class StrategyEvidence:
     rr_quality: Decimal
     score_breakdown: ScoreBreakdown
     reasons: tuple[str, ...]
+    market_regime: str = "UNKNOWN"
+    structure_state: str = "UNKNOWN"
+    htf_trend: str = "UNKNOWN"
 
 
 def _indicator_completeness(snapshot: MarketSnapshot) -> Decimal:
@@ -68,9 +66,10 @@ def _indicator_completeness(snapshot: MarketSnapshot) -> Decimal:
 
 
 def _data_quality(snapshots: tuple[MarketSnapshot, ...]) -> Decimal:
-    return sum((_indicator_completeness(snapshot) for snapshot in snapshots), Decimal("0")) / Decimal(
-        len(snapshots)
+    total = sum(
+        (_indicator_completeness(snapshot) for snapshot in snapshots), Decimal("0")
     )
+    return total / Decimal(len(snapshots))
 
 
 def _htf_alignment(daily: MarketSnapshot, four_hour: MarketSnapshot) -> Decimal:
@@ -159,7 +158,10 @@ def _confirmation_quality(fifteen: MarketSnapshot, direction: str) -> Decimal:
         ):
             quality += Decimal("4")
 
-    if fifteen.liquidity.volume_ratio is not None and fifteen.liquidity.volume_ratio >= Decimal("1"):
+    if (
+        fifteen.liquidity.volume_ratio is not None
+        and fifteen.liquidity.volume_ratio >= Decimal("1")
+    ):
         quality += Decimal("4")
 
     return _clamp(quality)
@@ -236,4 +238,7 @@ def build_strategy_evidence(
         rr_quality=rr_quality,
         score_breakdown=breakdown,
         reasons=reasons,
+        market_regime=fifteen.regime.regime,
+        structure_state=four_hour.structure.state,
+        htf_trend=daily.trend.direction,
     )
