@@ -41,6 +41,7 @@ class OrderRequest:
     take_profit: Optional[Decimal]
     leverage: Decimal = Decimal("1")
     created_at: datetime = field(default_factory=utc_now)
+    decision_snapshot: Optional[str] = None
 
 
 @dataclass(frozen=True)
