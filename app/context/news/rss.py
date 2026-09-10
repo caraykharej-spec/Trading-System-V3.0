@@ -10,7 +10,9 @@ from app.context.models import NewsImpact, NewsItem
 
 
 class RSSNewsProvider:
-    """Dependency-free RSS/Atom reader for public feeds."""
+    """Dependency-free public RSS/Atom reader; no API credential is required."""
+
+    requires_credentials = False
 
     def __init__(
         self,

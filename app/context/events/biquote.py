@@ -9,9 +9,10 @@ from app.context.models import EconomicEvent, EventImportance
 
 
 class BiQuoteCalendarProvider:
-    """Free, no-key economic calendar adapter."""
+    """Free public/no-key economic calendar adapter."""
 
     name = "biquote_calendar"
+    requires_credentials = False
 
     def __init__(
         self,

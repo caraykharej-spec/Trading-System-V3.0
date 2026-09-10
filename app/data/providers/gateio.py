@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import ClassVar
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.base import MarketDataProvider
@@ -10,6 +11,9 @@ from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_n
 
 @dataclass(frozen=True)
 class GateIOProvider(MarketDataProvider):
+    """Public Gate.io market-data adapter; no API credential is required."""
+
+    requires_credentials: ClassVar[bool] = False
     name: str = "gateio"
     base_url: str = "https://api.gateio.ws/api/v4"
     client: HttpClient = HttpClient()
