@@ -65,18 +65,20 @@ def _levels(four_hour: MarketSnapshot, one_hour: MarketSnapshot, fifteen: Market
 
 
 def detect_setup(four_hour: MarketSnapshot, one_hour: MarketSnapshot, fifteen: MarketSnapshot, direction: str) -> str | None:
-    """Primary setups only: breakout-retest, trend-pullback, continuation."""
+    """Primary setups only, using the canonical StructureResult.state field."""
+    four_state = four_hour.structure.state
+    one_state = one_hour.structure.state
     if direction == "LONG":
-        if four_hour.structure.breakout_up and one_hour.structure.near_resistance:
+        if four_state == "BREAKOUT_UP" and one_state == "NEAR_RESISTANCE":
             return "BREAKOUT_RETEST"
-        if one_hour.trend.direction == "BULLISH" and one_hour.structure.near_support:
+        if one_hour.trend.direction == "BULLISH" and one_state == "NEAR_SUPPORT":
             return "TREND_PULLBACK"
         if four_hour.trend.direction == "BULLISH" and one_hour.trend.direction == "BULLISH" and fifteen.trend.direction == "BULLISH":
             return "CONTINUATION"
     else:
-        if four_hour.structure.breakout_down and one_hour.structure.near_support:
+        if four_state == "BREAKOUT_DOWN" and one_state == "NEAR_SUPPORT":
             return "BREAKOUT_RETEST"
-        if one_hour.trend.direction == "BEARISH" and one_hour.structure.near_resistance:
+        if one_hour.trend.direction == "BEARISH" and one_state == "NEAR_RESISTANCE":
             return "TREND_PULLBACK"
         if four_hour.trend.direction == "BEARISH" and one_hour.trend.direction == "BEARISH" and fifteen.trend.direction == "BEARISH":
             return "CONTINUATION"
