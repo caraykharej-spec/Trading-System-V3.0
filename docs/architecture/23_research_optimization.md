@@ -1,6 +1,6 @@
 # Phase 23 — Research / Optimization Framework
 
-Status: implementation complete; CI validation required.
+Status: complete.
 
 ## Purpose
 
@@ -53,7 +53,7 @@ Selected parameter set
 ExperimentResult
     +-- all trial states
     +-- objective values
-    +-- OOS result
+    +-- OOS result / sanitized OOS failure state
     +-- sensitivity summary
     +-- reproducibility fingerprint
     |
@@ -106,11 +106,13 @@ Each experiment produces a SHA-256 fingerprint from:
 
 Each candidate receives a deterministic trial seed derived from the experiment seed and canonical parameter payload. Reordering execution infrastructure therefore does not change candidate seed identity.
 
-## Error handling
+## Error handling and sealed OOS
 
 Expected candidate-level evaluation failures (`ValueError`, `ArithmeticError`, `IndexError`, `KeyError`) are recorded as `ERROR` trials with a sanitized error class. Unexpected infrastructure/programming failures are not swallowed.
 
-This separates bad parameter candidates from faults that should stop the research process.
+The final OOS evaluation is attempted exactly once after parameter selection. An expected OOS failure is recorded in `ExperimentResult.oos_error` and persisted by the SQLite registry. It does not trigger fallback to the second-best parameter set or another OOS attempt, preserving the sealed-test-set contract.
+
+This separates bad parameter candidates and OOS data failures from faults that should stop the research process.
 
 ## Sensitivity analysis
 
@@ -133,7 +135,10 @@ SQLite stores:
 - experiment provenance and objective metadata,
 - selected parameter payload,
 - OOS objective,
+- sanitized OOS error state,
 - every trial's parameters, seed, status, rejection reason, train objective and validation objective.
+
+The SQLite registry also performs an additive migration when an earlier research table exists without the `oos_error` column.
 
 The registry stores compact research metadata rather than duplicating every historical candle or every trade payload.
 
@@ -141,7 +146,7 @@ The registry stores compact research metadata rather than duplicating every hist
 
 `BacktestResearchEvaluator` is the explicit adapter to the existing `BacktestEngine`.
 
-Research parameters can only alter `BacktestConfig` fields listed in an explicit `bindings` map. Unbound parameters and unknown config fields are rejected. The adapter uses immutable dataclass replacement and never changes module-level strategy/risk constants.
+Research parameters can only alter `BacktestConfig` fields listed in an explicit `bindings` map. Unbound parameters, unknown config fields, duplicate target bindings and invalid value types are rejected. The adapter constructs a fresh validated `BacktestConfig` and never changes module-level strategy/risk constants or mutable global state.
 
 This boundary allows future strategy-configuration objects to be introduced without letting the optimizer arbitrarily rewrite strategy code.
 
@@ -154,13 +159,30 @@ Dedicated tests cover:
 - seeded RANDOM sampling without replacement,
 - Cartesian safety limits,
 - TRAIN/VALIDATION selection with exactly one OOS evaluation,
+- OOS failure recording without parameter reselection,
 - hard-constraint rejection,
 - undefined objective handling,
 - candidate-level error recording,
 - experiment/trial reproducibility,
 - sensitivity summaries,
 - in-memory registry immutability,
-- SQLite registry round-trip and idempotency.
+- SQLite registry round-trip and idempotency,
+- SQLite persistence of OOS failure state,
+- allow-listed and type-safe BacktestConfig parameter projection,
+- invalid adapter bindings and missing dataset-role rejection.
+
+## Final validation
+
+The fully hardened Phase 23 branch passed the repository quality gate on GitHub Actions run `34491981084`:
+
+- editable package installation: passed,
+- compileall: passed,
+- Ruff: passed,
+- strict mypy: **0 issues across 143 source files**,
+- pytest: **161 passed**,
+- total branch-aware coverage: **75.90%**, above the required 70% floor.
+
+The CI workflow was also corrected to validate canonical `phase-*` development branches directly, removing the stale Phase 22.5 branch-specific push trigger.
 
 ## Safety boundary
 
