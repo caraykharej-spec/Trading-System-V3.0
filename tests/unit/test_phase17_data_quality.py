@@ -5,7 +5,7 @@ from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.provider_router import ProviderRouter
 from app.data.quality import detect_price_outliers, validate_candles, validate_live_price
 from app.data.reconciliation import reconcile_candles, reconcile_live_prices
-from app.data.reliability import CircuitBreaker, CircuitOpenError, call_with_retry
+from app.data.reliability import CircuitBreaker, call_with_retry
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -76,7 +76,7 @@ def test_circuit_breaker_opens_and_recovers():
     breaker.record_failure()
     assert not breaker.is_open
     breaker.record_failure()
-    assert not breaker.is_open  # zero-second recovery immediately permits a probe
+    assert not breaker.is_open
     breaker.before_call()
     breaker.record_success()
     assert not breaker.is_open
@@ -125,5 +125,5 @@ def test_router_rejects_gap_and_falls_back():
             return [candle(NOW, "100", request.timeframe)]
 
     router = ProviderRouter((Bad(), Good()), retry_attempts=1)
-    result = router.get_candles(MarketDataRequest("BTC/USDT", "15m", 2), max_age_seconds=100)
+    result = router.get_candles(MarketDataRequest("BTC/USDT", "15m", 2), max_age_seconds=100, now=NOW)
     assert result[0].close == Decimal("100")
