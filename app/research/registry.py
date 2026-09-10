@@ -16,6 +16,7 @@ class StoredExperiment:
     data_version: str
     best_parameters_json: str | None
     oos_objective: Decimal | None
+    oos_error: str | None
     trial_count: int
 
 
@@ -67,6 +68,7 @@ class SQLiteResearchRegistry:
                 objective_direction TEXT NOT NULL,
                 best_parameters_json TEXT,
                 oos_objective TEXT,
+                oos_error TEXT,
                 trial_count INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS research_trials (
@@ -85,6 +87,12 @@ class SQLiteResearchRegistry:
                 ON research_trials(experiment_id, status);
             """
         )
+        columns = {
+            str(row[1])
+            for row in self._connection.execute("PRAGMA table_info(research_experiments)")
+        }
+        if "oos_error" not in columns:
+            self._connection.execute("ALTER TABLE research_experiments ADD COLUMN oos_error TEXT")
         self._connection.commit()
 
     def save(self, result: ExperimentResult) -> bool:
@@ -108,8 +116,8 @@ class SQLiteResearchRegistry:
                 INSERT INTO research_experiments (
                     experiment_id, fingerprint, strategy_version, data_version, seed,
                     search_method, objective_metric, objective_direction,
-                    best_parameters_json, oos_objective, trial_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    best_parameters_json, oos_objective, oos_error, trial_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     experiment_id,
@@ -122,6 +130,7 @@ class SQLiteResearchRegistry:
                     result.spec.objective_direction.value,
                     _parameters_json(best_parameters),
                     str(result.oos_objective) if result.oos_objective is not None else None,
+                    result.oos_error,
                     len(result.trials),
                 ),
             )
@@ -158,7 +167,7 @@ class SQLiteResearchRegistry:
         row = self._connection.execute(
             """
             SELECT experiment_id, fingerprint, strategy_version, data_version,
-                   best_parameters_json, oos_objective, trial_count
+                   best_parameters_json, oos_objective, oos_error, trial_count
             FROM research_experiments WHERE experiment_id = ?
             """,
             (experiment_id,),
@@ -172,5 +181,6 @@ class SQLiteResearchRegistry:
             data_version=str(row[3]),
             best_parameters_json=str(row[4]) if row[4] is not None else None,
             oos_objective=Decimal(str(row[5])) if row[5] is not None else None,
-            trial_count=int(row[6]),
+            oos_error=str(row[6]) if row[6] is not None else None,
+            trial_count=int(row[7]),
         )
