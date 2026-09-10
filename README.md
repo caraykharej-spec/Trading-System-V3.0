@@ -16,11 +16,11 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current phase
 
-**Phase 12 — Runtime Integration, Persistence, and Recovery**
+**Phase 21 — API Boundary and Android-Ready Application Interface**
 
-Completed foundations include normalized market-data contracts, provider adapters, canonical instrument identity, market analysis, strategy/risk/portfolio layers, backtesting, execution boundaries, restart-safe position persistence, and confirmed-fill-to-position conversion.
+Completed foundations include normalized market-data contracts, provider adapters, canonical instrument identity, market analysis, strategy/risk/portfolio layers, context/news/events, realistic backtesting, execution boundaries, restart-safe persistence/recovery, paper runtime, and the thin API boundary.
 
-Phase 12 is hardening the application boundary so persisted state remains authoritative across restarts. See `docs/architecture/12_runtime_persistence_recovery.md`.
+Phase 21 exposes health, positions, opportunities, and an explicitly configured runtime-cycle callback through a dependency-free standard-library HTTP adapter. Business rules remain outside the HTTP layer. See `docs/architecture/21_api_boundary.md`.
 
 ## Run from PyCharm
 
@@ -51,6 +51,7 @@ The V3 source boundary currently reserves adapters for:
 - Storm
 - Gate.io
 - Yahoo Finance
+- Public/free context sources documented in `docs/architecture/19_context_engine.md`
 
 Pyth is deliberately excluded.
 
