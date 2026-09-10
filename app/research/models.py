@@ -156,4 +156,5 @@ class ExperimentResult:
     best_trial: ResearchTrial | None
     oos_result: BacktestResult | None
     oos_objective: Decimal | None
+    oos_error: str | None
     sensitivity: tuple[ParameterSensitivity, ...]
