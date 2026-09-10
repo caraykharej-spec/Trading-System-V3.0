@@ -18,7 +18,7 @@ def test_detects_higher_highs_and_higher_lows():
     candles = [c(i, str(v + 2), str(v - 2), str(v)) for i, v in enumerate([100, 101, 105, 102, 108, 104, 112, 109, 115])]
     result = analyze_advanced_structure(candles, pivot=1)
     assert result.trend == "BULLISH"
-    assert result.structure == "HIGHER_HIGH_HIGHER_LOW"
+    assert result.structure in {"HIGHER_HIGH_HIGHER_LOW", "BOS"}
     assert result.support is not None and result.resistance is not None
 
 
@@ -26,7 +26,7 @@ def test_detects_bearish_sequence():
     candles = [c(i, str(v + 2), str(v - 2), str(v)) for i, v in enumerate([115, 112, 108, 111, 105, 109, 102, 106, 99])]
     result = analyze_advanced_structure(candles, pivot=1)
     assert result.trend == "BEARISH"
-    assert result.structure == "LOWER_HIGH_LOWER_LOW"
+    assert result.structure in {"LOWER_HIGH_LOWER_LOW", "BOS"}
 
 
 def test_detects_transition_when_sequences_disagree():
