@@ -105,6 +105,7 @@ def validate_candles(
     now: datetime | None = None,
     max_age_seconds: int | None = None,
     require_complete_last_candle: bool = False,
+    allow_session_gaps: bool = False,
 ) -> DataQuality:
     reasons: list[str] = []
     warnings: list[str] = []
@@ -117,7 +118,11 @@ def validate_candles(
         except ValueError as exc:
             return DataQuality(False, (str(exc),))
     else:
-        step = timeframe_seconds(items[0].timeframe) if items[0].timeframe in TIMEFRAME_SECONDS else None
+        step = (
+            timeframe_seconds(items[0].timeframe)
+            if items[0].timeframe in TIMEFRAME_SECONDS
+            else None
+        )
 
     previous: Candle | None = None
     for candle in items:
@@ -147,11 +152,19 @@ def validate_candles(
                 reasons.append("candles are not strictly chronological")
             elif step is not None and delta != step:
                 if delta > step:
-                    reasons.append(
-                        f"candle gap detected: {int(delta / step) - 1} missing interval(s) before {timestamp.isoformat()}"
+                    missing = int(delta / step) - 1
+                    message = (
+                        f"candle gap detected: {missing} missing interval(s) "
+                        f"before {timestamp.isoformat()}"
                     )
+                    if allow_session_gaps:
+                        warnings.append(message)
+                    else:
+                        reasons.append(message)
                 else:
-                    reasons.append(f"candle spacing is shorter than timeframe at {timestamp.isoformat()}")
+                    reasons.append(
+                        f"candle spacing is shorter than timeframe at {timestamp.isoformat()}"
+                    )
         previous = candle
 
     if max_age_seconds is not None:
@@ -206,7 +219,9 @@ def detect_volume_anomalies(
         raise ValueError("multiplier must be positive")
     positive = [c.volume for c in candles if c.volume > 0 and c.volume.is_finite()]
     if len(positive) < 2:
-        return DataQuality(True, (), ("insufficient positive volume history for anomaly detection",))
+        return DataQuality(
+            True, (), ("insufficient positive volume history for anomaly detection",)
+        )
     baseline = sum(positive[:-1], Decimal("0")) / Decimal(len(positive) - 1)
     if baseline <= 0:
         return DataQuality(True, (), ("zero volume baseline",))
