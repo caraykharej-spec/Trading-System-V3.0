@@ -1,6 +1,6 @@
 # Phase 23 — Research / Optimization Framework
 
-Status: implementation and validation.
+Status: complete.
 
 ## Purpose
 
@@ -107,7 +107,7 @@ Evaluates every explicit combination. If the Cartesian product exceeds `max_tria
 
 ### RANDOM
 
-Samples combinations without replacement using an explicit deterministic seed. Repeating the same experiment specification therefore yields the same candidate sequence.
+Samples combinations without replacement using an explicit deterministic seed. Repeating the same experiment specification therefore yields the same candidate sequence. Random search samples combination indexes directly and does not materialize the entire Cartesian product in memory.
 
 There is intentionally no uncontrolled continuous optimizer or strategy self-modification in Phase 23.
 
@@ -135,7 +135,7 @@ Objectives are ranking criteria only. They do not bypass feasibility constraints
 
 A trial failing any constraint is retained in experiment history with explicit violation reasons but is not eligible to become the best trial.
 
-When a validation dataset fingerprint is declared, a validation evaluator is mandatory. When no validation fingerprint is declared, passing a validation evaluator is rejected. This prevents ambiguous experiment manifests.
+When a validation dataset fingerprint is declared, a validation evaluator is mandatory. When no validation fingerprint is declared, passing a validation evaluator is rejected. Training, validation, and holdout fingerprints must also be distinct. These contracts reduce ambiguous or accidentally overlapping experiment manifests.
 
 The optional `holdout_fingerprint` is metadata only: `ExperimentRunner` has no holdout evaluator argument. The optimization loop therefore cannot touch the declared final holdout through its normal interface. Final holdout evaluation remains a separate post-selection validation action.
 
@@ -165,7 +165,18 @@ The runner also accepts the `ResearchEvaluator` protocol, so future evaluators c
 - rejected signals,
 - completed OOS window count.
 
-`min_oos_windows` can reject parameter variants that appear successful with insufficient rolling validation history.
+`min_oos_windows` can reject parameter variants that appear successful with insufficient rolling validation history. When an explicit validation evaluator exists, the OOS-window constraint is enforced on validation rather than incorrectly penalizing a plain training summary.
+
+## Dataset integrity
+
+`fingerprint_candles()` rejects malformed research views before hashing:
+
+- timestamps must be timezone-aware,
+- a candle timeframe must match the timeframe bucket containing it,
+- duplicate timestamps inside a timeframe are rejected,
+- empty symbol datasets are rejected.
+
+This makes experiment fingerprints meaningful data identities rather than hashes over ambiguous input containers.
 
 ## Sensitivity analysis
 
@@ -191,7 +202,7 @@ The SQLite registry stores canonical experiment payloads in `research_experiment
 - identical replay is a no-op,
 - the same ID with a different result payload is a data-integrity conflict.
 
-Stored payloads include dataset identities, strategy version, search settings, parameter definitions, all trials, objective values, validation degradation, feasibility, violations, and selected best-trial ID.
+Stored payloads include dataset identities, strategy version, search settings, all constraints, parameter definitions, all trials, training/validation summaries, per-window summaries, objective values, validation degradation, feasibility, violations, and selected best-trial ID.
 
 Research storage is independent from the trading decision path and cannot cause an order to be submitted.
 
@@ -210,7 +221,7 @@ Phase 23 preserves all established system invariants:
 9. execution remains PAPER/SHADOW;
 10. no live broker/exchange adapter is added.
 
-## Validation targets
+## Dedicated regression coverage
 
 Dedicated Phase 23 regression tests cover:
 
@@ -218,15 +229,34 @@ Dedicated Phase 23 regression tests cover:
 - prevention of weaker strategy gates,
 - bounded grid search,
 - deterministic random search,
+- bounded-memory random sampling over a 100,000,000-combination parameter space,
 - data fingerprint reproducibility,
+- duplicate/misfiled candle rejection,
+- dataset-partition identity separation,
 - deterministic experiment identity,
 - train/validation consistency,
-- validation degradation rejection,
+- proportional validation degradation including negative objectives,
+- OOS validation-window constraints,
 - best-trial selection,
-- SQLite registry idempotency/conflict behavior,
+- SQLite registry idempotency, complete payload persistence, and conflict behavior,
 - parameter sensitivity reporting,
 - Backtest strategy-rule injection,
 - Walk-Forward OOS aggregation,
 - Portfolio Backtest strategy-rule injection.
 
-Phase 23 is complete only after the branch passes the existing repository quality gate: editable package install, compileall, Ruff, strict mypy, pytest, and branch-aware coverage.
+## Final validation
+
+The final implementation head passed the complete repository quality gate in GitHub Actions run `34490818557`, job `102916775806`:
+
+- editable package installation: passed,
+- compileall: passed,
+- Ruff: passed,
+- strict mypy: **0 issues across 145 source files**,
+- pytest: **163 passed**,
+- total branch-aware coverage: **76.66%**, above the required 70% floor.
+
+The final hardening pass specifically corrected random-search memory scaling, dataset-partition identity checks, malformed candle fingerprinting, OOS-window constraint placement, negative-objective degradation math, and completeness of persisted experiment provenance.
+
+## Completion criteria
+
+Phase 23 is complete because the controlled optimization surface, reproducibility contracts, validation/overfitting guards, shared backtest integration, sensitivity analysis, persistence, documentation, and automated quality gates have all been implemented and validated. No live-execution capability is part of this phase.
