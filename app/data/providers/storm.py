@@ -3,15 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, ClassVar
 
-from app.data.market_data import LivePrice, MarketDataRequest, Candle
+from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.base import MarketDataProvider
 from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_now
 
 
 @dataclass(frozen=True)
 class StormProvider(MarketDataProvider):
+    """Public Storm market-data adapter; no API credential is required."""
+
+    requires_credentials: ClassVar[bool] = False
     name: str = "storm"
     base_url: str = "https://api5.storm.tg/api"
     client: HttpClient = HttpClient()
