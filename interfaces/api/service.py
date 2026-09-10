@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
+from enum import Enum
 from typing import Any, Callable
 
 from app.core.enums import SystemMode
@@ -53,13 +54,13 @@ class TradingApiService:
     def _serialize(value: Any) -> Any:
         if value is None or isinstance(value, (str, int, float, bool)):
             return value
+        if isinstance(value, Enum):
+            return value.value
         if isinstance(value, dict):
             return {str(key): TradingApiService._serialize(item) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
             return [TradingApiService._serialize(item) for item in value]
-        if hasattr(value, "value") and not hasattr(value, "__dict__"):
-            return value.value
-        if hasattr(value, "__dataclass_fields__"):
+        if is_dataclass(value):
             return TradingApiService._serialize(asdict(value))
         if hasattr(value, "isoformat"):
             return value.isoformat()
