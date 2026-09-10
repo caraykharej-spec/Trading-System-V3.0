@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Callable, Iterable
 
 from app.application.strategy_pipeline import StrategyPipeline
+from app.context.models import ContextAssessment
 from app.core.models import Position
 from app.portfolio.account import Account
 from app.portfolio.correlation import correlation_risk_multiplier
@@ -28,6 +29,7 @@ class RiskContext:
 
 
 RiskContextLoader = Callable[[str], RiskContext]
+ContextLoader = Callable[[str], ContextAssessment]
 
 
 @dataclass(frozen=True)
@@ -42,32 +44,34 @@ class GatedOpportunity:
 class OpportunityPipelineResult:
     evaluated: int
     strategy_qualified: int
+    context_rejected: int
     risk_rejected: int
     portfolio_rejected: int
     qualified: tuple[GatedOpportunity, ...]
 
 
 class OpportunityPipeline:
-    """Apply Strategy -> Risk -> Portfolio hard gates before Top-N ranking."""
+    """Apply Strategy -> Context -> Risk -> Portfolio hard gates before Top-N ranking."""
 
-    def __init__(self, strategy_pipeline: StrategyPipeline, risk_context_loader: RiskContextLoader, *, risk_policy: RiskPolicy = RiskPolicy(), portfolio_policy: PortfolioPolicy | None = None) -> None:
+    def __init__(self, strategy_pipeline: StrategyPipeline, risk_context_loader: RiskContextLoader, *, context_loader: ContextLoader | None = None, risk_policy: RiskPolicy = RiskPolicy(), portfolio_policy: PortfolioPolicy | None = None) -> None:
         self.strategy_pipeline = strategy_pipeline
         self.risk_context_loader = risk_context_loader
+        self.context_loader = context_loader
         self.risk_policy = risk_policy
-        self.portfolio_policy = portfolio_policy or PortfolioPolicy(
-            max_aggregate_risk_percent=risk_policy.max_aggregate_open_risk_percent,
-            max_correlated_risk_percent=risk_policy.max_correlated_risk_percent,
-            max_futures_capital_percent=risk_policy.max_futures_capital_percent,
-        )
+        self.portfolio_policy = portfolio_policy or PortfolioPolicy(max_aggregate_risk_percent=risk_policy.max_aggregate_open_risk_percent, max_correlated_risk_percent=risk_policy.max_correlated_risk_percent, max_futures_capital_percent=risk_policy.max_futures_capital_percent)
 
     def evaluate(self, symbols: Iterable[str], top_n: int = 10) -> OpportunityPipelineResult:
         if top_n < 1:
             raise ValueError("top_n must be positive")
         evaluated, signals = self.strategy_pipeline.evaluate_all(symbols)
         gated: list[tuple[StrategySignal, RiskAssessment, PortfolioAssessment]] = []
-        risk_rejected = 0
-        portfolio_rejected = 0
+        context_rejected = risk_rejected = portfolio_rejected = 0
         for signal in signals:
+            if self.context_loader is not None:
+                context = self.context_loader(signal.symbol)
+                if context.blocking or context.delay:
+                    context_rejected += 1
+                    continue
             context = self.risk_context_loader(signal.symbol)
             existing_risk = context.account.aggregate_open_risk(context.positions)
             correlated_open_risk = existing_risk * correlation_risk_multiplier(context.correlation)
@@ -82,4 +86,4 @@ class OpportunityPipeline:
             gated.append((signal, risk, portfolio))
         gated.sort(key=lambda item: (item[0].score, item[0].confidence, item[0].rr), reverse=True)
         selected = tuple(GatedOpportunity(signal, risk, portfolio, rank) for rank, (signal, risk, portfolio) in enumerate(gated[:top_n], start=1))
-        return OpportunityPipelineResult(evaluated, len(signals), risk_rejected, portfolio_rejected, selected)
+        return OpportunityPipelineResult(evaluated, len(signals), context_rejected, risk_rejected, portfolio_rejected, selected)
