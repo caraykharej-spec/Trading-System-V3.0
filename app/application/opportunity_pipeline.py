@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable, Iterable
 
+from app.application.decision_evidence import DecisionEvidence
 from app.application.strategy_pipeline import StrategyPipeline
 from app.context.models import ContextAssessment
 from app.core.models import Position
 from app.portfolio.account import Account
-from app.portfolio.correlation import correlation_risk_multiplier
+from app.portfolio.correlation import CorrelationMatrix, correlation_risk_multiplier
 from app.portfolio.portfolio_engine import PortfolioAssessment, PortfolioPolicy, assess_portfolio
 from app.risk.risk_engine import RiskAssessment, assess_risk
 from app.risk.risk_policy import RiskPolicy
@@ -26,6 +27,8 @@ class RiskContext:
     leverage: Decimal
     provider: str | None = None
     correlation: Decimal = Decimal("0")
+    reserved_pending_risk: Decimal = Decimal("0")
+    correlation_matrix: CorrelationMatrix | None = None
 
 
 RiskContextLoader = Callable[[str], RiskContext]
@@ -38,6 +41,7 @@ class GatedOpportunity:
     risk: RiskAssessment
     portfolio: PortfolioAssessment
     rank: int
+    evidence: DecisionEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -53,37 +57,111 @@ class OpportunityPipelineResult:
 class OpportunityPipeline:
     """Apply Strategy -> Context -> Risk -> Portfolio hard gates before Top-N ranking."""
 
-    def __init__(self, strategy_pipeline: StrategyPipeline, risk_context_loader: RiskContextLoader, *, context_loader: ContextLoader | None = None, risk_policy: RiskPolicy = RiskPolicy(), portfolio_policy: PortfolioPolicy | None = None) -> None:
+    def __init__(
+        self,
+        strategy_pipeline: StrategyPipeline,
+        risk_context_loader: RiskContextLoader,
+        *,
+        context_loader: ContextLoader | None = None,
+        risk_policy: RiskPolicy = RiskPolicy(),
+        portfolio_policy: PortfolioPolicy | None = None,
+    ) -> None:
         self.strategy_pipeline = strategy_pipeline
         self.risk_context_loader = risk_context_loader
         self.context_loader = context_loader
         self.risk_policy = risk_policy
-        self.portfolio_policy = portfolio_policy or PortfolioPolicy(max_aggregate_risk_percent=risk_policy.max_aggregate_open_risk_percent, max_correlated_risk_percent=risk_policy.max_correlated_risk_percent, max_futures_capital_percent=risk_policy.max_futures_capital_percent)
+        self.portfolio_policy = portfolio_policy or PortfolioPolicy(
+            max_aggregate_risk_percent=risk_policy.max_aggregate_open_risk_percent,
+            max_correlated_risk_percent=risk_policy.max_correlated_risk_percent,
+            max_futures_capital_percent=risk_policy.max_futures_capital_percent,
+        )
 
     def evaluate(self, symbols: Iterable[str], top_n: int = 10) -> OpportunityPipelineResult:
         if top_n < 1:
             raise ValueError("top_n must be positive")
         evaluated, signals = self.strategy_pipeline.evaluate_all(symbols)
-        gated: list[tuple[StrategySignal, RiskAssessment, PortfolioAssessment]] = []
+        gated: list[
+            tuple[StrategySignal, RiskAssessment, PortfolioAssessment, DecisionEvidence]
+        ] = []
         context_rejected = risk_rejected = portfolio_rejected = 0
+
         for signal in signals:
+            context_assessment: ContextAssessment | None = None
             if self.context_loader is not None:
-                context = self.context_loader(signal.symbol)
-                if context.blocking or context.delay:
+                context_assessment = self.context_loader(signal.symbol)
+                if context_assessment.blocking or context_assessment.delay:
                     context_rejected += 1
                     continue
-            context = self.risk_context_loader(signal.symbol)
-            existing_risk = context.account.aggregate_open_risk(context.positions)
-            correlated_open_risk = existing_risk * correlation_risk_multiplier(context.correlation)
-            risk = assess_risk(account=context.account, positions=context.positions, signal=signal, instrument=context.instrument, contract=context.contract, leverage=context.leverage, policy=self.risk_policy, provider=context.provider, correlated_open_risk=correlated_open_risk)
+
+            risk_context = self.risk_context_loader(signal.symbol)
+            existing_risk = risk_context.account.aggregate_open_risk(risk_context.positions)
+            if risk_context.correlation_matrix is not None:
+                matrix_exposure = risk_context.correlation_matrix.candidate_exposure(
+                    candidate_symbol=signal.symbol,
+                    new_risk=Decimal("0"),
+                    positions=risk_context.positions,
+                )
+                correlated_open_risk = matrix_exposure.correlated_risk
+            else:
+                correlated_open_risk = existing_risk * correlation_risk_multiplier(
+                    risk_context.correlation
+                )
+
+            risk = assess_risk(
+                account=risk_context.account,
+                positions=risk_context.positions,
+                signal=signal,
+                instrument=risk_context.instrument,
+                contract=risk_context.contract,
+                leverage=risk_context.leverage,
+                policy=self.risk_policy,
+                provider=risk_context.provider,
+                correlated_open_risk=correlated_open_risk,
+                reserved_pending_risk=risk_context.reserved_pending_risk,
+            )
             if not risk.approved:
                 risk_rejected += 1
                 continue
-            portfolio = assess_portfolio(equity=context.account.equity, positions=context.positions, new_risk=risk.new_risk, new_notional=risk.total_amount, correlation=context.correlation, policy=self.portfolio_policy, new_futures_capital=risk.total_amount if context.leverage > 1 else Decimal("0"))
+
+            portfolio = assess_portfolio(
+                equity=risk_context.account.equity,
+                positions=risk_context.positions,
+                new_risk=risk.new_risk,
+                new_notional=risk.total_amount,
+                correlation=risk_context.correlation,
+                policy=self.portfolio_policy,
+                new_futures_capital=(
+                    risk.total_amount if risk_context.leverage > 1 else Decimal("0")
+                ),
+                reserved_pending_risk=risk_context.reserved_pending_risk,
+                candidate_symbol=signal.symbol,
+                correlation_matrix=risk_context.correlation_matrix,
+            )
             if not portfolio.approved:
                 portfolio_rejected += 1
                 continue
-            gated.append((signal, risk, portfolio))
-        gated.sort(key=lambda item: (item[0].score, item[0].confidence, item[0].rr), reverse=True)
-        selected = tuple(GatedOpportunity(signal, risk, portfolio, rank) for rank, (signal, risk, portfolio) in enumerate(gated[:top_n], start=1))
-        return OpportunityPipelineResult(evaluated, len(signals), context_rejected, risk_rejected, portfolio_rejected, selected)
+
+            evidence = DecisionEvidence.build(
+                signal=signal,
+                context=context_assessment,
+                risk=risk,
+                portfolio=portfolio,
+                provider=risk_context.provider,
+            )
+            gated.append((signal, risk, portfolio, evidence))
+
+        gated.sort(
+            key=lambda item: (item[0].score, item[0].confidence, item[0].rr), reverse=True
+        )
+        selected = tuple(
+            GatedOpportunity(signal, risk, portfolio, rank, evidence)
+            for rank, (signal, risk, portfolio, evidence) in enumerate(gated[:top_n], start=1)
+        )
+        return OpportunityPipelineResult(
+            evaluated,
+            len(signals),
+            context_rejected,
+            risk_rejected,
+            portfolio_rejected,
+            selected,
+        )
