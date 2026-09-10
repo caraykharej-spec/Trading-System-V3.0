@@ -14,12 +14,21 @@ class BacktestConfig:
     max_futures_capital_percent: Decimal = Decimal("50")
     commission_percent: Decimal = Decimal("0")
     slippage_percent: Decimal = Decimal("0")
+    spread_percent: Decimal = Decimal("0")
+    funding_rate_percent_per_day: Decimal = Decimal("0")
     allow_short: bool = True
 
     def __post_init__(self) -> None:
         if self.initial_equity <= 0:
             raise ValueError("initial_equity must be positive")
-        for name in ("risk_per_trade_percent", "max_aggregate_risk_percent", "max_futures_capital_percent", "commission_percent", "slippage_percent"):
+        for name in (
+            "risk_per_trade_percent",
+            "max_aggregate_risk_percent",
+            "max_futures_capital_percent",
+            "commission_percent",
+            "slippage_percent",
+            "spread_percent",
+        ):
             value = getattr(self, name)
             if value < 0:
                 raise ValueError(f"{name} must be non-negative")
@@ -45,6 +54,7 @@ class TradeRecord:
     realized_pnl: Decimal
     commission: Decimal
     exit_reason: str
+    funding_cost: Decimal = Decimal("0")
 
 
 @dataclass(frozen=True)
