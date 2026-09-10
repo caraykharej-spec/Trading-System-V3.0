@@ -1,0 +1,14 @@
+environment: development
+mode: development
+execution:
+  provider: paper
+  enabled: false
+risk:
+  max_account_risk_percent: 1.0
+  max_open_positions: 5
+market:
+  default_timeframes:
+    - 15m
+    - 1h
+    - 4h
+    - 1d
