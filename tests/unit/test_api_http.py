@@ -46,13 +46,32 @@ def test_invalid_opportunity_limit_returns_400() -> None:
     assert body["error"]["code"] == "INVALID_LIMIT"
 
 
+def test_performance_endpoint_uses_configured_provider() -> None:
+    server = create_server(
+        "127.0.0.1",
+        0,
+        lambda: TradingApiService(analytics_provider=lambda: {"total_trades": 4}),
+    )
+    status, body = _request(server, "GET", "/analytics/performance")
+    assert status == 200
+    assert body == {"performance": {"total_trades": 4}}
+
+
 def test_cycle_endpoint_is_post_only() -> None:
-    server = create_server("127.0.0.1", 0, lambda: TradingApiService(cycle_runner=lambda: {"ok": True}))
+    server = create_server(
+        "127.0.0.1",
+        0,
+        lambda: TradingApiService(cycle_runner=lambda: {"ok": True}),
+    )
     status, body = _request(server, "GET", "/runtime/cycle")
     assert status == 404
     assert body["error"]["code"] == "NOT_FOUND"
 
-    server = create_server("127.0.0.1", 0, lambda: TradingApiService(cycle_runner=lambda: {"ok": True}))
+    server = create_server(
+        "127.0.0.1",
+        0,
+        lambda: TradingApiService(cycle_runner=lambda: {"ok": True}),
+    )
     status, body = _request(server, "POST", "/runtime/cycle")
     assert status == 200
     assert body == {"cycle": {"ok": True}}

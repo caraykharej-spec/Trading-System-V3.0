@@ -13,6 +13,10 @@ class PositionRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def list_closed(self) -> list[Position]:
+        raise NotImplementedError
+
+    @abstractmethod
     def save(self, position: Position) -> None:
         raise NotImplementedError
 

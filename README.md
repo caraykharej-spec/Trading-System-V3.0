@@ -16,11 +16,11 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current phase
 
-**Phase 21 — API Boundary and Android-Ready Application Interface**
+**Phase 22 — Trade Journal and Performance Analytics**
 
-Completed foundations include normalized market-data contracts, provider adapters, canonical instrument identity, market analysis, strategy/risk/portfolio layers, context/news/events, realistic backtesting, execution boundaries, restart-safe persistence/recovery, paper runtime, and the thin API boundary.
+Completed foundations include normalized market-data contracts, provider adapters, canonical instrument identity, market analysis, strategy/risk/portfolio layers, context/news/events, realistic backtesting, execution boundaries, restart-safe persistence/recovery, paper runtime, the thin API boundary, and immutable completed-position journaling with read-only performance analytics.
 
-Phase 21 exposes health, positions, opportunities, and an explicitly configured runtime-cycle callback through a dependency-free standard-library HTTP adapter. Business rules remain outside the HTTP layer. See `docs/architecture/21_api_boundary.md`.
+Phase 22 persists completed position facts, repairs missing journal rows from authoritative closed-position state, computes deterministic performance metrics, and exposes an optional analytics read endpoint without moving business rules into HTTP. See `docs/architecture/22_journal_analytics.md`.
 
 ## Run from PyCharm
 

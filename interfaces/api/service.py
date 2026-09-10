@@ -24,25 +24,36 @@ class TradingApiService:
         cycle_runner: Callable[[], Any] | None = None,
         positions_provider: Callable[[], list[Any]] | None = None,
         opportunities_provider: Callable[[], list[Any]] | None = None,
+        analytics_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
         self._cycle_runner = cycle_runner
         self._positions_provider = positions_provider or (lambda: [])
         self._opportunities_provider = opportunities_provider or (lambda: [])
+        self._analytics_provider = analytics_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
         return ApiResponse.ok(response.to_dict())
 
     def positions(self) -> ApiResponse:
-        return ApiResponse.ok({"positions": [self._serialize(item) for item in self._positions_provider()]})
+        return ApiResponse.ok(
+            {"positions": [self._serialize(item) for item in self._positions_provider()]}
+        )
 
     def opportunities(self, limit: int = 10) -> ApiResponse:
         if limit < 1 or limit > 100:
             return ApiResponse.bad_request("INVALID_LIMIT", "limit must be between 1 and 100")
         items = self._opportunities_provider()[:limit]
         return ApiResponse.ok({"opportunities": [self._serialize(item) for item in items]})
+
+    def performance(self) -> ApiResponse:
+        if self._analytics_provider is None:
+            return ApiResponse.conflict(
+                "ANALYTICS_UNAVAILABLE", "performance analytics are not configured"
+            )
+        return ApiResponse.ok({"performance": self._serialize(self._analytics_provider())})
 
     def run_cycle(self) -> ApiResponse:
         if self._cycle_runner is None:

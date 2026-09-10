@@ -11,6 +11,7 @@ from app.execution.atomic_execution import AtomicExecutionService
 from app.execution.models import OrderRequest
 from app.execution.paper_runtime import PaperSubmissionResult, PaperTradingRuntime
 from app.execution.pending_order_manager import PendingOrderManager
+from app.journal.service import JournalService
 from app.portfolio.account import Account
 from app.position.manager import ExitPolicy, manage_open_positions
 from app.recovery.reconciliation import RecoveryReconciler
@@ -38,6 +39,7 @@ class RuntimeCycleOrchestrator:
     paper_runtime: PaperTradingRuntime | None = None
     selected_orders_provider: object | None = None
     account_repository: AccountRepository | None = None
+    journal_service: JournalService | None = None
     _recovery_done_for_cycle: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -59,10 +61,23 @@ class RuntimeCycleOrchestrator:
         provider = self.recovery_order_ids_provider
         order_ids = provider() if callable(provider) else list(provider)
         outcome = self.recovery_reconciler.reconcile(list(order_ids))
-        notes.append(f"Recovery inspected={outcome.inspected_orders} repaired_positions={outcome.repaired_positions} issues={len(outcome.issues)}")
+        notes.append(
+            f"Recovery inspected={outcome.inspected_orders} "
+            f"repaired_positions={outcome.repaired_positions} issues={len(outcome.issues)}"
+        )
         for issue in outcome.issues:
             notes.append(f"Recovery issue {issue.order_id}: {issue.kind} - {issue.detail}")
         self._recovery_done_for_cycle.add(cycle_id)
+
+    def _run_journal_recovery(self, notes: list[str]) -> None:
+        if self.journal_service is None:
+            return
+        outcome = self.journal_service.reconcile(self.position_repository.list_closed())
+        if outcome.inspected:
+            notes.append(
+                f"Journal reconciliation inspected={outcome.inspected} "
+                f"created={outcome.created} existing={outcome.existing}"
+            )
 
     def _run_opportunity_pipeline(self, notes: list[str]) -> None:
         if self.opportunity_pipeline is None or self.universe_provider is None:
@@ -97,7 +112,15 @@ class RuntimeCycleOrchestrator:
         existing = self.audit_repository.get(cycle_id)
         if existing is not None:
             if existing.status is AuditStatus.COMPLETED:
-                return CycleResult(cycle_id=existing.cycle_id, status=CycleStatus.COMPLETED, started_at=existing.started_at, finished_at=existing.finished_at or started_at, monitored_positions=existing.monitored_positions, stopped_positions=existing.stopped_positions, notes=existing.notes + ("idempotent replay: cycle already completed",))
+                return CycleResult(
+                    cycle_id=existing.cycle_id,
+                    status=CycleStatus.COMPLETED,
+                    started_at=existing.started_at,
+                    finished_at=existing.finished_at or started_at,
+                    monitored_positions=existing.monitored_positions,
+                    stopped_positions=existing.stopped_positions,
+                    notes=existing.notes + ("idempotent replay: cycle already completed",),
+                )
             if existing.status is AuditStatus.STARTED:
                 started_at = existing.started_at
 
@@ -106,16 +129,29 @@ class RuntimeCycleOrchestrator:
         try:
             notes: list[str] = []
             self._run_recovery(cycle_id, notes)
+            self._run_journal_recovery(notes)
 
             positions = self.position_repository.list_open()
-            management = manage_open_positions(positions, self.live_price_provider, self.exit_policy)
+            management = manage_open_positions(
+                positions, self.live_price_provider, self.exit_policy
+            )
             for position in positions:
                 self.position_repository.save(position)
             for result in management.results:
                 self.account.apply_realized_pnl(result.realized_pnl)
-                notes.append(f"Exit {result.position_id} reason={result.reason} at {result.exit_price}; P&L={result.realized_pnl}")
+                notes.append(
+                    f"Exit {result.position_id} reason={result.reason} "
+                    f"at {result.exit_price}; P&L={result.realized_pnl}"
+                )
             if management.results and self.account_repository is not None:
                 self.account_repository.save_equity(self.account.equity)
+
+            if management.results and self.journal_service is not None:
+                positions_by_id = {position.position_id: position for position in positions}
+                for result in management.results:
+                    position = positions_by_id[result.position_id]
+                    self.journal_service.record_closed_position(position, cycle_id=cycle_id)
+                    notes.append(f"Journaled position {result.position_id}")
 
             filled_orders = 0
             if self.pending_order_manager is not None:
@@ -130,10 +166,35 @@ class RuntimeCycleOrchestrator:
                 notes.append(f"Paper orders submitted={submitted_orders}")
 
             finished_at = datetime.now(timezone.utc)
-            audit = CycleAudit(cycle_id=cycle_id, status=AuditStatus.COMPLETED, started_at=started_at, finished_at=finished_at, monitored_positions=management.monitored, stopped_positions=management.stop_loss_exits, filled_orders=filled_orders, notes=tuple(notes))
+            audit = CycleAudit(
+                cycle_id=cycle_id,
+                status=AuditStatus.COMPLETED,
+                started_at=started_at,
+                finished_at=finished_at,
+                monitored_positions=management.monitored,
+                stopped_positions=management.stop_loss_exits,
+                filled_orders=filled_orders,
+                notes=tuple(notes),
+            )
             self.audit_repository.save(audit)
-            return CycleResult(cycle_id=cycle_id, status=CycleStatus.COMPLETED, started_at=started_at, finished_at=finished_at, monitored_positions=management.monitored, stopped_positions=management.stop_loss_exits, notes=tuple(notes))
+            return CycleResult(
+                cycle_id=cycle_id,
+                status=CycleStatus.COMPLETED,
+                started_at=started_at,
+                finished_at=finished_at,
+                monitored_positions=management.monitored,
+                stopped_positions=management.stop_loss_exits,
+                notes=tuple(notes),
+            )
         except Exception as exc:
             finished_at = datetime.now(timezone.utc)
-            self.audit_repository.save(CycleAudit(cycle_id=cycle_id, status=AuditStatus.FAILED, started_at=started_at, finished_at=finished_at, notes=(f"{type(exc).__name__}: {exc}",)))
+            self.audit_repository.save(
+                CycleAudit(
+                    cycle_id=cycle_id,
+                    status=AuditStatus.FAILED,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    notes=(f"{type(exc).__name__}: {exc}",),
+                )
+            )
             raise

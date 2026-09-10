@@ -9,6 +9,12 @@ from app.core.models import Position
 from app.storage.repositories.position_repository import PositionRepository
 
 
+_COLUMNS = (
+    "position_id, symbol, side, entry_price, stop_loss, total_amount, quantity, leverage, "
+    "take_profit, status, opened_at, closed_at, exit_price, realized_pnl, close_reason"
+)
+
+
 class SQLitePositionRepository(PositionRepository):
     def __init__(self, connection: sqlite3.Connection, *, auto_commit: bool = True) -> None:
         self.connection = connection
@@ -16,9 +22,15 @@ class SQLitePositionRepository(PositionRepository):
 
     def list_open(self) -> list[Position]:
         rows = self.connection.execute(
-            "SELECT position_id, symbol, side, entry_price, stop_loss, total_amount, "
-            "quantity, leverage, take_profit, status, opened_at, closed_at, exit_price, "
-            "realized_pnl, close_reason FROM positions WHERE status = ? ORDER BY opened_at",
+            f"SELECT {_COLUMNS} FROM positions WHERE status = ? ORDER BY opened_at",
+            (PositionStatus.OPEN.value,),
+        ).fetchall()
+        return [self._from_row(row) for row in rows]
+
+    def list_closed(self) -> list[Position]:
+        rows = self.connection.execute(
+            f"SELECT {_COLUMNS} FROM positions "
+            "WHERE status != ? AND closed_at IS NOT NULL ORDER BY closed_at, position_id",
             (PositionStatus.OPEN.value,),
         ).fetchall()
         return [self._from_row(row) for row in rows]

@@ -41,9 +41,13 @@ class TradingHttpHandler(BaseHTTPRequestHandler):
                 try:
                     limit = int(values[0])
                 except ValueError:
-                    self._write(ApiResponse.bad_request("INVALID_LIMIT", "limit must be an integer"))
+                    self._write(
+                        ApiResponse.bad_request("INVALID_LIMIT", "limit must be an integer")
+                    )
                     return
                 self._write(service.opportunities(limit))
+            elif parsed.path == "/analytics/performance":
+                self._write(service.performance())
             else:
                 self._write(ApiResponse.not_found("NOT_FOUND", "endpoint not found"))
         except Exception:
@@ -62,10 +66,18 @@ class TradingHttpHandler(BaseHTTPRequestHandler):
         return
 
 
-def create_server(host: str, port: int, service_factory: Callable[[], TradingApiService]) -> ThreadingHTTPServer:
+def create_server(
+    host: str,
+    port: int,
+    service_factory: Callable[[], TradingApiService],
+) -> ThreadingHTTPServer:
     if not host:
         raise ValueError("host must not be empty")
     if port < 0 or port > 65535:
         raise ValueError("port must be between 0 and 65535")
-    handler = type("ConfiguredTradingHttpHandler", (TradingHttpHandler,), {"service_factory": staticmethod(service_factory)})
+    handler = type(
+        "ConfiguredTradingHttpHandler",
+        (TradingHttpHandler,),
+        {"service_factory": staticmethod(service_factory)},
+    )
     return ThreadingHTTPServer((host, port), handler)

@@ -13,6 +13,12 @@ class Item:
     amount: Decimal
 
 
+@dataclass(frozen=True)
+class Performance:
+    total_trades: int
+    net_pnl: Decimal
+
+
 def test_health_is_paper_and_serializable() -> None:
     service = TradingApiService(mode=SystemMode.PAPER)
     response = service.health()
@@ -32,6 +38,23 @@ def test_opportunity_limit_is_validated() -> None:
     assert service.opportunities(0).status_code == 400
     assert service.opportunities(101).status_code == 400
     assert service.opportunities(2).body == {"opportunities": [1, 2]}
+
+
+def test_performance_requires_explicit_provider() -> None:
+    response = TradingApiService().performance()
+    assert response.status_code == 409
+    assert response.body["error"]["code"] == "ANALYTICS_UNAVAILABLE"
+
+
+def test_performance_delegates_to_read_only_provider() -> None:
+    service = TradingApiService(
+        analytics_provider=lambda: Performance(3, Decimal("125.50"))
+    )
+    response = service.performance()
+    assert response.status_code == 200
+    assert response.body == {
+        "performance": {"total_trades": 3, "net_pnl": "125.50"}
+    }
 
 
 def test_cycle_requires_explicit_runner() -> None:

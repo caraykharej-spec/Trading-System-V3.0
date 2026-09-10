@@ -76,10 +76,30 @@ CREATE TABLE IF NOT EXISTS account_state (
     equity TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS trade_journal (
+    position_id TEXT PRIMARY KEY,
+    cycle_id TEXT,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,
+    entry_price TEXT NOT NULL,
+    exit_price TEXT NOT NULL,
+    stop_loss TEXT NOT NULL,
+    take_profit TEXT,
+    total_amount TEXT NOT NULL,
+    quantity TEXT NOT NULL,
+    leverage TEXT NOT NULL,
+    realized_pnl TEXT NOT NULL,
+    opened_at TEXT NOT NULL,
+    closed_at TEXT NOT NULL,
+    close_reason TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_fills_order_id ON fills(order_id);
 CREATE INDEX IF NOT EXISTS idx_fills_filled_at ON fills(filled_at);
 CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON pending_orders(status);
+CREATE INDEX IF NOT EXISTS idx_trade_journal_closed_at ON trade_journal(closed_at);
+CREATE INDEX IF NOT EXISTS idx_trade_journal_symbol ON trade_journal(symbol);
 """
 
 

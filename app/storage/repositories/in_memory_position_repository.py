@@ -15,6 +15,13 @@ class InMemoryPositionRepository(PositionRepository):
     def list_open(self) -> list[Position]:
         return [p for p in self._positions.values() if p.status.value == "OPEN"]
 
+    def list_closed(self) -> list[Position]:
+        positions = [p for p in self._positions.values() if p.status.value != "OPEN"]
+        return sorted(
+            positions,
+            key=lambda p: (p.closed_at or p.opened_at, p.position_id),
+        )
+
     def save(self, position: Position) -> None:
         self._positions[position.position_id] = position
 
