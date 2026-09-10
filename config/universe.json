@@ -4,9 +4,51 @@
     "supported_asset_classes": ["CRYPTO", "EQUITY", "COMMODITY", "FOREX"],
     "data_timeframes": ["15m", "1h", "4h", "1d"],
     "ranking_limit": 10,
-    "pyth_enabled": false
+    "pyth_enabled": false,
+    "execution_scope": "PAPER_AND_SHADOW_ONLY",
+    "contract_specs_scope": "PAPER_RESEARCH_ONLY",
+    "notes": "Yahoo commodity mappings are research proxies to liquid futures, not spot execution instruments."
   },
-  "instruments": [],
-  "mappings": [],
-  "contract_specs": []
+  "instruments": [
+    {"symbol": "BTC/USDT", "asset_class": "CRYPTO", "base_asset": "BTC", "quote_asset": "USDT", "tradable": true, "min_quantity": "0.0001", "quantity_step": "0.0001", "price_tick": "0.1"},
+    {"symbol": "ETH/USDT", "asset_class": "CRYPTO", "base_asset": "ETH", "quote_asset": "USDT", "tradable": true, "min_quantity": "0.001", "quantity_step": "0.001", "price_tick": "0.01"},
+    {"symbol": "SOL/USDT", "asset_class": "CRYPTO", "base_asset": "SOL", "quote_asset": "USDT", "tradable": true, "min_quantity": "0.01", "quantity_step": "0.01", "price_tick": "0.001"},
+    {"symbol": "AAPL/USD", "asset_class": "EQUITY", "base_asset": "AAPL", "quote_asset": "USD", "tradable": true, "min_quantity": "1", "quantity_step": "1", "price_tick": "0.01"},
+    {"symbol": "MSFT/USD", "asset_class": "EQUITY", "base_asset": "MSFT", "quote_asset": "USD", "tradable": true, "min_quantity": "1", "quantity_step": "1", "price_tick": "0.01"},
+    {"symbol": "XAU/USD", "asset_class": "COMMODITY", "base_asset": "XAU", "quote_asset": "USD", "tradable": true, "min_quantity": "0.01", "quantity_step": "0.01", "price_tick": "0.1"},
+    {"symbol": "XAG/USD", "asset_class": "COMMODITY", "base_asset": "XAG", "quote_asset": "USD", "tradable": true, "min_quantity": "0.1", "quantity_step": "0.1", "price_tick": "0.001"},
+    {"symbol": "OIL/USD", "asset_class": "COMMODITY", "base_asset": "OIL", "quote_asset": "USD", "tradable": true, "min_quantity": "0.01", "quantity_step": "0.01", "price_tick": "0.01"},
+    {"symbol": "EUR/USD", "asset_class": "FOREX", "base_asset": "EUR", "quote_asset": "USD", "tradable": true, "min_quantity": "1", "quantity_step": "1", "price_tick": "0.00001"},
+    {"symbol": "GBP/USD", "asset_class": "FOREX", "base_asset": "GBP", "quote_asset": "USD", "tradable": true, "min_quantity": "1", "quantity_step": "1", "price_tick": "0.00001"}
+  ],
+  "mappings": [
+    {"canonical": "BTC/USDT", "provider": "storm", "provider_symbol": "BTC"},
+    {"canonical": "ETH/USDT", "provider": "storm", "provider_symbol": "ETH"},
+    {"canonical": "SOL/USDT", "provider": "storm", "provider_symbol": "SOL"},
+    {"canonical": "BTC/USDT", "provider": "gateio", "provider_symbol": "BTC_USDT"},
+    {"canonical": "ETH/USDT", "provider": "gateio", "provider_symbol": "ETH_USDT"},
+    {"canonical": "SOL/USDT", "provider": "gateio", "provider_symbol": "SOL_USDT"},
+    {"canonical": "BTC/USDT", "provider": "yahoo", "provider_symbol": "BTC-USD"},
+    {"canonical": "ETH/USDT", "provider": "yahoo", "provider_symbol": "ETH-USD"},
+    {"canonical": "SOL/USDT", "provider": "yahoo", "provider_symbol": "SOL-USD"},
+    {"canonical": "AAPL/USD", "provider": "yahoo", "provider_symbol": "AAPL"},
+    {"canonical": "MSFT/USD", "provider": "yahoo", "provider_symbol": "MSFT"},
+    {"canonical": "XAU/USD", "provider": "yahoo", "provider_symbol": "GC=F"},
+    {"canonical": "XAG/USD", "provider": "yahoo", "provider_symbol": "SI=F"},
+    {"canonical": "OIL/USD", "provider": "yahoo", "provider_symbol": "CL=F"},
+    {"canonical": "EUR/USD", "provider": "yahoo", "provider_symbol": "EURUSD=X"},
+    {"canonical": "GBP/USD", "provider": "yahoo", "provider_symbol": "GBPUSD=X"}
+  ],
+  "contract_specs": [
+    {"symbol": "BTC/USDT", "price_tick": "0.1", "quantity_step": "0.0001", "min_quantity": "0.0001", "min_notional": "5", "max_leverage": "10"},
+    {"symbol": "ETH/USDT", "price_tick": "0.01", "quantity_step": "0.001", "min_quantity": "0.001", "min_notional": "5", "max_leverage": "10"},
+    {"symbol": "SOL/USDT", "price_tick": "0.001", "quantity_step": "0.01", "min_quantity": "0.01", "min_notional": "5", "max_leverage": "10"},
+    {"symbol": "AAPL/USD", "price_tick": "0.01", "quantity_step": "1", "min_quantity": "1", "min_notional": "1", "max_leverage": "1"},
+    {"symbol": "MSFT/USD", "price_tick": "0.01", "quantity_step": "1", "min_quantity": "1", "min_notional": "1", "max_leverage": "1"},
+    {"symbol": "XAU/USD", "price_tick": "0.1", "quantity_step": "0.01", "min_quantity": "0.01", "min_notional": "1", "max_leverage": "1"},
+    {"symbol": "XAG/USD", "price_tick": "0.001", "quantity_step": "0.1", "min_quantity": "0.1", "min_notional": "1", "max_leverage": "1"},
+    {"symbol": "OIL/USD", "price_tick": "0.01", "quantity_step": "0.01", "min_quantity": "0.01", "min_notional": "1", "max_leverage": "1"},
+    {"symbol": "EUR/USD", "price_tick": "0.00001", "quantity_step": "1", "min_quantity": "1", "min_notional": "1", "max_leverage": "1"},
+    {"symbol": "GBP/USD", "price_tick": "0.00001", "quantity_step": "1", "min_quantity": "1", "min_notional": "1", "max_leverage": "1"}
+  ]
 }
