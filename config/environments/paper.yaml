@@ -1,0 +1,8 @@
+environment: paper
+execution:
+  live_enabled: false
+risk:
+  max_risk_per_trade: 0.01
+  max_total_open_risk: 0.04
+logging:
+  level: INFO
