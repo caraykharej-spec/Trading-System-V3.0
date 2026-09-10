@@ -4,8 +4,8 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Architecture principles
 
-- Strategy, risk, portfolio, execution, storage, and presentation are separate concerns.
-- Hard eligibility gates are separate from opportunity scoring.
+- Strategy, risk, portfolio, execution, storage, research, and presentation are separate concerns.
+- Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Open-position stop-loss monitoring runs at the beginning of every trading-state cycle after restart/recovery checks.
 - Realized P&L is calculated from the position's total amount/notional model, with provider-specific contract rules isolated from generic portfolio logic.
 - No fixed maximum number of open positions. Portfolio limits are risk, exposure, correlation, margin, leverage, and capital constraints.
@@ -16,13 +16,27 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current phase
 
-**Phase 22.5 — Architecture Hardening and Strategy Fidelity**
+**Phase 23 — Research / Optimization Framework**
 
-Phase 22.5 hardens the existing Phase 1–22 system rather than adding live trading. It strengthens indicator/strategy evidence fidelity, pending-risk reservation, correlation accounting, atomic settlement, provider/data-quality contracts, portfolio-backtest state typing, runtime composition, packaging, and CI quality enforcement.
+Phase 23 adds bounded, reproducible parameter research on top of the validated Phase 1–22.5 foundation. Research uses explicit finite parameter spaces, deterministic GRID or seeded RANDOM search, independent constraints, TRAIN/VALIDATION selection, and exactly one sealed OOS evaluation for the selected candidate.
 
-The current quality pipeline requires editable installation, compile checks, Ruff, strict mypy, the full pytest suite, and at least 70% branch-aware coverage across `app` and `interfaces`.
+Every experiment declares strategy/data versions and produces a reproducibility fingerprint. Trial metadata can be stored through immutable in-memory or SQLite registries. `BacktestResearchEvaluator` provides an explicit allow-listed bridge into `BacktestConfig`; the research engine never rewrites global strategy/risk constants.
 
-See `docs/architecture/22_5_architecture_hardening.md` for the detailed scope and invariants. Phase 22 journal/analytics remains documented in `docs/architecture/22_journal_analytics.md`.
+See `docs/architecture/23_research_optimization.md` for the complete contract. Phase 22.5 hardening remains documented in `docs/architecture/22_5_architecture_hardening.md`.
+
+## Quality gate
+
+The CI pipeline requires:
+
+```text
+editable package installation
+→ compileall
+→ Ruff
+→ mypy --strict
+→ pytest with branch coverage
+```
+
+The repository-wide branch-aware coverage floor is 70% across `app` and `interfaces`.
 
 ## Run from PyCharm or terminal
 
@@ -68,7 +82,7 @@ The initial policy is:
 - Minimum score: **90 / 100**
 - Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI or research code.
 
 ## Strategy evidence
 
@@ -86,6 +100,20 @@ The opportunity score remains a 100-point ranking model after hard gates:
 
 Score and confidence remain independent.
 
+## Research discipline
+
+The Phase 23 research engine follows these constraints:
+
+- parameter spaces are explicit, discrete, and bounded before execution,
+- GRID search cannot silently truncate a declared space,
+- RANDOM search is reproducible from a declared seed and samples without replacement,
+- selection uses TRAIN and VALIDATION only,
+- final OOS data is evaluated exactly once for the selected candidate,
+- undefined objectives are rejected instead of fabricated,
+- research constraints remain separate from optimization objectives,
+- experiment identity includes strategy version, data version, search policy, constraints, and parameter-space fingerprint,
+- research output does not bypass strategy, risk, portfolio, or execution gates.
+
 ## Data sources
 
 The V3 source boundary currently contains adapters for:
@@ -101,4 +129,6 @@ The configured universe is not hard-coded by asset count; canonical instruments,
 
 ## Safety and execution boundary
 
-There is no live-execution adapter in the Phase 22.5 composition root. Runtime execution remains PAPER/SHADOW with explicit user/application selection before paper submission. Structural stop-loss, aggregate-risk, correlated-risk, futures-capital, and provider-specific risk rules remain separate hard gates.
+There is no live-execution adapter in the current composition root. Runtime execution remains PAPER/SHADOW with explicit user/application selection before paper submission. Structural stop-loss, aggregate-risk, correlated-risk, futures-capital, and provider-specific risk rules remain separate hard gates.
+
+Research and backtest results are validation evidence only; they do not authorize live trading or weaken any runtime gate.
