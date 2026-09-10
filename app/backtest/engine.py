@@ -9,6 +9,7 @@ from app.data.market_data import Candle
 from app.market.analysis import MarketSnapshot, analyze_market
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
 
+from .costs import BacktestCostModel
 from .metrics import calculate_metrics
 from .models import BacktestConfig, BacktestResult, TradeRecord
 
@@ -26,13 +27,20 @@ class _OpenTrade:
     total_amount: Decimal
     leverage: Decimal
     entry_commission: Decimal
+    funding_cost: Decimal = Decimal("0")
 
 
 class BacktestEngine:
-    """Deterministic OHLC backtester using only completed candles at each decision point."""
+    """Deterministic OHLC backtester with explicit transaction-cost modeling."""
 
     def __init__(self, config: BacktestConfig | None = None) -> None:
         self.config = config or BacktestConfig()
+        self.costs = BacktestCostModel(
+            commission_percent=self.config.commission_percent,
+            spread_percent=self.config.spread_percent,
+            slippage_percent=self.config.slippage_percent,
+            funding_rate_percent_per_day=self.config.funding_rate_percent_per_day,
+        )
 
     def run(self, symbol: str, candles_by_timeframe: dict[str, list[Candle]], evaluation_start: datetime | None = None) -> BacktestResult:
         candles = self._prepare(symbol, candles_by_timeframe)
@@ -61,15 +69,18 @@ class BacktestEngine:
 
             remaining: list[_OpenTrade] = []
             for trade in open_trades:
+                funding = self.costs.funding(trade.signal.direction, trade.total_amount, 15)
+                trade.funding_cost += funding
+                equity -= funding
                 exit_price, reason = self._intrabar_exit(trade, bar)
                 if exit_price is None:
                     remaining.append(trade)
                     continue
-                exit_price = self._apply_exit_slippage(trade.signal.direction, exit_price)
+                exit_price = self.costs.exit_price(trade.signal.direction, exit_price)
                 gross_pnl = self._pnl(trade, exit_price)
-                exit_commission = trade.total_amount * self.config.commission_percent / Decimal("100")
-                net_pnl = gross_pnl - exit_commission
-                equity += net_pnl
+                exit_commission = self.costs.commission(trade.total_amount)
+                net_pnl = gross_pnl - exit_commission - trade.funding_cost
+                equity += gross_pnl - exit_commission
                 trades.append(self._trade_record(symbol, trade, bar, exit_price, net_pnl, exit_commission, reason))
             open_trades = remaining
             equity_curve.append(equity)
@@ -89,16 +100,14 @@ class BacktestEngine:
                 except (ValueError, ArithmeticError, IndexError):
                     rejected += 1
 
-        # In an OOS run, only positions opened in the evaluation interval exist,
-        # so marking them at the final test close is valid and cannot leak future data.
         if open_trades:
             final_bar = fifteen[-1]
             for trade in open_trades:
-                exit_price = self._apply_exit_slippage(trade.signal.direction, final_bar.close)
+                exit_price = self.costs.exit_price(trade.signal.direction, final_bar.close)
                 gross_pnl = self._pnl(trade, exit_price)
-                exit_commission = trade.total_amount * self.config.commission_percent / Decimal("100")
-                net_pnl = gross_pnl - exit_commission
-                equity += net_pnl
+                exit_commission = self.costs.commission(trade.total_amount)
+                net_pnl = gross_pnl - exit_commission - trade.funding_cost
+                equity += gross_pnl - exit_commission
                 trades.append(self._trade_record(symbol, trade, final_bar, exit_price, net_pnl, exit_commission, "END_OF_TEST"))
             open_trades = []
             equity_curve.append(equity)
@@ -143,7 +152,7 @@ class BacktestEngine:
         return snapshots
 
     def _open_trade(self, signal: StrategySignal, bar: Candle, equity: Decimal, existing: list[_OpenTrade]) -> _OpenTrade | None:
-        entry = self._apply_entry_slippage(signal.direction, bar.open)
+        entry = self.costs.entry_price(signal.direction, bar.open)
         distance = abs(entry - signal.stop_loss) / entry
         if distance <= 0 or signal.stop_loss <= 0:
             return None
@@ -157,7 +166,7 @@ class BacktestEngine:
             return None
         leverage = Decimal("1")
         quantity = amount / entry
-        commission = amount * self.config.commission_percent / Decimal("100")
+        commission = self.costs.commission(amount)
         return _OpenTrade(str(uuid4()), signal, bar.timestamp, entry, quantity, amount, leverage, commission)
 
     @staticmethod
@@ -188,14 +197,6 @@ class BacktestEngine:
                 return tp, "TAKE_PROFIT"
         return None, ""
 
-    def _apply_entry_slippage(self, direction: str, price: Decimal) -> Decimal:
-        slip = self.config.slippage_percent / Decimal("100")
-        return price * (Decimal("1") + slip) if direction == "LONG" else price * (Decimal("1") - slip)
-
-    def _apply_exit_slippage(self, direction: str, price: Decimal) -> Decimal:
-        slip = self.config.slippage_percent / Decimal("100")
-        return price * (Decimal("1") - slip) if direction == "LONG" else price * (Decimal("1") + slip)
-
     @staticmethod
     def _trade_record(symbol: str, trade: _OpenTrade, bar: Candle, exit_price: Decimal, net_pnl: Decimal, exit_commission: Decimal, reason: str) -> TradeRecord:
         return TradeRecord(
@@ -215,6 +216,7 @@ class BacktestEngine:
             realized_pnl=net_pnl,
             commission=trade.entry_commission + exit_commission,
             exit_reason=reason,
+            funding_cost=trade.funding_cost,
         )
 
     @staticmethod
