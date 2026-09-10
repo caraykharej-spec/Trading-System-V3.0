@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from app.application.opportunity_pipeline import OpportunityPipeline, RiskContext
 from app.application.strategy_pipeline import StrategyPipeline
+from app.context.models import ContextAssessment, EventImportance, NewsImpact
 from app.core.enums import PositionSide, PositionStatus
 from app.core.models import Position
 from app.market.analysis import MarketSnapshot
@@ -71,3 +72,20 @@ def test_final_top_n_is_applied_after_risk_portfolio_gates():
     assert len(result.qualified) == 10
     assert all(item.signal.symbol != "S0" for item in result.qualified)
     assert [item.rank for item in result.qualified] == list(range(1, 11))
+
+
+def test_context_critical_event_blocks_before_risk():
+    blocked = ContextAssessment(NewsImpact.NEUTRAL, EventImportance.CRITICAL, ("critical",), True, False, 1.0)
+    result = OpportunityPipeline(StrategyPipeline(lambda symbol: snapshots(symbol)), lambda symbol: context(), context_loader=lambda symbol: blocked).evaluate(["S"])
+    assert result.strategy_qualified == 1
+    assert result.context_rejected == 1
+    assert result.risk_rejected == 0
+    assert result.qualified == ()
+
+
+def test_context_high_event_delays_before_risk():
+    delayed = ContextAssessment(NewsImpact.NEUTRAL, EventImportance.HIGH, ("high",), False, True, 0.5)
+    result = OpportunityPipeline(StrategyPipeline(lambda symbol: snapshots(symbol)), lambda symbol: context(), context_loader=lambda symbol: delayed).evaluate(["S"])
+    assert result.context_rejected == 1
+    assert result.risk_rejected == 0
+    assert result.qualified == ()
