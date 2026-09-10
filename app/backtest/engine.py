@@ -197,6 +197,12 @@ class BacktestEngine:
                 return tp, "TAKE_PROFIT"
         return None, ""
 
+    def _apply_entry_slippage(self, direction: str, price: Decimal) -> Decimal:
+        return self.costs.entry_price(direction, price)
+
+    def _apply_exit_slippage(self, direction: str, price: Decimal) -> Decimal:
+        return self.costs.exit_price(direction, price)
+
     @staticmethod
     def _trade_record(symbol: str, trade: _OpenTrade, bar: Candle, exit_price: Decimal, net_pnl: Decimal, exit_commission: Decimal, reason: str) -> TradeRecord:
         return TradeRecord(
