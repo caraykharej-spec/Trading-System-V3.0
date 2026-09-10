@@ -33,4 +33,5 @@ def position_from_fill(order: OrderRequest, result: OrderResult) -> Position:
         leverage=order.leverage,
         take_profit=order.take_profit,
         opened_at=result.filled_at or order.created_at,
+        decision_snapshot=order.decision_snapshot,
     )
