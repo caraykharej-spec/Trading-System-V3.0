@@ -46,7 +46,7 @@ def test_biquote_calendar_provider_normalizes_event():
     assert events[0].currency == "USD"
     assert events[0].actual == 3.1
     assert events[0].forecast == 3.0
-    assert events[0].surprise == 0.1
+    assert abs((events[0].surprise or 0.0) - 0.1) < 1e-12
 
 
 def test_biquote_calendar_skips_invalid_rows():
