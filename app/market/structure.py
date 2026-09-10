@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.data.market_data import Candle
+from app.market.advanced_structure import analyze_advanced_structure
 
 
 @dataclass(frozen=True)
@@ -15,22 +16,22 @@ class StructureResult:
 
 
 def analyze_structure(candles: list[Candle], lookback: int = 20) -> StructureResult:
+    if lookback < 3:
+        raise ValueError("lookback must be >= 3")
     ordered = sorted(candles, key=lambda x: x.timestamp)
     if len(ordered) < lookback:
         return StructureResult("UNKNOWN", None, None, Decimal("0"))
-    window = ordered[-lookback:]
-    support = min(c.low for c in window)
-    resistance = max(c.high for c in window)
-    last = window[-1].close
-    if last > resistance:
-        state = "BREAKOUT_UP"
-    elif last < support:
-        state = "BREAKOUT_DOWN"
-    elif last >= resistance * Decimal("0.995"):
-        state = "NEAR_RESISTANCE"
-    elif last <= support * Decimal("1.005"):
-        state = "NEAR_SUPPORT"
+    result = analyze_advanced_structure(ordered[-lookback:], pivot=max(1, min(2, lookback // 4)))
+    if result.structure == "BOS":
+        state = "BREAKOUT_UP" if result.last_break and result.last_break.direction == "UP" else "BREAKOUT_DOWN"
+    elif result.structure == "CHOCH":
+        state = "CHOCH_UP" if result.last_break and result.last_break.direction == "UP" else "CHOCH_DOWN"
+    elif result.trend == "BULLISH":
+        state = "BULLISH_STRUCTURE"
+    elif result.trend == "BEARISH":
+        state = "BEARISH_STRUCTURE"
+    elif result.trend == "TRANSITION":
+        state = "TRANSITION"
     else:
         state = "RANGE"
-    score = Decimal("70") if state.startswith("BREAKOUT") else Decimal("50")
-    return StructureResult(state, support, resistance, score)
+    return StructureResult(state, result.support, result.resistance, result.score)
