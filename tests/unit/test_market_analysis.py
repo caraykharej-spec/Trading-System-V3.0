@@ -19,4 +19,5 @@ def test_market_snapshot_is_deterministic():
     assert snapshot.trend.direction == "BULLISH"
     assert snapshot.indicators.ema200 is not None
     assert snapshot.liquidity.volume_ratio == Decimal("1")
+    assert snapshot.advanced_structure.trend in {"BULLISH", "TRANSITION", "UNKNOWN"}
     assert Decimal("0") <= snapshot.score <= Decimal("100")
