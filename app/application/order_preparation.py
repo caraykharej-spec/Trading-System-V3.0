@@ -43,7 +43,10 @@ def prepare_order(
         raise ValueError(f"unsupported signal direction: {signal.direction}") from exc
 
     order = OrderRequest(
-        order_id=order_id or _stable_order_id(signal.symbol, signal.entry, signal.stop_loss, signal.target, side),
+        order_id=order_id
+        or _stable_order_id(
+            signal.symbol, signal.entry, signal.stop_loss, signal.target, side
+        ),
         symbol=signal.symbol,
         side=side,
         order_type=order_type,
@@ -53,6 +56,9 @@ def prepare_order(
         take_profit=signal.target,
         leverage=opportunity.risk.leverage,
         created_at=created_at or datetime.now(timezone.utc),
+        decision_snapshot=(
+            opportunity.evidence.to_json() if opportunity.evidence is not None else None
+        ),
     )
     valid, reason = validate_order_request(order)
     if not valid:
