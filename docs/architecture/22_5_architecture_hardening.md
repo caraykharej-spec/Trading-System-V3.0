@@ -1,6 +1,6 @@
 # Phase 22.5 — Architecture Hardening and Strategy Fidelity
 
-Status: final validation.
+Status: complete.
 
 ## Purpose
 
@@ -75,7 +75,7 @@ The portfolio backtester no longer stores heterogeneous runtime state in untyped
 
 Runtime orchestration no longer uses generic `object` placeholders for live-price callbacks, universe providers, recovery order providers, selected paper orders, or position-management results. Those boundaries are explicit `Callable` / `Iterable` contracts.
 
-These changes are intended to make static typing verify actual architecture rather than merely annotate leaf functions.
+These changes make static typing verify actual architecture rather than merely annotate leaf functions.
 
 ## Application composition
 
@@ -129,6 +129,19 @@ A green Phase 22.5 build therefore means the repository installs, compiles, pass
 
 Additional existing tests were hardened around backtesting, persistence, reconciliation, and runtime-cycle behavior.
 
+## Final validation
+
+The final pre-completion validation run on the fully wired branch passed every gate:
+
+- editable package installation: passed,
+- compileall: passed,
+- Ruff: passed,
+- strict mypy: **0 issues across 136 source files**,
+- pytest: **146 passed**,
+- total branch-aware coverage: **75.38%**, above the required 70% floor.
+
+The safe `main.py` PAPER composition entrypoint and README/documentation updates were included in that green validation head.
+
 ## Completion criteria
 
-Phase 22.5 is complete only when the final branch head passes all CI gates after the documentation and safe `main.py` entrypoint changes. No live-execution capability is part of the completion criteria.
+Phase 22.5 is complete because the final implementation satisfies the architecture, safety, typing, testing, packaging, and coverage gates above. No live-execution capability is part of this phase.
