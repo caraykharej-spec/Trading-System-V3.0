@@ -10,20 +10,31 @@ def news(impact=NewsImpact.NEUTRAL, age=1, symbol="BTC/USDT"):
     return NewsItem("n1", "test", NOW - timedelta(hours=age), "test", symbol, impact)
 
 
-def event(importance=EventImportance.MEDIUM, minutes=0):
-    return EconomicEvent("e1", "CPI", NOW + timedelta(minutes=minutes), "US", importance)
+def event(importance=EventImportance.MEDIUM, minutes=0, symbols=()):
+    return EconomicEvent("e1", "CPI", NOW + timedelta(minutes=minutes), "US", importance, 101, 100, 99, symbols)
 
 
 def test_critical_event_blocks():
     result = ContextEngine().assess("BTC/USDT", events=[event(EventImportance.CRITICAL)], now=NOW)
     assert result.blocking is True
     assert result.event == EventImportance.CRITICAL
+    assert result.surprise == 1
 
 
 def test_high_event_delays_but_does_not_block():
     result = ContextEngine().assess("BTC/USDT", events=[event(EventImportance.HIGH)], now=NOW)
     assert result.delay is True
     assert result.blocking is False
+
+
+def test_critical_post_window_is_active():
+    result = ContextEngine().assess("BTC/USDT", events=[event(EventImportance.CRITICAL, minutes=-10)], now=NOW)
+    assert result.blocking is True
+
+
+def test_event_symbol_filter():
+    result = ContextEngine().assess("ETH/USDT", events=[event(EventImportance.CRITICAL, symbols=("BTC/USDT",))], now=NOW)
+    assert result.event == EventImportance.NONE
 
 
 def test_adverse_news_is_reported():
