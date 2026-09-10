@@ -114,9 +114,14 @@ class DatasetManifest:
     def __post_init__(self) -> None:
         if not self.training_fingerprint.strip():
             raise ValueError("training_fingerprint cannot be empty")
+        fingerprints = [self.training_fingerprint]
         for value in (self.validation_fingerprint, self.holdout_fingerprint):
-            if value is not None and not value.strip():
-                raise ValueError("dataset fingerprints cannot be blank")
+            if value is not None:
+                if not value.strip():
+                    raise ValueError("dataset fingerprints cannot be blank")
+                fingerprints.append(value)
+        if len(fingerprints) != len(set(fingerprints)):
+            raise ValueError("training, validation and holdout fingerprints must be distinct")
 
 
 @dataclass(frozen=True)

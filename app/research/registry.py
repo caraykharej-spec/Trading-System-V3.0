@@ -9,6 +9,7 @@ from .models import (
     EvaluationSummary,
     ExperimentResult,
     ParameterValue,
+    ResearchEvaluation,
     parameter_value_json,
 )
 
@@ -56,8 +57,16 @@ def _summary_payload(summary: EvaluationSummary) -> dict[str, object]:
     }
 
 
+def _evaluation_payload(evaluation: ResearchEvaluation) -> dict[str, object]:
+    return {
+        "summary": _summary_payload(evaluation.summary),
+        "windows": [_summary_payload(window) for window in evaluation.windows],
+    }
+
+
 def serialize_experiment(result: ExperimentResult) -> str:
     spec = result.spec
+    constraints = spec.constraints
     payload: dict[str, object] = {
         "experiment_id": spec.experiment_id,
         "name": spec.name,
@@ -71,6 +80,25 @@ def serialize_experiment(result: ExperimentResult) -> str:
         "search_method": spec.search_method.value,
         "seed": spec.seed,
         "max_trials": spec.max_trials,
+        "constraints": {
+            "min_trades": constraints.min_trades,
+            "max_drawdown_percent": (
+                str(constraints.max_drawdown_percent)
+                if constraints.max_drawdown_percent is not None
+                else None
+            ),
+            "min_profit_factor": (
+                str(constraints.min_profit_factor)
+                if constraints.min_profit_factor is not None
+                else None
+            ),
+            "min_oos_windows": constraints.min_oos_windows,
+            "max_validation_degradation_percent": (
+                str(constraints.max_validation_degradation_percent)
+                if constraints.max_validation_degradation_percent is not None
+                else None
+            ),
+        },
         "parameters": [
             {
                 "name": definition.name,
@@ -83,9 +111,9 @@ def serialize_experiment(result: ExperimentResult) -> str:
             {
                 "trial_id": trial.trial_id,
                 "parameters": _parameter_payload(trial.parameters.values),
-                "training": _summary_payload(trial.training.summary),
+                "training": _evaluation_payload(trial.training),
                 "validation": (
-                    _summary_payload(trial.validation.summary)
+                    _evaluation_payload(trial.validation)
                     if trial.validation is not None
                     else None
                 ),

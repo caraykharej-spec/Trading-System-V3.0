@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import json
 import sqlite3
 
 import pytest
@@ -35,6 +36,7 @@ from app.research import (
     fingerprint_candles,
     strategy_rules_from_parameters,
 )
+from app.research.objectives import validation_degradation_percent
 
 
 UTC = timezone.utc
@@ -90,14 +92,29 @@ def _space(*values: str) -> ParameterSpace:
     )
 
 
+def _candles() -> list[Candle]:
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    return [
+        Candle(
+            symbol="BTC/USDT",
+            timeframe="15m",
+            timestamp=base + timedelta(minutes=15 * index),
+            open=Decimal("100") + index,
+            high=Decimal("101") + index,
+            low=Decimal("99") + index,
+            close=Decimal("100.5") + index,
+            volume=Decimal("1000") + index,
+        )
+        for index in range(2)
+    ]
+
+
 def test_parameter_policy_is_deny_by_default_and_cannot_weaken_strategy() -> None:
     policy = StrategyRuleParameterPolicy()
 
     with pytest.raises(ValueError, match="cannot lower"):
         policy.validate_space(
-            ParameterSpace(
-                (ParameterDefinition("min_rr", (Decimal("2.4"),)),)
-            )
+            ParameterSpace((ParameterDefinition("min_rr", (Decimal("2.4"),)),))
         )
 
     with pytest.raises(ValueError, match="not approved"):
@@ -143,33 +160,53 @@ def test_parameter_enumeration_is_bounded_and_random_search_reproducible() -> No
     assert first == second
 
 
-def test_dataset_fingerprint_is_stable_and_sensitive_to_market_data() -> None:
-    base = datetime(2026, 1, 1, tzinfo=UTC)
-    candles = [
-        Candle(
-            symbol="BTC/USDT",
-            timeframe="15m",
-            timestamp=base + timedelta(minutes=15 * index),
-            open=Decimal("100") + index,
-            high=Decimal("101") + index,
-            low=Decimal("99") + index,
-            close=Decimal("100.5") + index,
-            volume=Decimal("1000") + index,
+def test_random_search_does_not_materialize_huge_cartesian_product() -> None:
+    values = tuple(Decimal(str(90 + index)) for index in range(10))
+    space = ParameterSpace(
+        tuple(
+            ParameterDefinition(f"p{index}", values)
+            for index in range(8)
         )
-        for index in range(2)
-    ]
+    )
+
+    sampled = enumerate_parameter_sets(
+        space,
+        method=SearchMethod.RANDOM,
+        max_trials=3,
+        seed=42,
+    )
+
+    assert space.combination_count == 100_000_000
+    assert len(sampled) == 3
+    assert len({item.stable_key for item in sampled}) == 3
+
+
+def test_dataset_manifest_rejects_overlapping_partitions() -> None:
+    with pytest.raises(ValueError, match="must be distinct"):
+        DatasetManifest("same", validation_fingerprint="same")
+
+
+def test_dataset_fingerprint_is_stable_and_sensitive_to_market_data() -> None:
+    candles = _candles()
     source = {"15m": list(reversed(candles))}
 
     first = fingerprint_candles("BTC/USDT", source)
     second = fingerprint_candles("BTC/USDT", {"15m": candles})
     changed = replace(candles[1], close=Decimal("999"))
-    third = fingerprint_candles(
-        "BTC/USDT", {"15m": [candles[0], changed]}
-    )
+    third = fingerprint_candles("BTC/USDT", {"15m": [candles[0], changed]})
 
     assert first == second
     assert first != third
     assert len(first) == 64
+
+
+def test_dataset_fingerprint_rejects_duplicate_or_misfiled_candles() -> None:
+    candles = _candles()
+    with pytest.raises(ValueError, match="duplicate"):
+        fingerprint_candles("BTC/USDT", {"15m": [candles[0], candles[0]]})
+
+    with pytest.raises(ValueError, match="does not match"):
+        fingerprint_candles("BTC/USDT", {"1h": [candles[0]]})
 
 
 def test_strategy_rules_from_parameters_only_changes_approved_fields() -> None:
@@ -226,6 +263,32 @@ def test_experiment_runner_uses_validation_guard_and_preserves_holdout_boundary(
     assert result.spec.datasets.holdout_fingerprint == "untouched-holdout"
 
 
+def test_oos_window_constraint_applies_to_validation_when_validation_exists() -> None:
+    spec = ExperimentSpec(
+        name="walk-forward-validation",
+        strategy_version="v3",
+        datasets=DatasetManifest("train", "validation"),
+        parameter_space=_space("90"),
+        objective=ObjectiveMetric.TOTAL_RETURN_PERCENT,
+        constraints=ResearchConstraints(min_oos_windows=2),
+    )
+
+    result = ExperimentRunner().run(
+        spec,
+        training_evaluator=lambda _: _summary("4", windows=0),
+        validation_evaluator=lambda _: _summary("3", windows=2),
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+    assert result.best_trial is not None
+    assert result.trials[0].feasible is True
+
+
+def test_validation_degradation_handles_negative_objectives_proportionally() -> None:
+    assert validation_degradation_percent(Decimal("-2"), Decimal("-3")) == Decimal("50")
+    assert validation_degradation_percent(Decimal("-2"), Decimal("-1")) == Decimal("0")
+
+
 def test_validation_evaluator_must_match_dataset_manifest() -> None:
     spec = ExperimentSpec(
         name="mismatch",
@@ -253,7 +316,7 @@ def test_experiment_id_is_reproducible_and_data_versioned() -> None:
     assert spec.experiment_id != changed_data.experiment_id
 
 
-def test_sqlite_registry_is_idempotent_and_detects_conflicts(tmp_path) -> None:
+def test_sqlite_registry_is_idempotent_complete_and_detects_conflicts(tmp_path) -> None:
     connection = sqlite3.connect(tmp_path / "research.db")
     registry = SQLiteExperimentRegistry(connection)
     spec = ExperimentSpec(
@@ -261,10 +324,15 @@ def test_sqlite_registry_is_idempotent_and_detects_conflicts(tmp_path) -> None:
         strategy_version="v3",
         datasets=DatasetManifest("train"),
         parameter_space=_space("90"),
+        constraints=ResearchConstraints(max_drawdown_percent=Decimal("10")),
+    )
+    evaluation = ResearchEvaluation(
+        summary=_summary("4", windows=1).summary,
+        windows=(_summary("4").summary,),
     )
     result = ExperimentRunner().run(
         spec,
-        training_evaluator=lambda _: _summary("4"),
+        training_evaluator=lambda _: evaluation,
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
@@ -273,6 +341,9 @@ def test_sqlite_registry_is_idempotent_and_detects_conflicts(tmp_path) -> None:
     stored = registry.get(spec.experiment_id)
     assert stored is not None
     assert stored.name == "registry"
+    payload = json.loads(stored.payload_json)
+    assert payload["constraints"]["max_drawdown_percent"] == "10"
+    assert len(payload["trials"][0]["training"]["windows"]) == 1
     assert len(registry.list_all()) == 1
 
     conflicting = ExperimentResult(
@@ -323,9 +394,7 @@ def test_backtest_research_evaluator_injects_controlled_strategy_rules(monkeypat
 
     monkeypatch.setattr("app.research.evaluator.BacktestEngine.run", fake_run)
     evaluator = BacktestResearchEvaluator("BTC/USDT", {})
-    result = evaluator(
-        ParameterSet.from_mapping({"min_score": Decimal("95")})
-    )
+    result = evaluator(ParameterSet.from_mapping({"min_score": Decimal("95")}))
 
     assert result.summary.total_return_percent == Decimal("5")
     assert seen[0][0].min_score == Decimal("95")
@@ -334,8 +403,14 @@ def test_backtest_research_evaluator_injects_controlled_strategy_rules(monkeypat
 
 def test_walk_forward_research_evaluator_aggregates_oos_windows(monkeypatch) -> None:
     fake = WalkForwardResult(
-        windows=(WalkForwardWindow(0, 10, 10, 15), WalkForwardWindow(5, 15, 15, 20)),
-        results=(_backtest_result("4", drawdown="2"), _backtest_result("6", drawdown="3")),
+        windows=(
+            WalkForwardWindow(0, 10, 10, 15),
+            WalkForwardWindow(5, 15, 15, 20),
+        ),
+        results=(
+            _backtest_result("4", drawdown="2"),
+            _backtest_result("6", drawdown="3"),
+        ),
     )
 
     def fake_run(self, symbol, candles, train_size, test_size, step=None):

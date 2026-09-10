@@ -20,13 +20,7 @@ class ResearchSpaceTooLargeError(ValueError):
 
 
 class StrategyRuleParameterPolicy:
-    """Deny-by-default allowlist for research-time strategy-rule changes.
-
-    The declared production minima are hard floors. Research may test equal or
-    stricter eligibility thresholds, but it cannot weaken them or modify risk,
-    execution, scoring weights, setup logic, or portfolio limits through this
-    parameter surface.
-    """
+    """Deny-by-default allowlist for research-time strategy-rule changes."""
 
     _ALLOWED = frozenset({"min_rr", "min_score", "min_confidence"})
 
@@ -69,6 +63,17 @@ class StrategyRuleParameterPolicy:
         raise ValueError(f"research parameter is not approved: {name}")
 
 
+def _set_from_index(space: ParameterSpace, index: int) -> ParameterSet:
+    if index < 0 or index >= space.combination_count:
+        raise IndexError("parameter combination index out of range")
+    values: dict[str, ParameterValue] = {}
+    remainder = index
+    for definition in reversed(space.definitions):
+        remainder, value_index = divmod(remainder, len(definition.values))
+        values[definition.name] = definition.values[value_index]
+    return ParameterSet.from_mapping(values)
+
+
 def enumerate_parameter_sets(
     space: ParameterSpace,
     *,
@@ -82,20 +87,23 @@ def enumerate_parameter_sets(
     if not definitions:
         return (ParameterSet(),)
 
-    raw = [
-        ParameterSet.from_mapping(
-            {definition.name: value for definition, value in zip(definitions, combination)}
-        )
-        for combination in product(*(definition.values for definition in definitions))
-    ]
-
+    combination_count = space.combination_count
     if method is SearchMethod.GRID:
-        if len(raw) > max_trials:
+        if combination_count > max_trials:
             raise ResearchSpaceTooLargeError(
-                f"grid contains {len(raw)} combinations but max_trials is {max_trials}"
+                f"grid contains {combination_count} combinations but max_trials is {max_trials}"
             )
-        return tuple(raw)
+        return tuple(
+            ParameterSet.from_mapping(
+                {
+                    definition.name: value
+                    for definition, value in zip(definitions, combination)
+                }
+            )
+            for combination in product(*(definition.values for definition in definitions))
+        )
 
     rng = random.Random(seed)
-    rng.shuffle(raw)
-    return tuple(raw[: min(max_trials, len(raw))])
+    sample_size = min(max_trials, combination_count)
+    indexes = rng.sample(range(combination_count), k=sample_size)
+    return tuple(_set_from_index(space, index) for index in indexes)

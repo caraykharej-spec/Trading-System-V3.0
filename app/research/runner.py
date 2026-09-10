@@ -18,15 +18,11 @@ from .objectives import (
     validation_degradation_percent,
 )
 from .parameter_space import StrategyRuleParameterPolicy, enumerate_parameter_sets
+from .registry import ExperimentRegistry
 
 
 class ResearchEvaluator(Protocol):
     def __call__(self, parameters: ParameterSet) -> ResearchEvaluation:
-        ...
-
-
-class ExperimentRegistry(Protocol):
-    def save(self, result: ExperimentResult) -> bool:
         ...
 
 
@@ -73,6 +69,7 @@ class ExperimentRunner:
                     training.summary,
                     spec.constraints,
                     prefix="training",
+                    enforce_oos_windows=validation_evaluator is None,
                 )
             )
             validation: ResearchEvaluation | None = None
@@ -87,6 +84,7 @@ class ExperimentRunner:
                         validation.summary,
                         spec.constraints,
                         prefix="validation",
+                        enforce_oos_windows=True,
                     )
                 )
                 degradation = validation_degradation_percent(

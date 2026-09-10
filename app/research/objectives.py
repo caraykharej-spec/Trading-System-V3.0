@@ -103,6 +103,7 @@ def constraint_violations(
     constraints: ResearchConstraints,
     *,
     prefix: str,
+    enforce_oos_windows: bool = True,
 ) -> tuple[str, ...]:
     reasons: list[str] = []
     if summary.trade_count < constraints.min_trades:
@@ -116,7 +117,7 @@ def constraint_violations(
         profit_factor = summary.profit_factor
         if profit_factor is None or profit_factor < constraints.min_profit_factor:
             reasons.append(f"{prefix}: profit factor below minimum")
-    if summary.window_count < constraints.min_oos_windows:
+    if enforce_oos_windows and summary.window_count < constraints.min_oos_windows:
         reasons.append(f"{prefix}: OOS window count below minimum")
     return tuple(reasons)
 
@@ -126,8 +127,10 @@ def validation_degradation_percent(
 ) -> Decimal:
     if validation_objective >= training_objective:
         return Decimal("0")
-    if training_objective > 0:
-        return (training_objective - validation_objective) / training_objective * Decimal("100")
-    if training_objective == 0:
-        return Decimal("100") if validation_objective < 0 else Decimal("0")
-    return Decimal("100") if validation_objective < training_objective else Decimal("0")
+    denominator = abs(training_objective)
+    if denominator == 0:
+        return Decimal("100")
+    degradation = (
+        (training_objective - validation_objective) / denominator * Decimal("100")
+    )
+    return max(Decimal("0"), degradation)
