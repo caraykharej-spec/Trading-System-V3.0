@@ -41,6 +41,13 @@ class EconomicEvent:
     actual: float | None = None
     forecast: float | None = None
     previous: float | None = None
+    symbols: tuple[str, ...] = ()
+
+    @property
+    def surprise(self) -> float | None:
+        if self.actual is None or self.forecast is None:
+            return None
+        return self.actual - self.forecast
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,7 @@ class ContextAssessment:
     reasons: tuple[str, ...]
     blocking: bool
     delay: bool
+    surprise: float | None = None
 
     @property
     def tradable(self) -> bool:
