@@ -9,8 +9,9 @@ from app.storage.account_repository import AccountRepository
 class SQLiteAccountRepository(AccountRepository):
     """SQLite-backed single-account equity state."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, *, auto_commit: bool = True) -> None:
         self.connection = connection
+        self.auto_commit = auto_commit
 
     def load_equity(self) -> Decimal:
         row = self.connection.execute(
@@ -29,4 +30,5 @@ class SQLiteAccountRepository(AccountRepository):
                ON CONFLICT(account_id) DO UPDATE SET equity = excluded.equity""",
             ("default", str(equity)),
         )
-        self.connection.commit()
+        if self.auto_commit:
+            self.connection.commit()
