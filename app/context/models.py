@@ -38,11 +38,11 @@ class EconomicEvent:
     event_time: datetime
     country: str
     importance: EventImportance
-    currency: str | None = None
     actual: float | None = None
     forecast: float | None = None
     previous: float | None = None
     symbols: tuple[str, ...] = ()
+    currency: str | None = None
 
     @property
     def surprise(self) -> float | None:
