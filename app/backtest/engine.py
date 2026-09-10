@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.data.market_data import Candle
 from app.market.analysis import MarketSnapshot, analyze_market
+from app.risk.risk_math import candidate_risk_amount, risk_budget_amount
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
 
 from .costs import BacktestCostModel
@@ -31,7 +32,7 @@ class _OpenTrade:
 
 
 class BacktestEngine:
-    """Deterministic OHLC backtester with explicit transaction-cost modeling."""
+    """Deterministic OHLC backtester sharing strategy and core risk arithmetic."""
 
     def __init__(self, config: BacktestConfig | None = None) -> None:
         self.config = config or BacktestConfig()
@@ -42,7 +43,12 @@ class BacktestEngine:
             funding_rate_percent_per_day=self.config.funding_rate_percent_per_day,
         )
 
-    def run(self, symbol: str, candles_by_timeframe: dict[str, list[Candle]], evaluation_start: datetime | None = None) -> BacktestResult:
+    def run(
+        self,
+        symbol: str,
+        candles_by_timeframe: dict[str, list[Candle]],
+        evaluation_start: datetime | None = None,
+    ) -> BacktestResult:
         candles = self._prepare(symbol, candles_by_timeframe)
         fifteen = candles["15m"]
         equity = self.config.initial_equity
@@ -76,12 +82,27 @@ class BacktestEngine:
                 if exit_price is None:
                     remaining.append(trade)
                     continue
-                exit_price = self.costs.exit_price(trade.signal.direction, exit_price)
-                gross_pnl = self._pnl(trade, exit_price)
+                adjusted_exit = self.costs.exit_price(trade.signal.direction, exit_price)
+                gross_pnl = self._pnl(trade, adjusted_exit)
                 exit_commission = self.costs.commission(trade.total_amount)
-                net_pnl = gross_pnl - exit_commission - trade.funding_cost
+                net_pnl = (
+                    gross_pnl
+                    - trade.entry_commission
+                    - exit_commission
+                    - trade.funding_cost
+                )
                 equity += gross_pnl - exit_commission
-                trades.append(self._trade_record(symbol, trade, bar, exit_price, net_pnl, exit_commission, reason))
+                trades.append(
+                    self._trade_record(
+                        symbol,
+                        trade,
+                        bar,
+                        adjusted_exit,
+                        net_pnl,
+                        exit_commission,
+                        reason,
+                    )
+                )
             open_trades = remaining
             equity_curve.append(equity)
 
@@ -92,7 +113,12 @@ class BacktestEngine:
             snapshots = self._snapshots_at(symbol, candles, decision_time)
             if snapshots is not None:
                 try:
-                    signal = evaluate_strategy(snapshots["1d"], snapshots["4h"], snapshots["1h"], snapshots["15m"])
+                    signal = evaluate_strategy(
+                        snapshots["1d"],
+                        snapshots["4h"],
+                        snapshots["1h"],
+                        snapshots["15m"],
+                    )
                     if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
                         pending_signal = signal
                     else:
@@ -106,9 +132,24 @@ class BacktestEngine:
                 exit_price = self.costs.exit_price(trade.signal.direction, final_bar.close)
                 gross_pnl = self._pnl(trade, exit_price)
                 exit_commission = self.costs.commission(trade.total_amount)
-                net_pnl = gross_pnl - exit_commission - trade.funding_cost
+                net_pnl = (
+                    gross_pnl
+                    - trade.entry_commission
+                    - exit_commission
+                    - trade.funding_cost
+                )
                 equity += gross_pnl - exit_commission
-                trades.append(self._trade_record(symbol, trade, final_bar, exit_price, net_pnl, exit_commission, "END_OF_TEST"))
+                trades.append(
+                    self._trade_record(
+                        symbol,
+                        trade,
+                        final_bar,
+                        exit_price,
+                        net_pnl,
+                        exit_commission,
+                        "END_OF_TEST",
+                    )
+                )
             open_trades = []
             equity_curve.append(equity)
 
@@ -129,50 +170,85 @@ class BacktestEngine:
         )
 
     @staticmethod
-    def _prepare(symbol: str, source: dict[str, list[Candle]]) -> dict[str, list[Candle]]:
+    def _prepare(
+        symbol: str, source: dict[str, list[Candle]]
+    ) -> dict[str, list[Candle]]:
         missing = set(_TIMEFRAME_MINUTES) - set(source)
         if missing:
             raise ValueError(f"Missing required timeframes: {sorted(missing)}")
         prepared: dict[str, list[Candle]] = {}
         for timeframe in _TIMEFRAME_MINUTES:
-            rows = sorted((c for c in source[timeframe] if c.symbol == symbol), key=lambda c: c.timestamp)
+            rows = sorted(
+                (candle for candle in source[timeframe] if candle.symbol == symbol),
+                key=lambda candle: candle.timestamp,
+            )
             if not rows:
                 raise ValueError(f"No candles for {symbol} at {timeframe}")
             prepared[timeframe] = rows
         return prepared
 
-    def _snapshots_at(self, symbol: str, candles: dict[str, list[Candle]], decision_time: datetime) -> dict[str, MarketSnapshot] | None:
+    def _snapshots_at(
+        self,
+        symbol: str,
+        candles: dict[str, list[Candle]],
+        decision_time: datetime,
+    ) -> dict[str, MarketSnapshot] | None:
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
             duration = self._duration(timeframe)
-            completed = [c for c in candles[timeframe] if c.timestamp + duration <= decision_time]
+            completed = [
+                candle
+                for candle in candles[timeframe]
+                if candle.timestamp + duration <= decision_time
+            ]
             if len(completed) < 2:
                 return None
             snapshots[timeframe] = analyze_market(symbol, timeframe, completed)
         return snapshots
 
-    def _open_trade(self, signal: StrategySignal, bar: Candle, equity: Decimal, existing: list[_OpenTrade]) -> _OpenTrade | None:
+    def _open_trade(
+        self,
+        signal: StrategySignal,
+        bar: Candle,
+        equity: Decimal,
+        existing: list[_OpenTrade],
+    ) -> _OpenTrade | None:
         entry = self.costs.entry_price(signal.direction, bar.open)
         distance = abs(entry - signal.stop_loss) / entry
         if distance <= 0 or signal.stop_loss <= 0:
             return None
-        risk_cash = equity * self.config.risk_per_trade_percent / Decimal("100")
-        current_risk = sum(self._risk_cash(t) for t in existing)
-        if current_risk + risk_cash > equity * self.config.max_aggregate_risk_percent / Decimal("100"):
+        risk_cash = risk_budget_amount(equity, self.config.risk_per_trade_percent)
+        current_risk = sum((self._risk_cash(trade) for trade in existing), Decimal("0"))
+        aggregate_budget = risk_budget_amount(equity, self.config.max_aggregate_risk_percent)
+        if current_risk + risk_cash > aggregate_budget:
             return None
         amount = risk_cash / distance
-        current_capital = sum(t.total_amount for t in existing)
-        if current_capital + amount > equity * self.config.max_futures_capital_percent / Decimal("100"):
+        current_capital = sum((trade.total_amount for trade in existing), Decimal("0"))
+        max_capital = risk_budget_amount(equity, self.config.max_futures_capital_percent)
+        if current_capital + amount > max_capital:
             return None
         leverage = Decimal("1")
         quantity = amount / entry
         commission = self.costs.commission(amount)
-        return _OpenTrade(str(uuid4()), signal, bar.timestamp, entry, quantity, amount, leverage, commission)
+        return _OpenTrade(
+            str(uuid4()),
+            signal,
+            bar.timestamp,
+            entry,
+            quantity,
+            amount,
+            leverage,
+            commission,
+        )
 
     @staticmethod
     def _risk_cash(trade: _OpenTrade) -> Decimal:
-        distance = abs(trade.entry_price - trade.signal.stop_loss) / trade.entry_price
-        return trade.total_amount * distance * trade.leverage
+        return candidate_risk_amount(
+            total_amount=trade.total_amount,
+            entry=trade.entry_price,
+            stop_loss=trade.signal.stop_loss,
+            leverage=trade.leverage,
+        )
 
     @staticmethod
     def _pnl(trade: _OpenTrade, exit_price: Decimal) -> Decimal:
@@ -204,7 +280,15 @@ class BacktestEngine:
         return self.costs.exit_price(direction, price)
 
     @staticmethod
-    def _trade_record(symbol: str, trade: _OpenTrade, bar: Candle, exit_price: Decimal, net_pnl: Decimal, exit_commission: Decimal, reason: str) -> TradeRecord:
+    def _trade_record(
+        symbol: str,
+        trade: _OpenTrade,
+        bar: Candle,
+        exit_price: Decimal,
+        net_pnl: Decimal,
+        exit_commission: Decimal,
+        reason: str,
+    ) -> TradeRecord:
         return TradeRecord(
             position_id=trade.position_id,
             symbol=symbol,
