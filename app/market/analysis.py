@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from app.data.market_data import Candle
+from app.market.advanced_structure import AdvancedStructureResult, analyze_advanced_structure
 from app.market.indicators import IndicatorSnapshot, build_snapshot
 from app.market.liquidity import LiquidityResult, analyze_liquidity
 from app.market.regime import RegimeResult, classify_regime
@@ -18,6 +19,7 @@ class MarketSnapshot:
     indicators: IndicatorSnapshot
     trend: TrendResult
     structure: StructureResult
+    advanced_structure: AdvancedStructureResult
     regime: RegimeResult
     liquidity: LiquidityResult
     score: Decimal
@@ -25,13 +27,17 @@ class MarketSnapshot:
 
 def analyze_market(symbol: str, timeframe: str, candles: list[Candle]) -> MarketSnapshot:
     trend = analyze_trend(candles)
+    structure = analyze_structure(candles)
+    advanced = analyze_advanced_structure(candles)
+    liquidity = analyze_liquidity(candles)
     return MarketSnapshot(
         symbol=symbol,
         timeframe=timeframe,
         indicators=build_snapshot(candles),
         trend=trend,
-        structure=analyze_structure(candles),
+        structure=structure,
+        advanced_structure=advanced,
         regime=classify_regime(candles, trend),
-        liquidity=analyze_liquidity(candles),
-        score=(trend.score + analyze_structure(candles).score + analyze_liquidity(candles).score) / Decimal("3"),
+        liquidity=liquidity,
+        score=(trend.score + advanced.score + liquidity.score) / Decimal("3"),
     )
