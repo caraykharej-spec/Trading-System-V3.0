@@ -19,10 +19,10 @@ class MarketSnapshot:
     indicators: IndicatorSnapshot
     trend: TrendResult
     structure: StructureResult
-    advanced_structure: AdvancedStructureResult
     regime: RegimeResult
     liquidity: LiquidityResult
     score: Decimal
+    advanced_structure: AdvancedStructureResult | None = None
 
 
 def analyze_market(symbol: str, timeframe: str, candles: list[Candle]) -> MarketSnapshot:
@@ -36,8 +36,8 @@ def analyze_market(symbol: str, timeframe: str, candles: list[Candle]) -> Market
         indicators=build_snapshot(candles),
         trend=trend,
         structure=structure,
-        advanced_structure=advanced,
         regime=classify_regime(candles, trend),
         liquidity=liquidity,
         score=(trend.score + advanced.score + liquidity.score) / Decimal("3"),
+        advanced_structure=advanced,
     )
