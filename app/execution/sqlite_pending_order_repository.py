@@ -19,13 +19,11 @@ class SQLitePendingOrderRepository(PendingOrderRepository):
 
     def list_active(self) -> list[PendingOrder]:
         rows = self.connection.execute(
-            """SELECT order_id, accepted_at, updated_at, cancel_reason, rejection_reason
-               FROM pending_orders WHERE status = ? ORDER BY accepted_at, order_id""",
+            "SELECT order_id, accepted_at, updated_at, cancel_reason, rejection_reason "
+            "FROM pending_orders WHERE status = ? ORDER BY accepted_at, order_id",
             (OrderStatus.ACCEPTED.value,),
         ).fetchall()
         result: list[PendingOrder] = []
-        from .order_repository import OrderRepository
-        raise_if_missing = False
         for row in rows:
             order_row = self.connection.execute(
                 """SELECT order_id, symbol, side, order_type, quantity, requested_price,
@@ -42,18 +40,15 @@ class SQLitePendingOrderRepository(PendingOrderRepository):
                 take_profit=Decimal(str(order_row[7])) if order_row[7] is not None else None,
                 leverage=Decimal(str(order_row[8])), created_at=datetime.fromisoformat(str(order_row[9])),
             )
-            result.append(PendingOrder(
-                order=order,
-                status=OrderStatus.ACCEPTED,
-                accepted_at=datetime.fromisoformat(str(row[1])),
-                updated_at=datetime.fromisoformat(str(row[2])),
-                cancel_reason=row[3], rejection_reason=row[4],
-            ))
+            result.append(PendingOrder(order=order, status=OrderStatus.ACCEPTED,
+                                       accepted_at=datetime.fromisoformat(str(row[1])),
+                                       updated_at=datetime.fromisoformat(str(row[2])),
+                                       cancel_reason=row[3], rejection_reason=row[4]))
         return result
 
     def save(self, order: PendingOrder) -> None:
         if order.status not in {OrderStatus.ACCEPTED, OrderStatus.REJECTED, OrderStatus.CANCELLED}:
-            raise ValueError("pending repository accepts only pending terminal/accepted states")
+            raise ValueError("pending repository accepts only accepted/rejected/cancelled states")
         if not self.connection.execute("SELECT 1 FROM orders WHERE order_id = ?", (order.order.order_id,)).fetchone():
             raise ValueError(f"Unknown order: {order.order.order_id}")
         self.connection.execute(
