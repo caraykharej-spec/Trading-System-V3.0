@@ -6,7 +6,8 @@ from decimal import Decimal
 
 import pytest
 
-from app.backtest.models import BacktestResult
+from app.backtest.models import BacktestConfig, BacktestResult
+from app.research.backtest_adapter import BacktestResearchEvaluator
 from app.research.engine import ResearchRunner
 from app.research.models import (
     DatasetRole,
@@ -57,6 +58,10 @@ def _spec(**kwargs: object) -> ExperimentSpec:
     }
     base.update(kwargs)
     return ExperimentSpec(**base)  # type: ignore[arg-type]
+
+
+def _empty_datasets() -> dict[DatasetRole, dict[str, list[object]]]:
+    return {role: {} for role in DatasetRole}
 
 
 def test_parameter_space_grid_is_deterministic_and_never_silently_truncates() -> None:
@@ -112,7 +117,27 @@ def test_research_selects_on_validation_and_evaluates_oos_once() -> None:
     assert result.best_trial.parameters.get("threshold") == 3
     assert result.best_trial.validation_objective == Decimal("6")
     assert result.oos_objective == Decimal("9")
+    assert result.oos_error is None
     assert calls == Counter({DatasetRole.TRAIN: 3, DatasetRole.VALIDATION: 3, DatasetRole.OOS: 1})
+
+
+def test_final_oos_failure_is_recorded_without_reselecting_parameters() -> None:
+    calls: Counter[DatasetRole] = Counter()
+
+    def evaluator(parameters: ParameterSet, seed: int, role: DatasetRole) -> BacktestResult:
+        del seed
+        calls[role] += 1
+        if role is DatasetRole.OOS:
+            raise ValueError("sealed OOS feed failed")
+        return _result(Decimal(parameters.get("threshold")))
+
+    result = ResearchRunner(evaluator).run(_spec(), _space())
+    assert result.best_trial is not None
+    assert result.best_trial.parameters.get("threshold") == 3
+    assert result.oos_result is None
+    assert result.oos_objective is None
+    assert result.oos_error == "OOS_VALUEERROR"
+    assert calls[DatasetRole.OOS] == 1
 
 
 def test_constraints_reject_before_validation_and_keep_reason() -> None:
@@ -217,3 +242,43 @@ def test_sqlite_registry_round_trip_and_idempotency() -> None:
     assert stored.oos_objective == Decimal("3")
     assert registry.save(result) is False
     assert connection.execute("SELECT COUNT(*) FROM research_trials").fetchone()[0] == 3
+
+
+def test_backtest_adapter_requires_explicit_valid_bindings() -> None:
+    datasets = _empty_datasets()
+    adapter = BacktestResearchEvaluator(
+        symbol="BTC/USDT",
+        datasets=datasets,  # type: ignore[arg-type]
+        base_config=BacktestConfig(),
+        bindings={"fee": "commission_percent", "short": "allow_short"},
+    )
+    projected = adapter.config_for(
+        ParameterSet.from_mapping({"fee": Decimal("0.15"), "short": False})
+    )
+    assert projected.commission_percent == Decimal("0.15")
+    assert projected.allow_short is False
+    assert adapter.config_for(ParameterSet.from_mapping({})).commission_percent == Decimal("0")
+    with pytest.raises(ValueError, match="unbound"):
+        adapter.config_for(ParameterSet.from_mapping({"other": Decimal("1")}))
+    with pytest.raises(ValueError, match="must be bool"):
+        adapter.config_for(ParameterSet.from_mapping({"short": "false"}))
+    with pytest.raises(ValueError, match="numeric, not bool"):
+        adapter.config_for(ParameterSet.from_mapping({"fee": True}))
+
+
+def test_backtest_adapter_rejects_unknown_fields_and_missing_dataset_roles() -> None:
+    datasets = _empty_datasets()
+    with pytest.raises(ValueError, match="unknown BacktestConfig fields"):
+        BacktestResearchEvaluator(
+            symbol="BTC/USDT",
+            datasets=datasets,  # type: ignore[arg-type]
+            base_config=BacktestConfig(),
+            bindings={"x": "not_a_field"},
+        )
+    with pytest.raises(ValueError, match="missing research datasets"):
+        BacktestResearchEvaluator(
+            symbol="BTC/USDT",
+            datasets={DatasetRole.TRAIN: {}},  # type: ignore[arg-type]
+            base_config=BacktestConfig(),
+            bindings={},
+        )
