@@ -5,7 +5,12 @@ from typing import Protocol
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.http import ProviderError
-from app.data.quality import default_candle_max_age_seconds, detect_price_outliers, validate_candles, validate_live_price
+from app.data.quality import (
+    default_candle_max_age_seconds,
+    detect_price_outliers,
+    validate_candles,
+    validate_live_price,
+)
 from app.data.reliability import CircuitBreaker, call_with_retry
 
 
@@ -13,7 +18,15 @@ class MarketProvider(Protocol):
     name: str
 
     def get_live_price(self, symbol: str) -> LivePrice: ...
+
     def get_candles(self, request: MarketDataRequest) -> list[Candle]: ...
+
+
+@dataclass(frozen=True)
+class ProviderCircuitStatus:
+    name: str
+    circuit_open: bool
+    consecutive_failures: int
 
 
 @dataclass
@@ -24,6 +37,7 @@ class ProviderRouter:
     retry_backoff_seconds: float = 0.1
     circuit_failure_threshold: int = 3
     circuit_recovery_seconds: float = 30.0
+    allow_session_gap_providers: tuple[str, ...] = ("yahoo",)
     _circuits: dict[str, CircuitBreaker] = field(default_factory=dict, init=False)
 
     def _breaker(self, provider: MarketProvider) -> CircuitBreaker:
@@ -34,6 +48,21 @@ class ProviderRouter:
                 recovery_seconds=self.circuit_recovery_seconds,
             )
         return self._circuits[name]
+
+    def health_snapshot(self) -> tuple[ProviderCircuitStatus, ...]:
+        """Return passive circuit state without making network requests."""
+        result: list[ProviderCircuitStatus] = []
+        for provider in self.providers:
+            name = getattr(provider, "name", provider.__class__.__name__)
+            breaker = self._breaker(provider)
+            result.append(
+                ProviderCircuitStatus(
+                    name=name,
+                    circuit_open=breaker.is_open,
+                    consecutive_failures=breaker.health.consecutive_failures,
+                )
+            )
+        return tuple(result)
 
     def get_live_price(self, symbol: str, *, now=None) -> LivePrice:
         errors: list[str] = []
@@ -55,7 +84,9 @@ class ProviderRouter:
             except Exception as exc:
                 breaker.record_failure()
                 errors.append(f"{name}: {exc}")
-        raise ProviderError(f"No provider returned reliable live price for {symbol}; {' | '.join(errors)}")
+        raise ProviderError(
+            f"No provider returned reliable live price for {symbol}; {' | '.join(errors)}"
+        )
 
     def get_candles(
         self,
@@ -83,6 +114,7 @@ class ProviderRouter:
                     expected_timeframe=request.timeframe,
                     max_age_seconds=freshness,
                     now=now,
+                    allow_session_gaps=name.lower() in self.allow_session_gap_providers,
                 ).merge(detect_price_outliers(candles))
                 if not quality.valid:
                     raise ProviderError("; ".join(quality.reasons))
@@ -91,4 +123,6 @@ class ProviderRouter:
             except Exception as exc:
                 breaker.record_failure()
                 errors.append(f"{name}: {exc}")
-        raise ProviderError(f"No provider returned reliable candles for {request.symbol}; {' | '.join(errors)}")
+        raise ProviderError(
+            f"No provider returned reliable candles for {request.symbol}; {' | '.join(errors)}"
+        )
