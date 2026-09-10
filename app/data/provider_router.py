@@ -57,7 +57,13 @@ class ProviderRouter:
                 errors.append(f"{name}: {exc}")
         raise ProviderError(f"No provider returned reliable live price for {symbol}; {' | '.join(errors)}")
 
-    def get_candles(self, request: MarketDataRequest, *, max_age_seconds: int | None = None) -> list[Candle]:
+    def get_candles(
+        self,
+        request: MarketDataRequest,
+        *,
+        max_age_seconds: int | None = None,
+        now=None,
+    ) -> list[Candle]:
         errors: list[str] = []
         for provider in self.providers:
             name = getattr(provider, "name", provider.__class__.__name__)
@@ -73,6 +79,7 @@ class ProviderRouter:
                     candles,
                     expected_timeframe=request.timeframe,
                     max_age_seconds=max_age_seconds,
+                    now=now,
                 ).merge(detect_price_outliers(candles))
                 if not quality.valid:
                     raise ProviderError("; ".join(quality.reasons))
