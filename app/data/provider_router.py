@@ -12,6 +12,7 @@ from app.data.quality import (
     validate_live_price,
 )
 from app.data.reliability import CircuitBreaker, call_with_retry
+from app.universe.symbol_mapping import SymbolMappingError
 
 
 class MarketProvider(Protocol):
@@ -81,6 +82,8 @@ class ProviderRouter:
                     raise ProviderError("; ".join(quality.reasons))
                 breaker.record_success()
                 return result
+            except SymbolMappingError as exc:
+                errors.append(f"{name}: unsupported symbol ({exc})")
             except Exception as exc:
                 breaker.record_failure()
                 errors.append(f"{name}: {exc}")
@@ -120,6 +123,8 @@ class ProviderRouter:
                     raise ProviderError("; ".join(quality.reasons))
                 breaker.record_success()
                 return candles
+            except SymbolMappingError as exc:
+                errors.append(f"{name}: unsupported symbol ({exc})")
             except Exception as exc:
                 breaker.record_failure()
                 errors.append(f"{name}: {exc}")
