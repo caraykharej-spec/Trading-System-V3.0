@@ -5,7 +5,7 @@ from typing import Protocol
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.http import ProviderError
-from app.data.quality import detect_price_outliers, validate_candles, validate_live_price
+from app.data.quality import default_candle_max_age_seconds, detect_price_outliers, validate_candles, validate_live_price
 from app.data.reliability import CircuitBreaker, call_with_retry
 
 
@@ -65,6 +65,9 @@ class ProviderRouter:
         now=None,
     ) -> list[Candle]:
         errors: list[str] = []
+        freshness = max_age_seconds
+        if freshness is None and request.timeframe is not None:
+            freshness = default_candle_max_age_seconds(request.timeframe)
         for provider in self.providers:
             name = getattr(provider, "name", provider.__class__.__name__)
             breaker = self._breaker(provider)
@@ -78,7 +81,7 @@ class ProviderRouter:
                 quality = validate_candles(
                     candles,
                     expected_timeframe=request.timeframe,
-                    max_age_seconds=max_age_seconds,
+                    max_age_seconds=freshness,
                     now=now,
                 ).merge(detect_price_outliers(candles))
                 if not quality.valid:
