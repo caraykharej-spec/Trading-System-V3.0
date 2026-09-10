@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic, sleep
 from typing import Callable, TypeVar
 
@@ -21,7 +21,7 @@ class CircuitOpenError(RuntimeError):
 class CircuitBreaker:
     failure_threshold: int = 3
     recovery_seconds: float = 30.0
-    health: ProviderHealth = ProviderHealth()
+    health: ProviderHealth = field(default_factory=ProviderHealth)
 
     def __post_init__(self) -> None:
         if self.failure_threshold < 1 or self.recovery_seconds < 0:
