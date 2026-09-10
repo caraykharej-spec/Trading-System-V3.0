@@ -13,13 +13,22 @@ class BiQuoteCalendarProvider:
 
     name = "biquote_calendar"
 
-    def __init__(self, base_url: str = "https://biquote.io/api/calendar", timeout: float = 10.0) -> None:
+    def __init__(
+        self,
+        base_url: str = "https://biquote.io/api/calendar",
+        timeout: float = 10.0,
+    ) -> None:
         self.base_url = base_url
         self.timeout = timeout
 
     def _fetch_json(self) -> object:
-        url = f"{self.base_url}?{urlencode({'from': 'yesterday', 'to': '+7 days'})}"
-        request = Request(url, headers={"User-Agent": "Trading-System-V3/3.0"})
+        url = (
+            f"{self.base_url}?"
+            f"{urlencode({'from': 'yesterday', 'to': '+7 days'})}"
+        )
+        request = Request(
+            url, headers={"User-Agent": "Trading-System-V3/3.0"}
+        )
         with urlopen(request, timeout=self.timeout) as response:
             return json.loads(response.read().decode("utf-8"))
 
@@ -50,20 +59,31 @@ class BiQuoteCalendarProvider:
         if value is None or value == "":
             return None
         try:
-            return float(value)
-        except (TypeError, ValueError):
+            return float(str(value))
+        except ValueError:
             return None
 
     def fetch(self, *, limit: int = 100) -> list[EconomicEvent]:
         if limit < 1:
             raise ValueError("limit must be positive")
         payload = self._fetch_json()
-        rows = payload if isinstance(payload, list) else payload.get("data", []) if isinstance(payload, dict) else []
+        rows: object
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("data", [])
+        else:
+            rows = []
+        if not isinstance(rows, list):
+            return []
+
         result: list[EconomicEvent] = []
         for row in rows[:limit]:
             if not isinstance(row, dict):
                 continue
-            event_time = self._dt(row.get("date") or row.get("eventTime") or row.get("time"))
+            event_time = self._dt(
+                row.get("date") or row.get("eventTime") or row.get("time")
+            )
             if event_time is None:
                 continue
             name = str(row.get("name") or row.get("title") or "").strip()
@@ -71,6 +91,23 @@ class BiQuoteCalendarProvider:
                 continue
             country = str(row.get("country") or "").strip()
             currency = str(row.get("currency") or "").strip() or None
-            event_id = str(row.get("id") or f"{event_time.isoformat()}:{name}:{country}")
-            result.append(EconomicEvent(event_id=event_id, name=name, event_time=event_time, country=country, currency=currency, importance=self._importance(row.get("importance") or row.get("impact")), actual=self._number(row.get("actual")), forecast=self._number(row.get("forecast")), previous=self._number(row.get("previous"))))
+            event_id = str(
+                row.get("id")
+                or f"{event_time.isoformat()}:{name}:{country}"
+            )
+            result.append(
+                EconomicEvent(
+                    event_id=event_id,
+                    name=name,
+                    event_time=event_time,
+                    country=country,
+                    currency=currency,
+                    importance=self._importance(
+                        row.get("importance") or row.get("impact")
+                    ),
+                    actual=self._number(row.get("actual")),
+                    forecast=self._number(row.get("forecast")),
+                    previous=self._number(row.get("previous")),
+                )
+            )
         return result
