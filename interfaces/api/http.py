@@ -65,7 +65,7 @@ class TradingHttpHandler(BaseHTTPRequestHandler):
 def create_server(host: str, port: int, service_factory: Callable[[], TradingApiService]) -> ThreadingHTTPServer:
     if not host:
         raise ValueError("host must not be empty")
-    if port < 1 or port > 65535:
-        raise ValueError("port must be between 1 and 65535")
+    if port < 0 or port > 65535:
+        raise ValueError("port must be between 0 and 65535")
     handler = type("ConfiguredTradingHttpHandler", (TradingHttpHandler,), {"service_factory": staticmethod(service_factory)})
     return ThreadingHTTPServer((host, port), handler)
