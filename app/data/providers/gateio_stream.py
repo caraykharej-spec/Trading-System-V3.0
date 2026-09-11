@@ -40,6 +40,13 @@ def _coerce_positive_int(value: object) -> int | None:
     return parsed if parsed > 0 else None
 
 
+def _normalize_subscription_name(value: str) -> str:
+    interval, separator, pair = value.partition("_")
+    if not separator or not interval or not pair:
+        return value
+    return f"{interval.lower()}_{pair.upper()}"
+
+
 @dataclass(frozen=True)
 class GateIOCandleSubscription:
     canonical_symbol: str
@@ -90,7 +97,9 @@ class GateIOWebSocketCandleSource:
         self._connection: WebSocketConnection | None = None
         self._handler: Callable[[CandleStreamEvent], None] | None = None
         self._by_name = {
-            f"{item.timeframe}_{item.provider_symbol.upper()}": item
+            _normalize_subscription_name(
+                f"{item.timeframe}_{item.provider_symbol}"
+            ): item
             for item in subscriptions
         }
 
@@ -187,7 +196,7 @@ class GateIOWebSocketCandleSource:
         result = payload.get("result")
         if not isinstance(result, dict):
             return None
-        name = str(result.get("n") or "").upper()
+        name = _normalize_subscription_name(str(result.get("n") or ""))
         subscription = self._by_name.get(name)
         if subscription is None:
             return None
