@@ -115,6 +115,22 @@ This prevents parallel models such as multiple portfolio states, execution model
 6. Merge Phase 36 to `main` only after CI success.
 7. Require the global CI check for future merges through branch protection/rulesets.
 
+## Verified CI recovery result
+
+Global CI was recovered on the Phase 36 consolidation line without weakening the strict typing gate or lowering the coverage threshold.
+
+Verified result on GitHub Actions:
+
+- Python compile gate: **PASS**
+- Ruff lint/import-order gate: **PASS**
+- Strict mypy: **PASS — 0 issues in 248 source files**
+- Full pytest suite: **PASS — 285 tests**
+- Branch-aware coverage: **78.24%**
+- Required coverage threshold: **70%**
+- CI run: **success**
+
+The original strict-mypy failure set was reduced from 182 errors across 63 files to zero. The pytest collection collision between duplicate test basenames was fixed with pytest `importlib` import mode; no tests were deleted or excluded to obtain the green result.
+
 ## Source-of-truth decision
 
 After Phase 36 merges:
@@ -123,6 +139,19 @@ After Phase 36 merges:
 - Phase 29–31 branches are historical reference branches and must not be merged wholesale.
 - Phase 32–35 functionality is represented by the consolidated `main` history.
 - New feature work must branch from current `main`.
+
+## Main protection gate
+
+Phase 36 requires `main` to reject merges unless the global CI check is green. The connected GitHub integration used for this consolidation can read branch-protection/ruleset state but does not expose administration write access for protection/ruleset mutation. Therefore protection must be enabled through repository administration after the consolidated commit is green on `main`.
+
+Required policy:
+
+- protect `main`;
+- require pull requests before merging;
+- require the global `CI / quality` status check;
+- require branches to be up to date before merging;
+- block force pushes and branch deletion;
+- do not allow bypass of required checks for normal merges.
 
 ## Safety boundary
 
