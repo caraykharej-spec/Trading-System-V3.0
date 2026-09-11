@@ -1,22 +1,35 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, the Phase 40 evidence-grounded trading copilot, and the Phase 41 grounded conversation/orchestration layer. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, the Phase 40 evidence-grounded trading copilot, the Phase 41 grounded conversation/orchestration layer, and the Phase 42 production LLM provider/assistant observability boundary. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 41 — Grounded LLM Conversation & Assistant Orchestration: IMPLEMENTED AND CI-VALIDATED**
+**Phase 42 — Production LLM Provider Integration & Assistant Observability: IMPLEMENTED AND CI-VALIDATED**
 
-Phase 41 adds a provider-neutral conversation layer above the Phase 40 copilot contract. It performs deterministic intent routing, builds bounded evidence bundles with stable citation IDs, supports limited in-memory follow-up context, and optionally delegates narration to a `GroundedLanguageModel` implementation. Model output is accepted only when citations are valid and visibly present; invalid, uncited, execution-oriented, or failed model responses fall back to deterministic copilot explanations.
+Phase 42 adds an optional production LLM adapter above the Phase 41 `GroundedLanguageModel` contract, reliability controls, bounded content-free telemetry, a read-only assistant metrics endpoint, and an explicit production market-data source policy.
 
-Verified Phase 41 implementation validation:
+Verified Phase 42 implementation validation:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 283 source files**
-- Full pytest suite: **PASS — 319 tests**
-- Branch-aware coverage: **79.61%** (required threshold: 70%)
+- Strict mypy: **PASS — 0 issues in 288 source files**
+- Full pytest suite: **PASS — 329 tests**
+- Branch-aware coverage: **79.42%** (required threshold: 70%)
 
-Phase 41 does **not** hard-code or auto-enable an external LLM provider, and it does not add execution authority. The model boundary is an injectable protocol; without a configured model the assistant remains fully deterministic. Every assistant response sets `execution_authority = False`, and the assistant cannot submit orders, alter risk sizing, convert rejected/held candidates into trades, or bypass context, strategy qualification, core risk, portfolio, readiness, circuit-breaker, connector, or Phase 35 live-operation gates.
+The Phase 42 external-model path is **disabled by default**. When intentionally enabled, the current provider adapter targets the OpenAI Responses API through a provider-specific boundary, requires `OPENAI_API_KEY` from the environment, enforces a model allowlist, bounded prompt/output sizes, timeout, retry and circuit-breaker behavior, and still inherits Phase 41 citation validation and deterministic fallback. No API key is stored in the repository. CI uses an injected fake transport; the repository does not claim that a paid external model call was executed during CI.
+
+Production market-data ownership is now explicit:
+
+```text
+Live price       → Storm only
+OHLCV primary    → Gate.io
+OHLCV fallback   → Yahoo Finance
+Storm OHLCV      → disabled until a verified candle endpoint is available
+```
+
+This removes Gate.io/Yahoo as silent live-price fallbacks from the application composition root while preserving the existing Gate.io → Yahoo OHLCV fallback path.
+
+Phase 42 does **not** add execution authority. Assistant/LLM responses remain evidence-only and cannot submit orders, alter risk sizing, change deterministic gate outcomes, or activate live trading.
 
 Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
 
@@ -29,12 +42,13 @@ See:
 - `docs/phases/PHASE_39_MARKET_INTELLIGENCE_CONTEXT_ENGINE_V2.md`
 - `docs/phases/PHASE_40_TRADING_ASSISTANT_COPILOT_LAYER.md`
 - `docs/phases/PHASE_41_GROUNDED_LLM_CONVERSATION_ORCHESTRATION.md`
+- `docs/phases/PHASE_42_PRODUCTION_LLM_PROVIDER_ASSISTANT_OBSERVABILITY.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
 - `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
 ## Architecture principles
 
-- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, assistant orchestration, and presentation are separate concerns.
+- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, assistant orchestration, model-provider integration, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
@@ -43,7 +57,10 @@ See:
 - Copilot output is evidence-only and may not invent missing values or own trading decisions.
 - LLM narration may consume only bounded grounded evidence and must expose provenance through valid citation IDs.
 - Missing or unsupported information remains `UNKNOWN`; conversation state never substitutes for fresh trading evidence.
+- Model-provider failures degrade to deterministic assistant behavior rather than changing trading decisions.
+- Assistant telemetry excludes prompt text, response text, evidence values, session identifiers and secrets.
 - Live execution is fail-closed and requires explicit production activation.
+- Market-data source ownership is explicit: Storm for live price, Gate.io for primary OHLCV, Yahoo Finance as OHLCV fallback.
 - Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
 - Streaming transport is isolated behind provider contracts so venue-specific networking does not leak into scanner/strategy logic.
 - Open-position stop-loss monitoring runs at the beginning of every trading-state cycle after restart/recovery checks.
@@ -58,7 +75,7 @@ See:
 The repository includes these major domains:
 
 - `app/universe` — canonical instruments, provider mappings, dynamic discovery, eligibility, and contract specifications.
-- `app/data` — provider routing/failover, streaming ingestion, freshness, SLA, hot cache, candle building, historical OHLC persistence, quality, reconciliation, and reliability.
+- `app/data` — provider routing/failover, explicit source-role policy, streaming ingestion, freshness, SLA, hot cache, candle building, historical OHLC persistence, quality, reconciliation, and reliability.
 - `app/market` — indicators, trend, structure, liquidity, volatility/regime analysis.
 - `app/scanner` — market scanning and opportunity generation.
 - `app/context` — news/event policy plus Phase 39 intelligence normalization, deduplication, relevance, classification, confidence, macro enrichment, and historical impact evaluation.
@@ -69,12 +86,12 @@ The repository includes these major domains:
 - `app/position` and `app/portfolio` — position lifecycle, settlement, exposure, correlation, and account state.
 - `app/backtest` and `app/research` — backtesting, realistic costs, walk-forward, Monte Carlo, bounded research/optimization, and sensitivity analysis.
 - `app/copilot` — grounded opportunity explanations, source-labelled facts, gate outcomes, and read-only market briefs.
-- `app/assistant` — Phase 41 intent routing, evidence grounding, model protocol, citation validation, bounded conversation state, and fail-closed orchestration.
+- `app/assistant` — grounded routing/grounding/orchestration plus Phase 42 provider adapter, environment-backed runtime policy, retry/circuit breaker and content-free telemetry.
 - `app/journal`, `app/analytics`, and `app/reporting` — journaling, analytics, export/reporting foundations.
-- `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, and readiness monitoring.
+- `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, readiness and operational monitoring.
 - `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations and production validation gates.
 - `app/live_operation` — Phase 35 production-operation safety boundary.
-- `interfaces/api` — external API boundary, including read-only copilot routes and the grounded assistant query route.
+- `interfaces/api` — external API boundary, including copilot routes, grounded assistant query route and read-only assistant metrics.
 
 ## Quality gates
 
@@ -133,7 +150,7 @@ The initial policy is:
 - Minimum score: **90 / 100**
 - Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, assistant, or research code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, assistant, model-provider, or research code.
 
 ## Strategy evidence and qualification
 
@@ -196,9 +213,9 @@ GET /assistant/brief
 GET /assistant/opportunity?symbol=BTCUSD
 ```
 
-## Grounded conversation and LLM boundary
+## Grounded conversation and production LLM boundary
 
-Phase 41 adds conversation orchestration above the structured copilot contract:
+Phase 41 provides the grounded conversation contract; Phase 42 adds an optional production provider and reliability/observability wrapper:
 
 ```text
 User Query
@@ -213,25 +230,39 @@ Stable EvidenceCitation IDs
     ↓
 AssistantOrchestrator
     ├────────────→ deterministic answer
-    └────────────→ optional GroundedLanguageModel
+    └────────────→ ProductionLanguageModel
                          ↓
-               citation/output validation
+                retry / circuit breaker
+                         ↓
+                OpenAIResponsesModel
+                         ↓
+                citation/output validation
                          ↓
              model answer or safe fallback
 ```
 
-Supported routing includes market brief, symbol explanation, rejection/hold reason, risk summary, help, and `UNKNOWN`. Session context is bounded and retains only recent user queries plus routed symbol/intent; fresh copilot evidence is reloaded for every request.
+The provider path is optional and disabled by default. Configuration is loaded from environment variables; the OpenAI secret is read only from `OPENAI_API_KEY` when the feature is intentionally enabled. The adapter receives no execution tools or callbacks.
 
-The optional model must return citation IDs that were supplied in its prompt and include them visibly as `[citation_id]`. Unknown citation IDs, missing citations, duplicate citations, model errors, or execution-oriented phrases cause fail-closed fallback to deterministic output.
+Primary environment variables:
 
-Conversational API route:
+```text
+TRADING_ASSISTANT_LLM_ENABLED=0|1
+TRADING_ASSISTANT_LLM_PROVIDER=openai
+TRADING_ASSISTANT_LLM_MODEL=<allowlisted model>
+TRADING_ASSISTANT_LLM_ALLOWED_MODELS=<comma-separated allowlist>
+OPENAI_API_KEY=<environment secret; never commit>
+```
+
+Additional environment variables control timeout, prompt/output budgets, retry/backoff and circuit-breaker behavior.
+
+Assistant endpoints:
 
 ```text
 POST /assistant/query
-{"query": "Why was ETHUSD rejected?", "session_id": "mobile_1"}
+GET  /assistant/metrics
 ```
 
-No external provider SDK is hard-coded in Phase 41. A future provider adapter may implement `GroundedLanguageModel`, but the model has no strategy/risk/execution interface and cannot activate orders.
+`/assistant/metrics` exposes aggregate call/success/failure counts, token usage and average latency only. It does not expose prompts, responses, evidence values, sessions or secrets.
 
 ## Research boundary
 
@@ -245,34 +276,46 @@ Research remains reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research, qualification, intelligence, copilot, and assistant output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
+Research, qualification, intelligence, copilot, assistant, and model-provider output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources and production data boundary
 
 The V3 source boundary currently contains adapters for:
 
-- Storm
-- Gate.io
-- Yahoo Finance
+- Storm — authoritative application live-price source in the Phase 42 composition policy
+- Gate.io — primary OHLCV source
+- Yahoo Finance — OHLCV fallback
 - Public/free context sources under `app/context`
 
 Pyth is deliberately excluded from the current V3 architecture.
 
 The configured universe is not hard-coded by asset count; canonical instruments, provider mappings, and contract specifications are loaded from configuration. Phase 37 additionally defines provider metadata discovery through `DynamicUniverseDiscovery` so supported markets can be reconciled into the canonical registry when a venue-specific discovery adapter is supplied.
 
-The production market-data read path is:
+The role-specific application read paths are:
 
 ```text
-Hot Cache
-    ↓ miss
-Historical OHLC Store
-    ↓ miss
-ProviderRouter
+Live price request
     ↓
-Retry / Circuit Breaker / Quality Validation / Provider Failover
+Storm
+    ↓
+Freshness / quality validation
+    ↓
+Runtime / PAPER execution / risk consumers
+
+OHLCV request
+    ↓
+Gate.io
+    ↓ failure / unsupported / invalid
+Yahoo Finance fallback
+    ↓
+Freshness / OHLC integrity / outlier validation
+    ↓
+Market analysis / strategy
 ```
 
-The streaming path is transport-neutral:
+Storm candle retrieval remains deliberately disabled until its OHLCV endpoint/contract is independently verified.
+
+The broader streaming path remains transport-neutral:
 
 ```text
 Venue Stream Adapter
