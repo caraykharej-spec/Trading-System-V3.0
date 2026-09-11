@@ -11,6 +11,8 @@ class LiveActivationRequest:
     risk_controls_ready: bool
     health_ready: bool
     connector_ready: bool
+    positions_synchronized: bool = True
+    critical_incidents_clear: bool = True
     explicit_live_enable: bool = False
 
 
@@ -37,6 +39,8 @@ class LiveActivationGate:
             "risk controls not ready": request.risk_controls_ready,
             "system health not ready": request.health_ready,
             "exchange connector not ready": request.connector_ready,
+            "position reconciliation not clean": request.positions_synchronized,
+            "critical incident still open": request.critical_incidents_clear,
             "explicit live enable required": request.explicit_live_enable,
         }
         failed = [reason for reason, passed in checks.items() if not passed]
