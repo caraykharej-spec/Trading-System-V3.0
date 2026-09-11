@@ -34,9 +34,15 @@ class StormReferenceUniverseProvider:
         assets: list[StormReferenceAsset] = []
         seen: set[str] = set()
         for record in self.provider.list_market_records():
-            market_type = self._string(record, "type", "marketType", "market_type").lower()
+            market_type = self._string(
+                record, "type", "marketType", "market_type"
+            ).lower()
             settlement = self._string(
-                record, "settlement", "settlementAsset", "settlement_asset"
+                record,
+                "settlementToken",
+                "settlement",
+                "settlementAsset",
+                "settlement_asset",
             ).lower()
             if market_type != self.required_type.lower():
                 continue
@@ -66,11 +72,18 @@ class StormReferenceUniverseProvider:
         return tuple(sorted(assets, key=lambda item: item.base_asset))
 
     @staticmethod
-    def _string(record: dict[str, Any], *keys: str) -> str:
-        for key in keys:
-            value = record.get(key)
-            if value not in (None, ""):
-                return str(value).strip()
+    def _config(record: dict[str, Any]) -> dict[str, Any]:
+        value = record.get("config")
+        return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _string(cls, record: dict[str, Any], *keys: str) -> str:
+        config = cls._config(record)
+        for source in (record, config):
+            for key in keys:
+                value = source.get(key)
+                if value not in (None, ""):
+                    return str(value).strip()
         return ""
 
     @classmethod
@@ -104,7 +117,7 @@ class StormReferenceUniverseProvider:
     def _extract_provider_symbol(
         cls, record: dict[str, Any], base: str, settlement: str
     ) -> str:
-        raw = cls._string(record, "symbol", "ticker", "market", "name", "id")
+        raw = cls._string(record, "ticker", "symbol", "market", "name", "id")
         if raw:
             return raw
         if not base:
