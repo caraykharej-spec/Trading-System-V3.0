@@ -47,9 +47,15 @@ Positions / Portfolio / Journal / Analytics
         ├──────────────→ Assistant Analytics (read-only)
         ↓
 Recovery / Observability / Health / Reporting
+        ↓
+TradingApiService
+        ↓
+FastAPI / ASGI Production Adapter
+        ↓
+Android / Web / Operator Client
 ```
 
-Copilot, assistant, assistant-analytics and external-model paths are explanatory/read-only. They do not own strategy, risk, portfolio or execution decisions.
+Copilot, assistant, assistant-analytics, external-model and API-presentation paths do not own strategy, risk, portfolio or execution decisions.
 
 ## Production market-data boundary
 
@@ -126,10 +132,10 @@ The invariant is enforced:
 G + Y + U = N
 ```
 
-The report also exposes resolved count, coverage percentage and per-asset source/reason/proximity evidence. The read-only endpoint is:
+The report also exposes resolved count, coverage percentage and per-asset source/reason/proximity evidence. The versioned production endpoint is:
 
 ```text
-GET /market-data/universe-coverage
+GET /api/v1/market-data/universe-coverage
 ```
 
 No Storm asset is silently dropped because Gate.io or Yahoo Finance cannot provide an acceptable mapping.
@@ -302,7 +308,7 @@ Structural evidence-count requirements remain explicit baseline policy rather th
 
 ## Trading copilot and assistant boundary
 
-Phase 40 preserves deterministic gate evidence and exposes read-only explanations. Phases 41–42 add grounded conversation, optional external-model narration and content-free assistant telemetry. Phase 40.1 expands the evidence surface to positions, journal analytics, market change and bounded what-if simulation.
+Phase 40 preserves deterministic gate evidence and exposes read-only explanations. The earlier assistant Phase 41–42 sequence adds grounded conversation, optional external-model narration and content-free assistant telemetry. Phase 40.1 expands the evidence surface to positions, journal analytics, market change and bounded what-if simulation.
 
 ```text
 DecisionEvidence + Gate Trace ─→ CopilotExplainer ─→ Structured Copilot Brief ─┐
@@ -345,6 +351,50 @@ Rules:
 - assistant analytics cannot change stops, take-profit values, leverage, position size, risk budgets, orders or venue state;
 - all assistant responses have no execution authority.
 
+## Production FastAPI boundary
+
+The current API-roadmap Phase 41 promotes the external transport to FastAPI/ASGI while keeping `TradingApiService` as the application contract:
+
+```text
+Client / Android / Web
+        ↓
+TLS ingress / reverse proxy
+        ↓
+Uvicorn / ASGI
+        ↓
+FastAPI
+ ├── /api/v1 routing
+ ├── Pydantic validation
+ ├── API-key policy
+ ├── trusted hosts / CORS
+ ├── request IDs / security headers
+ ├── request-size guard
+ ├── process-local rate limiter
+ └── OpenAPI / structured errors
+        ↓
+serialized application worker
+ThreadPoolExecutor(max_workers=1)
+        ↓
+TradingApiService
+        ↓
+PAPER application + SQLite repositories
+```
+
+The serialized worker is an explicit compatibility boundary for the current SQLite-backed composition: the application is created, invoked and closed on the same worker thread while blocking application/provider calls stay off the ASGI event loop.
+
+Production API policy is fail-closed:
+
+- API-key authentication is mandatory in `production` mode;
+- production requires an explicit non-wildcard trusted-host allowlist;
+- CORS is disabled unless origins are explicitly configured;
+- API docs are disabled by default in production;
+- `/api/v1/runtime/cycle` is disabled by default and cannot be enabled without required API-key auth;
+- no live-order route exists.
+
+The Gate.io WebSocket is provider ingress, not a client transport. Phase 41 does not create a client SSE/WebSocket by independently polling application services. A future realtime client transport must consume a shared canonical application event/snapshot bus.
+
+Current FastAPI scaling assumption is one process/worker. SQLite state and the local rate limiter are not distributed; horizontal scale requires shared persistence/runtime coordination and ingress/distributed rate limiting first.
+
 ## Execution and live-operation boundary
 
 The active composition root remains PAPER/SHADOW. Phase 35 provides a fail-closed live-operation framework, but no venue-specific production execution connector is enabled by default.
@@ -369,7 +419,7 @@ Execution Gateway
 Venue-specific connector (disabled unless explicitly implemented/validated)
 ```
 
-Phase 38.1 changes validation-policy derivation only. Phase 40.1 changes assistant-side read-only analytics only. Neither alters strategy scoring, position sizing, portfolio risk, order submission, or any live-operation gate.
+Phase 38.1 changes validation-policy derivation only. Phase 40.1 changes assistant-side read-only analytics only. Phase 41 changes API transport/runtime policy only. None alters strategy scoring, position sizing, portfolio risk, order submission, or any live-operation gate.
 
 ## Domain ownership
 
@@ -390,8 +440,9 @@ Phase 38.1 changes validation-policy derivation only. Phase 40.1 changes assista
 | `app/assistant` | grounded conversation, read-only position/journal/market-change/what-if analytics, optional LLM provider/reliability and telemetry |
 | `app/journal` / `app/analytics` | authoritative trade journal and performance/risk analytics |
 | `app/recovery` / `app/observability` | restart/reconciliation, health and readiness |
+| `app/deployment_runtime` | runtime/deployment foundations plus API authentication and process-local rate-limit primitives |
 | `app/live_operation` | fail-closed production execution safety boundary |
-| `interfaces/api` | external read/control boundary, including grounded assistant query and read-only universe-coverage reporting |
+| `interfaces/api` | transport-independent `TradingApiService`, legacy stdlib adapter, FastAPI/ASGI production transport, schemas and runtime entry point |
 
 ## Source-of-truth rules
 
@@ -411,8 +462,11 @@ Phase 38.1 changes validation-policy derivation only. Phase 40.1 changes assista
 14. Insufficient calibration evidence produces `HOLD`; no downstream component may manufacture a calibrated policy from a failed report.
 15. Assistant analytics must cite authoritative position, journal or market-data evidence; missing inputs stay unavailable.
 16. What-if calculations are hypothetical, bounded and read-only and cannot mutate trading state or authorize execution.
-17. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
-18. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
+17. FastAPI delegates to `TradingApiService`; HTTP/ASGI handlers may not duplicate strategy, risk, portfolio or execution logic.
+18. Production API configuration fails closed when required authentication or trusted-host policy is missing.
+19. Current SQLite-backed API runtime stays single-process/single-application-worker until distributed state ownership is explicitly implemented.
+20. Strategy, context, intelligence, copilot, assistant and presentation/API layers cannot bypass deterministic risk/execution gates.
+21. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
 
 ## Current modes
 
@@ -434,7 +488,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 40.1 core feature-head validation passed: 0 mypy issues across 296 source files, 362 tests and 79.81% branch-aware coverage. The final documentation head, pull-request head and merged `main` commit must also pass the protected `CI / quality` gate before Assistant Analytics Expansion is closed.
+Phase 41 production-FastAPI core feature-head validation passed: 0 mypy issues across 300 source files, 375 tests and 79.54% branch-aware coverage. The final documentation head, pull-request head and merged `main` commit must also pass the protected `CI / quality` gate before Phase 41 is closed.
 
 ## Repository governance
 
