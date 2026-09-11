@@ -4,10 +4,15 @@ Keeps the core runtime independent while allowing the real V3 paper application
 composition root to expose its services through the core container.
 """
 
+from typing import TYPE_CHECKING
+
 from .container import TradingContainer
 
+if TYPE_CHECKING:
+    from app.application.composition import PaperApplication
 
-def build_core_container(application) -> TradingContainer:
+
+def build_core_container(application: "PaperApplication") -> TradingContainer:
     """Create a core container from a composed V3 application instance."""
     container = TradingContainer()
 
