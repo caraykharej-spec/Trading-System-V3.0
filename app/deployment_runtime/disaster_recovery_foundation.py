@@ -6,7 +6,6 @@ service failover rules, and runtime recovery tracking.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List
 
 
 @dataclass
@@ -20,22 +19,22 @@ class RecoveryRule:
 @dataclass
 class RecoveryState:
     status: str
-    restored_services: List[str] = field(default_factory=list)
+    restored_services: list[str] = field(default_factory=list)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 class DisasterRecoveryManager:
-    def __init__(self):
-        self.rules: Dict[str, RecoveryRule] = {}
+    def __init__(self) -> None:
+        self.rules: dict[str, RecoveryRule] = {}
         self.state = RecoveryState(status="READY")
 
-    def register_rule(self, rule: RecoveryRule):
+    def register_rule(self, rule: RecoveryRule) -> None:
         self.rules[rule.name] = rule
 
-    def list_rules(self):
+    def list_rules(self) -> list[RecoveryRule]:
         return list(self.rules.values())
 
-    def recover_service(self, service: str):
+    def recover_service(self, service: str) -> RecoveryState:
         self.state.status = "RECOVERING"
         if service not in self.state.restored_services:
             self.state.restored_services.append(service)
@@ -43,7 +42,7 @@ class DisasterRecoveryManager:
         self.state.updated_at = datetime.utcnow()
         return self.state
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "component": "disaster_recovery",
             "status": "healthy",
