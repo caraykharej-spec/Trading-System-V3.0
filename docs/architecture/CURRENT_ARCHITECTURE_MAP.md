@@ -2,16 +2,22 @@
 
 ## Purpose
 
-This document is the repository-level architecture map for the consolidated V3 system. It describes the implementation that exists in the active `main` line rather than historical phase intentions.
+This document is the repository-level architecture map for the consolidated V3 system. It describes the implementation that exists in the active release line rather than historical phase intentions.
 
 ## Runtime flow
 
 ```text
-Universe / Provider Mapping
+Dynamic Universe Discovery / Provider Mapping
         ↓
-Market Data Providers
+REST + Streaming Market Data Providers
         ↓
-Freshness / Quality / Reliability / Reconciliation
+Stream Validation / Dedup / Sequence Guard
+        ↓
+ProviderRouter Retry / Circuit Breaker / Failover
+        ↓
+Hot Cache / Candle Builder / Historical OHLC Store
+        ↓
+Freshness / SLA / Quality / Reliability / Reconciliation
         ↓
 Market Analysis + Regime + Structure + Liquidity
         ↓
@@ -31,6 +37,26 @@ Positions / Portfolio / Journal / Analytics
         ↓
 Recovery / Observability / Health / Reporting
 ```
+
+## Production market-data boundary
+
+Phase 37 adds a production-oriented data boundary while preserving the existing canonical models and provider failover stack:
+
+```text
+Provider Metadata ──→ DynamicUniverseDiscovery ──→ InstrumentRegistry
+
+REST Providers ─────→ ProviderRouter ─────────────┐
+                                                  ├─→ ProductionMarketDataPlatform
+Streaming Adapter ──→ MarketDataStreamIngestor ───┘
+                                                           ↓
+                                           Live Price Cache / Candle Builders
+                                                           ↓
+                                           SQLite Historical OHLC Store
+                                                           ↓
+                                             Scanner / Strategy Consumers
+```
+
+Venue-specific WebSocket implementations remain behind the `MarketDataStreamSource` protocol. No unverified Storm streaming/OHLC endpoint is assumed by the architecture.
 
 ## Production-operation boundary
 
@@ -54,14 +80,14 @@ Position Reconciliation
 Monitoring / Incidents / Operations Dashboard
 ```
 
-A production connector is disabled by default. The presence of `app/live_operation` does not by itself enable real-money execution.
+A production execution connector is disabled by default. The presence of `app/live_operation` does not by itself enable real-money execution.
 
 ## Domain ownership
 
 | Domain | Primary responsibility |
 |---|---|
-| `app/universe` | canonical instruments, mappings, eligibility, contract specs |
-| `app/data` | providers, routing, freshness, data quality, reconciliation, reliability |
+| `app/universe` | canonical instruments, dynamic discovery, mappings, eligibility, contract specs |
+| `app/data` | providers, streaming ingest, routing/failover, cache, candle building, historical OHLC, SLA, quality, reconciliation, reliability |
 | `app/market` | indicators, trend, regime, structure, liquidity |
 | `app/scanner` | scanning and opportunity generation |
 | `app/context` | news/economic-event context policy |
@@ -84,13 +110,14 @@ A production connector is disabled by default. The presence of `app/live_operati
 
 ## Source-of-truth rules
 
-1. `main` is the release source of truth.
+1. `main` is the release source of truth after a phase passes global CI and is merged.
 2. Legacy phase branches are reference history only unless their code is explicitly re-reviewed and reimplemented.
 3. Diverged historical branches must not be merged wholesale into `main`.
 4. The global CI workflow is the merge/release quality gate.
 5. Architecture documents must describe current code, not merely planned phase names.
 6. Strategy, scanner, context, analytics, and assistant/presentation layers may not bypass core risk and execution boundaries.
 7. Live operation remains fail-closed until a validated venue adapter is intentionally enabled.
+8. Market-data consumers must use canonical data contracts and may not bypass data freshness/quality boundaries with ad-hoc provider calls.
 
 ## Current execution modes
 
@@ -114,8 +141,8 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 36 verification is complete: the pipeline is green on the consolidation line and on the merged `main` commit. The verified post-merge result is 0 mypy issues across 248 source files, 285 passing tests, and 78.24% branch-aware coverage.
+Phase 37 branch verification is green: 0 mypy issues across 255 source files, 293 passing tests, and 78.66% branch-aware coverage.
 
 ## Repository governance
 
-The code and CI source of truth is consolidated in `main`, but repository inspection shows that `main` is not yet protected and no repository ruleset is configured. Repository administration should require pull requests and the `CI / quality` check before future merges, block force pushes/deletion, and prevent normal bypass of required checks.
+The code and CI source of truth is consolidated in `main`, but repository inspection from Phase 36 showed that `main` was not protected and no repository ruleset was configured. Issue #10 tracks the required repository administration policy: require pull requests and the `CI / quality` check, block force pushes/deletion, and prevent normal bypass of required checks.
