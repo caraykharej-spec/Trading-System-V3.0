@@ -27,16 +27,16 @@ class StrategyValidationReport:
 
 
 class StrategyExecutionValidationEngine:
-    def __init__(self):
+    def __init__(self) -> None:
         self.checks: list[StrategyCheck] = []
 
-    def register_check(self, check: StrategyCheck):
+    def register_check(self, check: StrategyCheck) -> None:
         self.checks.append(check)
 
     def validate(self) -> StrategyValidationReport:
         return StrategyValidationReport(checks=self.checks.copy())
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "component": "strategy_execution_validation",
             "status": "healthy",
