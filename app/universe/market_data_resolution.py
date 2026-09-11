@@ -111,13 +111,12 @@ class StormDrivenUniverseResolver:
         references = self.storm_universe.discover()
         gate_instruments = self.gate_discovery.discover_instruments()
         gate_prices = self.gate_provider.list_live_prices()
+        comparable_quotes = {quote.upper() for quote in self.comparable_gate_quotes}
         by_base: dict[str, list[Instrument]] = {}
         for instrument in gate_instruments:
             if not instrument.tradable:
                 continue
-            if instrument.quote_asset.upper() not in {
-                quote.upper() for quote in self.comparable_gate_quotes
-            }:
+            if instrument.quote_asset.upper() not in comparable_quotes:
                 continue
             by_base.setdefault(instrument.base_asset.upper(), []).append(instrument)
 
@@ -208,7 +207,7 @@ class StormDrivenUniverseResolver:
         for instrument in gate_by_base.get(reference.base_asset.upper(), []):
             pair = instrument.symbol.replace("/", "_").upper()
             live = gate_prices.get(pair)
-            if live is None or not self._fresh(live):
+            if live is None or live.price <= 0 or not self._fresh(live):
                 continue
             matches.append(self._match(reference.reference_price, pair, live.price))
         return min(matches, key=lambda item: (item.deviation_percent, item.provider_symbol)) if matches else None
@@ -221,7 +220,7 @@ class StormDrivenUniverseResolver:
                 live = self.yahoo_provider.get_live_price(symbol)
             except ProviderError:
                 continue
-            if not self._fresh(live):
+            if live.price <= 0 or not self._fresh(live):
                 continue
             matches.append(self._match(reference.reference_price, symbol, live.price))
         return min(matches, key=lambda item: (item.deviation_percent, item.provider_symbol)) if matches else None
