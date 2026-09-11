@@ -19,7 +19,7 @@ from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.runtime import AssistantRuntimeConfig, build_production_language_model
 from app.context.context_engine import ContextEngine
 from app.context.models import ContextAssessment
-from app.copilot import CopilotExplainer
+from app.copilot import CopilotExplainer, CopilotItemBrief, CopilotMarketBrief
 from app.core.enums import SystemMode
 from app.data.mapped_provider import MappedMarketProvider
 from app.data.market_data import MarketDataRequest
@@ -318,10 +318,10 @@ def build_paper_application(
 
     copilot = CopilotExplainer()
 
-    def copilot_brief():
+    def copilot_brief() -> CopilotMarketBrief:
         return copilot.market_brief(opportunity_pipeline.evaluate(symbols, top_n=10))
 
-    def copilot_symbol(symbol: str):
+    def copilot_symbol(symbol: str) -> CopilotItemBrief | None:
         return copilot.find_symbol(copilot_brief(), symbol)
 
     assistant_telemetry = AssistantTelemetry()
