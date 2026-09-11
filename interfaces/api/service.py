@@ -29,6 +29,7 @@ class TradingApiService:
         copilot_brief_provider: Callable[[], Any] | None = None,
         copilot_symbol_provider: Callable[[str], Any] | None = None,
         assistant_query_provider: Callable[[str, str | None], Any] | None = None,
+        assistant_metrics_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
@@ -40,6 +41,7 @@ class TradingApiService:
         self._copilot_brief_provider = copilot_brief_provider
         self._copilot_symbol_provider = copilot_symbol_provider
         self._assistant_query_provider = assistant_query_provider
+        self._assistant_metrics_provider = assistant_metrics_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
@@ -118,6 +120,15 @@ class TradingApiService:
         except ValueError as exc:
             return ApiResponse.bad_request("INVALID_ASSISTANT_REQUEST", str(exc))
         return ApiResponse.ok({"assistant": self._serialize(result)})
+
+    def assistant_metrics(self) -> ApiResponse:
+        if self._assistant_metrics_provider is None:
+            return ApiResponse.conflict(
+                "ASSISTANT_METRICS_UNAVAILABLE", "assistant metrics are not configured"
+            )
+        return ApiResponse.ok(
+            {"assistant_metrics": self._serialize(self._assistant_metrics_provider())}
+        )
 
     def run_cycle(self) -> ApiResponse:
         if self._cycle_runner is None:
