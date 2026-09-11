@@ -1,22 +1,23 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, and the Phase 38 strategy/signal qualification layer. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, and the Phase 39 market-intelligence/context V2 layer. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 38 — Strategy & Signal Validation Hardening: IMPLEMENTED AND CI-VALIDATED**
+**Phase 39 — Market Intelligence & Context Engine V2: IMPLEMENTED AND CI-VALIDATED**
 
-Phase 38 adds a fail-closed strategy qualification boundary on top of the existing backtest/research stack. Qualification requires holdout OOS evidence, walk-forward consistency, Monte Carlo robustness, execution-cost stress tolerance, parameter stability, regime coverage, and forward PAPER/SHADOW observations. Missing critical evidence produces `HOLD`, not an implicit pass.
+Phase 39 adds deterministic market-intelligence processing ahead of the existing `ContextEngine`: normalization, cross-source deduplication, entity/symbol relevance, context-event classification, bounded impact/confidence scoring, macro-event symbol enrichment, and historical impact evaluation. Existing RSS/news adapters remain compatible through a bridge into the V2 raw-news contract.
 
-Verified Phase 38 branch validation:
+Verified Phase 39 validation on the implementation line:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 263 source files**
-- Full pytest suite: **PASS — 299 tests**
-- Branch-aware coverage: **79.03%** (required threshold: 70%)
+- Strict mypy: **PASS — 0 issues in 273 source files**
+- Full pytest suite: **PASS — at least 304 tests**
+- Branch-aware coverage: **79.52%** on the first complete V2 core run (required threshold: 70%)
+- The subsequent historical macro-event impact extension also passed the same global workflow.
 
-Phase 38 does **not** enable live trading. A `QUALIFIED` strategy has only satisfied the configured research/release evidence policy; it still cannot bypass core risk, portfolio, production-readiness, connector-readiness, circuit-breaker, or Phase 35 live-operation gates.
+Phase 39 does **not** enable live trading or allow news/LLM intelligence to submit orders. Intelligence enriches context evidence only; the existing context policy, strategy qualification, core risk, portfolio, production-readiness, circuit-breaker, connector-readiness, and Phase 35 live-operation gates remain independently mandatory.
 
 Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
 
@@ -26,6 +27,7 @@ See:
 - `docs/phases/PHASE_36_REPOSITORY_CONSOLIDATION.md`
 - `docs/phases/PHASE_37_PRODUCTION_MARKET_DATA_PLATFORM.md`
 - `docs/phases/PHASE_38_STRATEGY_SIGNAL_VALIDATION_HARDENING.md`
+- `docs/phases/PHASE_39_MARKET_INTELLIGENCE_CONTEXT_ENGINE_V2.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
 - `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
@@ -36,6 +38,8 @@ See:
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
 - Strategy qualification is fail-closed and independent from live-execution activation.
+- Market intelligence is evidence-only and may not bypass `ContextEngine`, strategy, risk, portfolio, or execution gates.
+- Model-backed/LLM classifiers, if added later, must implement bounded intelligence contracts rather than owning trading decisions.
 - Live execution is fail-closed and requires explicit production activation.
 - Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
 - Streaming transport is isolated behind provider contracts so venue-specific networking does not leak into scanner/strategy logic.
@@ -54,7 +58,7 @@ The repository includes these major domains:
 - `app/data` — provider routing/failover, streaming ingestion, freshness, SLA, hot cache, candle building, historical OHLC persistence, quality, reconciliation, and reliability.
 - `app/market` — indicators, trend, structure, liquidity, volatility/regime analysis.
 - `app/scanner` — market scanning and opportunity generation.
-- `app/context` — news/event context and trading-window policy.
+- `app/context` — news/event policy plus Phase 39 intelligence normalization, deduplication, relevance, classification, confidence, macro enrichment, and historical impact evaluation.
 - `app/strategy` — evidence, scoring, confidence, targets, and strategy integration.
 - `app/strategy_validation` — OOS splitting, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, and fail-closed strategy qualification.
 - `app/risk` — sizing, policy, portfolio/trade risk, and provider-specific constraints.
@@ -143,6 +147,26 @@ Score and confidence remain independent.
 
 Phase 38 adds a separate qualification boundary. A high score/confidence signal or strong aggregate backtest cannot by itself qualify a strategy. Qualification evaluates independent OOS, walk-forward, Monte Carlo, cost-stress, parameter-stability, regime, and forward PAPER/SHADOW evidence.
 
+## Market intelligence and context boundary
+
+Phase 39 inserts an intelligence layer before the existing context policy:
+
+```text
+News / Macro Events
+    ↓
+Normalize / Deduplicate
+    ↓
+Entity + Asset Relevance
+    ↓
+Classification / Impact / Confidence
+    ↓
+Canonical NewsItem / EconomicEvent
+    ↓
+ContextEngine
+```
+
+The deterministic rule-based classifier is a baseline, not an execution authority. Unrelated news remains unknown/global rather than being force-mapped to an asset. Historical evaluation measures directional news outcomes and macro-event move magnitude without inventing directional interpretations for economic releases.
+
 ## Research boundary
 
 Research remains reproducible and controlled:
@@ -155,7 +179,7 @@ Research remains reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research and qualification never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
+Research, qualification, and intelligence never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources and production data boundary
 
