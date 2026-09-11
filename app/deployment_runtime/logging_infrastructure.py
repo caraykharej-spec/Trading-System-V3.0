@@ -5,7 +5,6 @@ Provides structured logging foundation for runtime services.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List
 
 
 @dataclass
@@ -17,21 +16,21 @@ class LogRecord:
 
 
 class StructuredLogger:
-    def __init__(self):
-        self.records: List[LogRecord] = []
+    def __init__(self) -> None:
+        self.records: list[LogRecord] = []
 
-    def log(self, level: str, message: str, component: str):
+    def log(self, level: str, message: str, component: str) -> LogRecord:
         record = LogRecord(level=level, message=message, component=component)
         self.records.append(record)
         return record
 
-    def info(self, message: str, component: str):
+    def info(self, message: str, component: str) -> LogRecord:
         return self.log("INFO", message, component)
 
-    def error(self, message: str, component: str):
+    def error(self, message: str, component: str) -> LogRecord:
         return self.log("ERROR", message, component)
 
-    def get_logs(self) -> List[Dict]:
+    def get_logs(self) -> list[dict[str, str]]:
         return [
             {
                 "level": item.level,
