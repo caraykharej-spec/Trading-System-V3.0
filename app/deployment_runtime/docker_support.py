@@ -12,17 +12,17 @@ class ContainerConfig:
 
 
 class DockerRuntimeManager:
-    def __init__(self):
-        self.containers = {}
+    def __init__(self) -> None:
+        self.containers: dict[str, ContainerConfig] = {}
         self.created_at = datetime.utcnow()
 
-    def register_container(self, config: ContainerConfig):
+    def register_container(self, config: ContainerConfig) -> None:
         self.containers[config.name] = config
 
-    def list_containers(self):
+    def list_containers(self) -> list[ContainerConfig]:
         return list(self.containers.values())
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "status": "healthy",
             "containers": len(self.containers),
