@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+from typing import Iterable
+
+from app.scanner.market_scanner import ScanResult
 
 
 @dataclass(frozen=True)
@@ -12,8 +15,8 @@ class Opportunity:
 class OpportunityEngine:
     """Ranks scanner output for downstream strategy modules."""
 
-    def rank(self, scan_results):
-        ranked = []
+    def rank(self, scan_results: Iterable[ScanResult]) -> list[Opportunity]:
+        ranked: list[Opportunity] = []
         for index, result in enumerate(scan_results, start=1):
             ranked.append(
                 Opportunity(
