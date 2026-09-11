@@ -1,5 +1,9 @@
 # Phase 37 — Production Market Data Platform
 
+## Status
+
+**IMPLEMENTED AND CI-VALIDATED ON PHASE BRANCH**
+
 ## Objective
 
 Turn the consolidated V3 data layer into a production-oriented market-data platform without creating a second source of truth or enabling live order submission.
@@ -124,4 +128,13 @@ Phase 37 integration tests cover:
 - provider-to-cache/history read flow;
 - streaming-to-candle persistence flow.
 
-The global repository CI remains the required merge gate: compile, Ruff, strict mypy, full pytest, and branch-aware coverage.
+Verified GitHub Actions result on Phase 37 branch:
+
+- Python compile gate: **PASS**
+- Ruff lint/import-order gate: **PASS**
+- Strict mypy: **PASS — 0 issues in 255 source files**
+- Full pytest suite: **PASS — 293 tests**
+- Branch-aware coverage: **78.66%**
+- Required coverage threshold: **70%**
+
+The global repository CI remains the required merge gate. Phase 37 must also be green on `main` after merge before this phase is considered fully closed.
