@@ -30,6 +30,7 @@ class StrategyValidationPolicy:
     max_monte_carlo_worst_drawdown_percent: Decimal = Decimal("40")
     max_cost_stress_degradation_percent: Decimal = Decimal("40")
     max_parameter_normalized_spread: Decimal = Decimal("0.35")
+    min_feasible_trial_ratio: Decimal = Decimal("0.50")
     min_regime_trade_count: int = 5
     min_qualified_regimes: int = 2
     min_forward_observations: int = 20
@@ -46,16 +47,21 @@ class StrategyValidationPolicy:
         )
         if any(value < 0 for value in count_fields):
             raise ValueError("validation minimum counts must be non-negative")
-        bounded = (
+        bounded_percentages = (
             self.max_oos_drawdown_percent,
-            self.min_profitable_walk_forward_ratio * Decimal("100"),
             self.max_monte_carlo_worst_drawdown_percent,
             self.max_cost_stress_degradation_percent,
-            self.max_parameter_normalized_spread * Decimal("100"),
             self.min_forward_hit_rate_percent,
         )
-        if any(value < 0 or value > 100 for value in bounded):
+        if any(value < 0 or value > 100 for value in bounded_percentages):
             raise ValueError("validation percentage thresholds must be in [0, 100]")
+        bounded_ratios = (
+            self.min_profitable_walk_forward_ratio,
+            self.max_parameter_normalized_spread,
+            self.min_feasible_trial_ratio,
+        )
+        if any(value < 0 or value > 1 for value in bounded_ratios):
+            raise ValueError("validation ratio thresholds must be in [0, 1]")
 
 
 @dataclass(frozen=True)
