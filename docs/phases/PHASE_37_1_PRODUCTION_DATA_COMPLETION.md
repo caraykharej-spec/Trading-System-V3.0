@@ -4,20 +4,77 @@
 
 **COMPLETED — IMPLEMENTED, CI-VALIDATED, AND LIVE-PUBLIC-DATA SMOKE-VALIDATED**
 
-Phase 37.1 completes the missing venue-specific public market-data path identified after Phase 37. It does not add private venue access, account access, order submission, credentials, or live-execution authority.
+Phase 37.1 completes the missing venue-specific public market-data path identified after Phase 37. Phase 37.1.1 further hardens the universe/source-resolution contract so Storm is authoritative for market-data universe membership and reference prices. It does not add private venue access, account access, order submission, credentials, or live-execution authority.
 
 ## Production source policy
 
-The application source policy remains explicit and unchanged:
+The authoritative market-data policy is now:
 
 ```text
-Live price       → Storm only
-OHLCV primary    → Gate.io
-OHLCV fallback   → Yahoo Finance
-Storm OHLCV      → disabled until independently verified
+Reference universe → Storm markets filtered by type=base and settlement=usdt
+Reference price    → Storm
+OHLCV primary      → Gate.io candidate with closest acceptable price to Storm
+OHLCV fallback     → Yahoo Finance candidate with closest acceptable price to Storm
+No acceptable data → explicit NO_DATA report entry
+Storm OHLCV        → disabled until independently verified
 ```
 
-All three active market-data paths are public/no-key. Phase 37.1 adds no market-data secret or credential.
+All active market-data paths are public/no-key. Phase 37.1 adds no market-data secret or credential.
+
+## Storm-driven universe and OHLCV resolution
+
+`app/universe/storm_discovery.py` defines `StormReferenceUniverseProvider`. It reads the public Storm `/markets` catalog and admits only records where:
+
+```text
+type       = base
+settlement = usdt
+```
+
+Each admitted market becomes a `StormReferenceAsset` with a canonical `BASE/USDT` identity, the original Storm provider symbol, the Storm reference price and timestamp.
+
+`app/universe/market_data_resolution.py` defines `StormDrivenUniverseResolver`. Gate.io discovery is no longer an independent source of active universe membership. Instead it is used to answer: "which Gate.io market best represents this Storm reference asset?"
+
+For each Storm reference asset the resolver:
+
+1. finds tradable Gate.io spot candidates with the same base asset and a comparable quote (`USDT`, `USDC`, or `USD`);
+2. reads Gate.io spot prices from one public `/spot/tickers` catalog request;
+3. calculates absolute percentage deviation from the Storm reference price;
+4. selects the closest fresh Gate.io candidate only if the deviation is inside the configured tolerance;
+5. otherwise evaluates Yahoo Finance candidates (`BASE-USD`, `BASE-USDT`, `BASE-USDC`) with the same price-proximity rule;
+6. if neither provider has an acceptable candidate, preserves the asset as `NO_DATA` instead of silently dropping it.
+
+The default maximum accepted price deviation is 5% and is configurable in the resolver. Candidate prices also pass a freshness gate before they may be selected.
+
+A selected provider symbol is used for OHLCV retrieval, but returned candles are normalized back to the canonical Storm `BASE/USDT` symbol so downstream consumers are provider-neutral.
+
+## Universe coverage reporting
+
+Every resolution run produces `UniverseCoverageReport` with these required buckets:
+
+```text
+(reference) Storm: <count>
+Gate.io:           <count>
+Yahoo Finance:     <count>
+No Data:           <count>
+```
+
+The invariant is enforced in code:
+
+```text
+Gate.io + Yahoo Finance + No Data = Storm Reference Universe
+```
+
+The report also contains `resolved`, `coverage_percent`, generation time and a per-asset resolution record containing Storm reference price, selected source, selected provider symbol, selected provider price, percentage price deviation and the fallback/rejection reason.
+
+The read-only application API exposes the report through:
+
+```text
+GET /market-data/universe-coverage
+```
+
+`PaperApplication.resolve_market_data_universe()` exposes the same operation directly to application clients. Network I/O remains lazy: constructing `PaperApplication` does not contact Storm, Gate.io or Yahoo.
+
+This data-universe resolution does **not** automatically grant strategy/risk/execution eligibility. A newly discovered Storm asset still requires explicit contract/risk configuration before it can enter an execution path.
 
 ## Gate.io public WebSocket
 
@@ -41,11 +98,11 @@ ProductionMarketDataPlatform
 
 The adapter uses only public candlestick subscriptions. It includes bounded reconnect/backoff, clean start/stop lifecycle, canonical symbol/timeframe mapping, provider timestamp capture, duplicate protection and out-of-order protection. The stream is **opt-in**: building `PaperApplication` configures the source but does not open a socket or perform network I/O.
 
-`websocket-client` is the only new runtime dependency and is isolated behind the Gate.io stream adapter.
+`websocket-client` is isolated behind the Gate.io stream adapter.
 
 ## Live public connectivity evidence
 
-Phase 37.1 also contains a non-required external smoke test:
+Phase 37.1 contains a non-required external smoke test:
 
 - workflow: `.github/workflows/gateio-public-smoke.yml`
 - script: `scripts/market_data/gateio_public_smoke.py`
@@ -54,14 +111,14 @@ Phase 37.1 also contains a non-required external smoke test:
 - validation subscription: `BTC_USDT`, `15m`
 - credentials/API key: **none**
 
-GitHub Actions run `34591987373`, job `103239140783`, connected to the real Gate.io public production WebSocket and completed successfully. The runner received the subscription acknowledgement and a valid live candlestick update. The job log recorded:
+GitHub Actions run `34591987373`, job `103239140783`, connected to the real Gate.io public production WebSocket and completed successfully. The job log recorded:
 
 ```text
 Gate.io public WebSocket smoke: PASS
 channel=spot.candlesticks pair=BTC_USDT timeframe=15m
 ```
 
-The smoke workflow is deliberately **not** a required `main` quality check. It remains manually dispatchable so a temporary external Gate.io/network outage cannot incorrectly mark repository code quality as failed. The protected `CI / quality` workflow remains deterministic and required for every merge.
+The smoke workflow is deliberately **not** a required `main` quality check. A temporary external provider/network outage must not incorrectly mark deterministic repository quality as failed. The protected `CI / quality` workflow remains required for every merge.
 
 ## Canonical candle events
 
@@ -73,7 +130,7 @@ Phase 37.1 extends `app/data/streaming.py` with `CandleStreamEvent`, `CandleMark
 
 `app/data/time_sync.py` adds `ClockSkewMonitor`. Gate.io WebSocket `time_ms`/`time` values are compared with the local UTC receive timestamp and recorded as a bounded EWMA offset plus maximum observed absolute skew.
 
-This is monitoring evidence, not local-clock mutation. A provider timestamp can therefore be flagged as unhealthy without changing the host clock or trusting the provider blindly.
+This is monitoring evidence, not local-clock mutation.
 
 ## Provider registry
 
@@ -84,68 +141,28 @@ This is monitoring evidence, not local-clock mutation. A provider timestamp can 
 - `OHLCV_STREAM`
 - `DISCOVERY`
 
-The default registry declares:
-
-```text
-Storm   → LIVE_PRICE                            / HTTPS     / public-no-key
-Gate.io → OHLCV_REST, OHLCV_STREAM, DISCOVERY / HTTPS+WSS / public-no-key
-Yahoo   → OHLCV_REST                            / HTTPS     / public-no-key
-```
-
-This registry describes responsibilities and transport capabilities. It does not bypass `source_policy.py`, `ProviderRouter`, quality checks or failover.
-
-## Gate.io dynamic universe discovery
-
-`app/universe/gateio_discovery.py` implements public Gate.io Spot discovery through `/spot/currency_pairs` and normalizes provider metadata into canonical `Instrument` objects, including:
-
-- base/quote assets,
-- tradability,
-- minimum base quantity,
-- amount precision → quantity step,
-- price precision → price tick.
-
-Discovery is deliberately separate from activation. A market discovered at Gate.io is **not automatically tradable by Strategy or Execution**. Activation still requires the repository's canonical symbol mapping, contract specification, risk policy and eligibility/configuration path.
-
-## Application composition
-
-`PaperApplication` exposes:
-
-- `provider_registry`,
-- `market_data_platform`,
-- `gateio_candle_stream`,
-- `gateio_candle_ingestor`,
-- `gateio_discovery`,
-- explicit `start_gateio_stream()` / `stop_gateio_stream()` lifecycle.
-
-The strategy snapshot loader reads OHLCV through `ProductionMarketDataPlatform`, allowing the path:
-
-```text
-Gate WebSocket updates
-       ↓
-cache/history
-       ↓
-strategy snapshot read
-       ↓ cache/history miss
-Gate.io REST
-       ↓ failure/unsupported/invalid
-Yahoo Finance fallback
-```
-
-Storm remains the only application live-price source.
+The registry describes transport capabilities. Runtime universe authority and source resolution are governed by the Storm-driven resolver described above, not by independent provider discovery.
 
 ## Deterministic validation
 
-Global CI on implementation head `ac76df816ebc920bbf3b9583e7c59a85bca1845e`:
+Phase 37.1.1 branch CI on implementation head `25f6a9642e7621090e61853607533912dc0f1910`:
 
 - compile: PASS
 - Ruff: PASS
-- strict mypy: PASS — 0 issues in 292 source files
-- full pytest: PASS — 337 tests
-- branch-aware coverage: 78.95% (required threshold 70%)
+- strict mypy: PASS — 0 issues in 294 source files
+- full pytest: PASS — 343 tests
+- branch-aware coverage: 79.49% (required threshold 70%)
 
-The protected PR #27 passed PR-triggered `CI / quality` and merged to `main` as commit `5a589b667d8855e8d326166a13aa3339b8bdca1a`. Post-merge `main` `CI / quality` also passed.
+New deterministic tests verify:
 
-Deterministic CI tests validate parsing, canonical normalization, discovery metadata, source-role registry, clock skew, duplicate/out-of-order rejection and persistence into cache/history without depending on external Gate.io uptime. The separate smoke workflow supplies external production-connectivity evidence.
+- exact Storm `type=base` / `settlement=usdt` membership filtering;
+- exhaustive coverage buckets;
+- closest-price Gate.io selection across multiple candidate quotes;
+- rejection of non-comparable quotes;
+- Gate.io price-mismatch fallback to Yahoo Finance;
+- explicit unresolved/no-data reporting;
+- selected-source OHLCV retrieval with canonical symbol restoration;
+- API serialization of Storm/Gate/Yahoo/no-data counts.
 
 ## Deliberate boundaries
 
@@ -155,22 +172,22 @@ Phase 37.1 does **not** add:
 - balances, positions, orders or fills,
 - Gate.io execution,
 - Storm OHLCV,
-- automatic activation of every discovered Gate.io market,
+- automatic execution eligibility for every Storm-discovered asset,
 - live trading.
 
-The production Gate.io socket implementation is real and live-connectivity-validated, but the normal application remains PAPER/SHADOW and the socket is opt-in. Venue execution remains a later, separately gated concern.
+The normal application remains PAPER/SHADOW. Venue execution remains a later, separately gated concern.
 
 ## Acceptance criteria
 
-Phase 37.1 is complete because:
+Phase 37.1/37.1.1 is complete when:
 
-1. the actual public Gate.io Spot candlestick WebSocket adapter exists behind a canonical contract;
-2. native candle events are normalized and protected from duplicates/out-of-order delivery;
-3. streamed candles update the Phase 37 cache/history platform;
-4. provider timestamp skew is monitored;
-5. Gate.io public spot discovery is implemented without credentials;
-6. provider responsibilities are registered explicitly;
-7. Storm/Gate/Yahoo source ownership remains unchanged;
-8. protected PR and post-merge `main` `CI / quality` are green;
-9. a real no-key GitHub Actions smoke run connected to Gate.io production and received a valid public candle update;
-10. no private venue or live-execution path is introduced.
+1. Storm is the explicit reference universe using `type=base` and `settlement=usdt`;
+2. Storm is the reference-price authority for cross-provider market selection;
+3. Gate.io selects the closest fresh comparable market inside a configured tolerance;
+4. Yahoo Finance is used only after Gate.io has no acceptable market;
+5. unresolved assets remain visible as `NO_DATA`;
+6. the report invariant `Gate.io + Yahoo + No Data = Storm` is enforced;
+7. resolved provider symbols can fetch OHLCV and return canonical Storm symbols;
+8. the read-only coverage report is available through the API;
+9. deterministic CI is green and protected-branch rules are satisfied;
+10. no private venue or live-execution authority is introduced.
