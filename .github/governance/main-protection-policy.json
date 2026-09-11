@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "target": "branch",
+  "enforcement": "active",
+  "protected_refs": [
+    "refs/heads/main",
+    "~DEFAULT_BRANCH"
+  ],
+  "bypass_actors": [],
+  "rules": {
+    "pull_request": {
+      "required": true,
+      "required_approving_review_count": 0
+    },
+    "required_status_checks": {
+      "required": true,
+      "strict_required_status_checks_policy": true,
+      "contexts": [
+        "CI / quality"
+      ]
+    },
+    "non_fast_forward": {
+      "required": true
+    },
+    "deletion": {
+      "required": true
+    }
+  }
+}
