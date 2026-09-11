@@ -23,9 +23,13 @@ Market Analysis + Regime + Structure + Liquidity
         ↓
 Market Scanner / Opportunity Pipeline
         ↓
-Context Engine (news + events)
+Market Intelligence V2
+        ↓
+Context Engine Policy (news + macro events)
         ↓
 Strategy Evidence / Score / Confidence / Targets
+        ↓
+Strategy Qualification Boundary
         ↓
 Core Risk Engine + Portfolio Gate
         ↓
@@ -37,6 +41,46 @@ Positions / Portfolio / Journal / Analytics
         ↓
 Recovery / Observability / Health / Reporting
 ```
+
+## Market-intelligence boundary
+
+Phase 39 adds an evidence-processing layer before the existing `ContextEngine`. The ContextEngine remains the policy owner for blocking/delay behavior.
+
+```text
+NewsProvider / Public Feeds
+        ↓
+RawNewsRecord
+        ↓
+Normalization + URL Canonicalization
+        ↓
+Cross-source Deduplication
+        ↓
+Entity / Symbol Relevance
+        ↓
+Category + Impact + Confidence
+        ↓
+Canonical NewsIntelligence
+        ↓
+NewsItem bridge
+        ↓
+ContextEngine
+```
+
+Macro events use a parallel path:
+
+```text
+EconomicEvent
+    ↓
+Currency / Symbol Inference
+    ↓
+Macro / Regulatory Classification
+    ↓
+Event Confidence
+    ↓
+Existing Critical / High Event Windows
+```
+
+Historical intelligence evidence is evaluated without introducing execution authority. Directional news can be checked against forward returns; economic events are evaluated by forward move magnitude unless an explicit directional model exists.
 
 ## Strategy qualification boundary
 
@@ -118,7 +162,7 @@ A production execution connector is disabled by default. The presence of `app/li
 | `app/data` | providers, streaming ingest, routing/failover, cache, candle building, historical OHLC, SLA, quality, reconciliation, reliability |
 | `app/market` | indicators, trend, regime, structure, liquidity |
 | `app/scanner` | scanning and opportunity generation |
-| `app/context` | news/economic-event context policy |
+| `app/context` | news/economic-event policy plus intelligence normalization, deduplication, relevance, classification, confidence, macro enrichment, and historical impact evidence |
 | `app/strategy` | evidence, scoring, confidence, strategy decisions, targets |
 | `app/strategy_validation` | holdout OOS, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, qualification gate |
 | `app/risk` | sizing, risk policy, trade/portfolio gates |
@@ -148,6 +192,8 @@ A production execution connector is disabled by default. The presence of `app/li
 7. Live operation remains fail-closed until a validated venue adapter is intentionally enabled.
 8. Market-data consumers must use canonical data contracts and may not bypass data freshness/quality boundaries with ad-hoc provider calls.
 9. Strategy qualification is fail-closed; a single in-sample backtest, score, or confidence value cannot substitute for the required validation evidence set.
+10. Market intelligence is evidence-only. Classifier confidence or news sentiment cannot replace ContextEngine policy, strategy qualification, core risk, portfolio, or execution gates.
+11. Unrelated news must remain unknown/global rather than being force-mapped to an asset.
 
 ## Current execution modes
 
@@ -171,7 +217,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 38 initial branch verification is green: 0 mypy issues across 263 source files, 299 passing tests, and 79.03% branch-aware coverage. The final branch head and merged `main` commit must pass the same workflow before Phase 38 is considered closed.
+Phase 39 V2 core verification is green: 0 mypy issues across 273 source files, 304 passing tests, and 79.52% branch-aware coverage. The subsequent historical macro-event impact extension also passed the same global workflow. The final branch head and merged `main` commit must pass the workflow before Phase 39 is considered closed.
 
 ## Repository governance
 
