@@ -18,6 +18,31 @@ class GateIOProvider(MarketDataProvider):
     base_url: str = "https://api.gateio.ws/api/v4"
     client: HttpClient = HttpClient()
 
+    def list_live_prices(self) -> dict[str, LivePrice]:
+        """Fetch the public spot ticker catalog once for universe resolution."""
+        payload = self.client.get_json(f"{self.base_url}/spot/tickers")
+        if not isinstance(payload, list):
+            raise ProviderError("Gate.io ticker catalog returned invalid payload")
+        as_of = utc_now()
+        prices: dict[str, LivePrice] = {}
+        for record in payload:
+            if not isinstance(record, dict):
+                continue
+            pair = str(record.get("currency_pair") or "").upper()
+            raw_price = record.get("last")
+            if not pair or raw_price in (None, ""):
+                continue
+            price = to_decimal(raw_price)
+            if price <= 0:
+                continue
+            prices[pair] = LivePrice(
+                symbol=pair,
+                price=price,
+                as_of=as_of,
+                provider=self.name,
+            )
+        return prices
+
     def get_live_price(self, symbol: str) -> LivePrice:
         pair = symbol.replace("/", "_").upper()
         payload = self.client.get_json(f"{self.base_url}/spot/tickers?currency_pair={pair}")
