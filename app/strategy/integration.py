@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Mapping
 
 from app.strategy.strategy_engine import StrategySignal
 
@@ -20,7 +21,10 @@ class StrategyIntegration:
     provides a stable contract for ranking and risk layers.
     """
 
-    def evaluate(self, opportunities: list[dict]) -> list[StrategyCandidate]:
+    def evaluate(
+        self,
+        opportunities: list[Mapping[str, object]],
+    ) -> list[StrategyCandidate]:
         candidates: list[StrategyCandidate] = []
 
         for opportunity in opportunities:
