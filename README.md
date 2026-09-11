@@ -1,32 +1,66 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and future deployment behind an API for an Android client.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository currently contains the validated paper/research trading core, production-operation validation, and the Phase 35 live-operation safety framework. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+
+## Current status
+
+**Phase 36 — Repository Consolidation & CI Recovery**
+
+Phase 36 establishes a single source of truth for the repository, reconciles Phase 35 with `main`, audits legacy Phase 29–35 branches, restores the global quality pipeline, and refreshes repository documentation to match the actual implementation.
+
+The Phase 35 live-operation framework is included in the Phase 36 consolidation branch. It provides activation, live-risk, execution-gateway, position-reconciliation, monitoring, incident-management, and circuit-breaker boundaries while remaining fail-closed. It does **not** enable live trading by default and it does **not** contain exchange credentials.
+
+See:
+
+- `docs/architecture/CURRENT_ARCHITECTURE_MAP.md`
+- `docs/phases/PHASE_36_REPOSITORY_CONSOLIDATION.md`
+- `35_LIVE_TRADING_OPERATION/README.md`
+- `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
 ## Architecture principles
 
-- Strategy, risk, portfolio, execution, storage, research, and presentation are separate concerns.
+- Strategy, context, risk, portfolio, execution, storage, research, operations, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring and research objectives.
+- Existing core risk approval remains mandatory for every execution path.
+- Strategy and scanner layers do not submit production orders directly.
+- Live execution is fail-closed and requires explicit production activation.
 - Open-position stop-loss monitoring runs at the beginning of every trading-state cycle after restart/recovery checks.
 - Realized P&L is calculated from the position's total amount/notional model, with provider-specific contract rules isolated from generic portfolio logic.
 - No fixed maximum number of open positions. Portfolio limits are risk, exposure, correlation, margin, leverage, and capital constraints.
 - Top 10 is a ranking presentation limit, not a trade-count limit.
-- Pyth is not part of the V3 data-source architecture.
-- Execution mode is paper/shadow; live execution is not enabled.
+- Pyth is not part of the current V3 data-source architecture.
 - The core is UI-independent so the same Python domain can run from PyCharm, a server, or behind an Android-facing API.
 
-## Current phase
+## Implemented capability map
 
-**Phase 23 — Research / Optimization Framework**
+The repository includes these major domains:
 
-Phase 23 adds bounded and reproducible parameter research on top of the validated backtest stack. Experiments record strategy version, dataset fingerprints, explicit parameter spaces, objectives, constraints, search method, seed, trial budget, validation degradation, and complete trial outcomes.
+- `app/data` — provider routing, freshness, quality, reconciliation, and reliability.
+- `app/market` — indicators, trend, structure, liquidity, volatility/regime analysis.
+- `app/scanner` — market scanning and opportunity generation.
+- `app/context` — news/event context and trading-window policy.
+- `app/strategy` — evidence, scoring, confidence, targets, and strategy integration.
+- `app/risk` — sizing, policy, portfolio/trade risk, and provider-specific constraints.
+- `app/execution` — paper execution, pending orders, persistence, atomic execution, fills, and risk reservation.
+- `app/position` and `app/portfolio` — position lifecycle, settlement, exposure, correlation, and account state.
+- `app/backtest` and `app/research` — backtesting, costs, walk-forward, Monte Carlo, and bounded research/optimization.
+- `app/journal`, `app/analytics`, and `app/reporting` — journaling, analytics, export/reporting foundations.
+- `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, and readiness monitoring.
+- `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations and production validation gates.
+- `app/live_operation` — Phase 35 production-operation safety boundary.
 
-The default research policy is deny-by-default. Only `min_rr`, `min_score`, and `min_confidence` are exposed, and research can only keep or tighten the declared floors of 2.5, 90, and 90. Risk limits, scoring weights, setup logic, structural stops, and execution settings are not tunable through the Phase 23 optimization surface.
+## Quality gates
 
-Research adapters reuse the existing Backtest, Portfolio Backtest, and Walk-Forward engines. Grid search is bounded; random search is deterministic from the experiment seed; final holdout data is identified in the experiment manifest but is intentionally not exposed to the optimization runner.
+The repository quality pipeline requires:
 
-See `docs/architecture/23_research_optimization.md` for the detailed scope. The preceding architecture hardening milestone remains documented in `docs/architecture/22_5_architecture_hardening.md`.
+1. editable installation,
+2. Python compile checks,
+3. Ruff lint,
+4. strict mypy over `app`, `interfaces`, and `main.py`,
+5. the full pytest suite,
+6. at least 70% branch-aware coverage across `app` and `interfaces`.
 
-The repository quality pipeline requires editable installation, compile checks, Ruff, strict mypy, the full pytest suite, and at least 70% branch-aware coverage across `app` and `interfaces`.
+Phase 36 treats a green global CI run as a release/merge gate.
 
 ## Run from PyCharm or terminal
 
@@ -92,7 +126,7 @@ Score and confidence remain independent.
 
 ## Research boundary
 
-Phase 23 research is reproducible and controlled:
+Research remains reproducible and controlled:
 
 - candle datasets can be content-fingerprinted with SHA-256,
 - experiment and trial identities are deterministic,
@@ -102,7 +136,7 @@ Phase 23 research is reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research never overrides strategy, risk, portfolio, or execution hard gates.
+Research never overrides strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources
 
@@ -111,12 +145,12 @@ The V3 source boundary currently contains adapters for:
 - Storm
 - Gate.io
 - Yahoo Finance
-- Public/free context sources documented in `docs/architecture/19_context_engine.md`
+- Public/free context sources under `app/context`
 
-Pyth is deliberately excluded.
+Pyth is deliberately excluded from the current V3 architecture.
 
 The configured universe is not hard-coded by asset count; canonical instruments, provider mappings, and contract specifications are loaded from configuration.
 
 ## Safety and execution boundary
 
-There is no live-execution adapter in the current composition root. Runtime execution remains PAPER/SHADOW with explicit user/application selection before paper submission. Structural stop-loss, aggregate-risk, correlated-risk, futures-capital, and provider-specific risk rules remain separate hard gates.
+The normal composition root remains PAPER/SHADOW. Phase 35 adds a disabled-by-default production-operation framework above the existing core. A production order may only cross the Phase 35 execution gateway after environment, go-live, health, connector, core-risk, live-risk, circuit-breaker, and explicit-enable conditions are satisfied. A venue-specific production connector must still be explicitly implemented, configured, and validated before any real execution can be considered.

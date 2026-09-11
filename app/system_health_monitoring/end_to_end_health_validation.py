@@ -2,22 +2,25 @@
 
 Provides a readiness gate before paper trading or live operation.
 """
+
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Mapping
 
 
 @dataclass
 class HealthValidationResult:
     passed: bool
-    checks: dict
+    checks: dict[str, bool]
     checked_at: datetime
 
 
 class EndToEndHealthValidator:
-    def validate(self, checks: dict) -> HealthValidationResult:
-        passed = all(checks.values()) if checks else False
+    def validate(self, checks: Mapping[str, bool]) -> HealthValidationResult:
+        normalized = dict(checks)
+        passed = all(normalized.values()) if normalized else False
         return HealthValidationResult(
             passed=passed,
-            checks=checks,
+            checks=normalized,
             checked_at=datetime.utcnow(),
         )

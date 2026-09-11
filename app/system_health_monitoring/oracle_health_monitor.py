@@ -13,7 +13,12 @@ class OracleHealthStatus:
 
 
 class OracleHealthMonitor:
-    def check(self, oracle: str, healthy: bool = True, data_fresh: bool = True):
+    def check(
+        self,
+        oracle: str,
+        healthy: bool = True,
+        data_fresh: bool = True,
+    ) -> OracleHealthStatus:
         return OracleHealthStatus(
             oracle=oracle,
             healthy=healthy,

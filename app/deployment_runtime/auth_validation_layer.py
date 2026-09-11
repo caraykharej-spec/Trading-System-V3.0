@@ -2,14 +2,13 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List
 
 
 @dataclass
 class APIKey:
     key: str
     name: str
-    permissions: List[str] = field(default_factory=list)
+    permissions: list[str] = field(default_factory=list)
     enabled: bool = True
 
 
@@ -21,10 +20,10 @@ class ValidationResult:
 
 
 class AuthenticationManager:
-    def __init__(self):
-        self.keys: Dict[str, APIKey] = {}
+    def __init__(self) -> None:
+        self.keys: dict[str, APIKey] = {}
 
-    def register_key(self, api_key: APIKey):
+    def register_key(self, api_key: APIKey) -> None:
         self.keys[api_key.key] = api_key
 
     def validate_key(self, key: str) -> bool:
@@ -33,15 +32,15 @@ class AuthenticationManager:
 
 
 class RequestValidator:
-    def validate(self, request: Dict) -> ValidationResult:
+    def validate(self, request: dict[str, object]) -> ValidationResult:
         if not request:
             return ValidationResult(False, "Empty request")
         return ValidationResult(True, "Request validated")
 
 
 class RateLimitFoundation:
-    def __init__(self):
-        self.requests = {}
+    def __init__(self) -> None:
+        self.requests: dict[str, int] = {}
 
     def check(self, identity: str) -> bool:
         return True

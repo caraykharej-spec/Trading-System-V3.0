@@ -26,23 +26,23 @@ class ProductionChecklistReport:
 
 
 class ProductionChecklistEngine:
-    def __init__(self):
+    def __init__(self) -> None:
         self.items: list[ChecklistItem] = []
 
-    def register_item(self, item: ChecklistItem):
+    def register_item(self, item: ChecklistItem) -> None:
         self.items.append(item)
 
     def validate(self) -> ProductionChecklistReport:
-        return ProductionChecklistReport(items=self.items)
+        return ProductionChecklistReport(items=self.items.copy())
 
-    def health(self):
+    def health(self) -> dict[str, str]:
         return {
             "component": "Production Checklist",
-            "status": "READY" if self.validate().passed else "PENDING"
+            "status": "READY" if self.validate().passed else "PENDING",
         }
 
 
-def build_default_checklist():
+def build_default_checklist() -> ProductionChecklistEngine:
     engine = ProductionChecklistEngine()
 
     checks = [
@@ -63,7 +63,7 @@ def build_default_checklist():
                 name=name,
                 category=category,
                 passed=False,
-                details="Awaiting production verification"
+                details="Awaiting production verification",
             )
         )
 

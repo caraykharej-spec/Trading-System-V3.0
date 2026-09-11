@@ -4,6 +4,7 @@ Connects opportunity candidates with strategy evaluation and produces
 risk-review-ready signals.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.strategy.integration import StrategyCandidate
@@ -23,7 +24,7 @@ class StrategyPipeline:
     def process(
         self,
         candidates: list[StrategyCandidate],
-        evaluator,
+        evaluator: Callable[[StrategyCandidate], StrategySignal | None],
     ) -> list[StrategyPipelineResult]:
         results: list[StrategyPipelineResult] = []
 

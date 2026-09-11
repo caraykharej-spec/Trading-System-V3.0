@@ -4,7 +4,7 @@ import os
 
 
 class EnvironmentManager:
-    def get(self, key: str, default=None):
+    def get(self, key: str, default: str | None = None) -> str | None:
         return os.getenv(key, default)
 
     def is_production(self) -> bool:

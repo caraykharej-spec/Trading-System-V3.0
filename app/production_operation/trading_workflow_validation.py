@@ -26,14 +26,14 @@ class WorkflowReport:
 
 
 class TradingWorkflowValidator:
-    def __init__(self):
-        self.steps = []
+    def __init__(self) -> None:
+        self.steps: list[WorkflowStep] = []
 
-    def register_step(self, name: str, passed: bool = True, details: str = ""):
+    def register_step(self, name: str, passed: bool = True, details: str = "") -> None:
         self.steps.append(WorkflowStep(name, passed, details))
 
     def validate(self) -> WorkflowReport:
-        return WorkflowReport(self.steps)
+        return WorkflowReport(list(self.steps))
 
-    def health(self):
+    def health(self) -> dict[str, str]:
         return {"component": "trading_workflow_validation", "status": "healthy"}

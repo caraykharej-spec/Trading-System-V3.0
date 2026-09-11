@@ -5,20 +5,21 @@ Provides report layout preparation and PDF generation abstraction.
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Mapping
 
 
 @dataclass
 class PDFReport:
     report_type: str
-    content: dict
+    content: dict[str, Any]
     created_at: datetime
 
 
 class PDFReportPipeline:
-    def create_report(self, report_type: str, content: dict) -> PDFReport:
+    def create_report(self, report_type: str, content: Mapping[str, Any]) -> PDFReport:
         return PDFReport(
             report_type=report_type,
-            content=content,
+            content=dict(content),
             created_at=datetime.utcnow(),
         )
 

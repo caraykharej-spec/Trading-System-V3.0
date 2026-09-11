@@ -5,7 +5,6 @@ Provides deployment scaling models and runtime registry foundation.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict
 
 
 @dataclass
@@ -26,23 +25,23 @@ class ScalingService:
 
 @dataclass
 class ScalingState:
-    services: Dict[str, ScalingService] = field(default_factory=dict)
+    services: dict[str, ScalingService] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
 
 
 class CloudScalingManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.state = ScalingState()
 
-    def register_service(self, service: ScalingService):
+    def register_service(self, service: ScalingService) -> None:
         self.state.services[service.name] = service
 
-    def scale(self, name: str, replicas: int):
+    def scale(self, name: str, replicas: int) -> None:
         if name in self.state.services:
             self.state.services[name].replicas = replicas
 
-    def list_services(self):
+    def list_services(self) -> list[ScalingService]:
         return list(self.state.services.values())
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {"status": "healthy", "services": len(self.state.services)}

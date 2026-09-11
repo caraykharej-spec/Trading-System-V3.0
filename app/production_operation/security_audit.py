@@ -26,16 +26,16 @@ class SecurityAuditReport:
 
 
 class SecurityAuditEngine:
-    def __init__(self):
-        self.checks = []
+    def __init__(self) -> None:
+        self.checks: list[SecurityCheck] = []
 
-    def register_check(self, check: SecurityCheck):
+    def register_check(self, check: SecurityCheck) -> None:
         self.checks.append(check)
 
     def audit(self) -> SecurityAuditReport:
-        return SecurityAuditReport(checks=self.checks)
+        return SecurityAuditReport(checks=self.checks.copy())
 
-    def health(self) -> dict:
+    def health(self) -> dict[str, object]:
         return {
             "status": "healthy",
             "checks": len(self.checks),

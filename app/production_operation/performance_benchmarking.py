@@ -25,17 +25,17 @@ class PerformanceReport:
 
 
 class PerformanceBenchmarkEngine:
-    def __init__(self):
-        self.metrics = []
+    def __init__(self) -> None:
+        self.metrics: list[PerformanceMetric] = []
 
-    def record_metric(self, name: str, value: float, unit: str):
+    def record_metric(self, name: str, value: float, unit: str) -> None:
         self.metrics.append(PerformanceMetric(name, value, unit))
 
     def benchmark(self) -> PerformanceReport:
-        return PerformanceReport(metrics=self.metrics)
+        return PerformanceReport(metrics=self.metrics.copy())
 
-    def health(self):
+    def health(self) -> dict[str, str]:
         return {
             "component": "performance_benchmarking",
-            "status": "healthy"
+            "status": "healthy",
         }

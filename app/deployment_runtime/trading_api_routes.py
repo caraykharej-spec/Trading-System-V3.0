@@ -19,13 +19,13 @@ class TradingAPIRoute:
 class TradingAPIRegistry:
     routes: list[TradingAPIRoute] = field(default_factory=list)
 
-    def register(self, route: TradingAPIRoute):
+    def register(self, route: TradingAPIRoute) -> None:
         self.routes.append(route)
 
-    def list_routes(self):
-        return self.routes
+    def list_routes(self) -> list[TradingAPIRoute]:
+        return self.routes.copy()
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "status": "healthy",
             "routes": len(self.routes),

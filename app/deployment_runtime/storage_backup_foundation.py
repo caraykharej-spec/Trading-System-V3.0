@@ -4,9 +4,8 @@ Provides deployment runtime abstractions for storage persistence,
 backup policies and recovery planning.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List
 
 
 @dataclass
@@ -26,24 +25,24 @@ class BackupPolicy:
 
 
 class StorageBackupManager:
-    def __init__(self):
-        self.storage_profiles: Dict[str, StorageProfile] = {}
-        self.backup_policies: Dict[str, BackupPolicy] = {}
+    def __init__(self) -> None:
+        self.storage_profiles: dict[str, StorageProfile] = {}
+        self.backup_policies: dict[str, BackupPolicy] = {}
         self.created_at = datetime.utcnow()
 
-    def register_storage(self, profile: StorageProfile):
+    def register_storage(self, profile: StorageProfile) -> None:
         self.storage_profiles[profile.name] = profile
 
-    def register_backup_policy(self, policy: BackupPolicy):
+    def register_backup_policy(self, policy: BackupPolicy) -> None:
         self.backup_policies[policy.name] = policy
 
-    def list_storage(self) -> List[StorageProfile]:
+    def list_storage(self) -> list[StorageProfile]:
         return list(self.storage_profiles.values())
 
-    def list_backup_policies(self) -> List[BackupPolicy]:
+    def list_backup_policies(self) -> list[BackupPolicy]:
         return list(self.backup_policies.values())
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "status": "healthy",
             "storage_count": len(self.storage_profiles),

@@ -32,9 +32,7 @@ class RecoveryService:
 
         return RecoveryReport(
             state=self.state_machine.state,
-            inspected_orders=result.inspected_orders,
-            repaired_positions=result.repaired_positions,
-            warnings=tuple(
-                issue.kind for issue in result.issues
-            ),
+            positions_checked=result.inspected_orders,
+            positions_recovered=result.repaired_positions,
+            warnings=tuple(issue.kind for issue in result.issues),
         )

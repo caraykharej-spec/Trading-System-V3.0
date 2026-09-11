@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict
+from typing import Mapping
 
 
 @dataclass
@@ -22,8 +22,8 @@ class AlertEngine:
             created_at=datetime.utcnow(),
         )
 
-    def evaluate_health(self, health_state: Dict[str, str]):
-        alerts = []
+    def evaluate_health(self, health_state: Mapping[str, str]) -> list[Alert]:
+        alerts: list[Alert] = []
         for component, status in health_state.items():
             if status != "healthy":
                 alerts.append(

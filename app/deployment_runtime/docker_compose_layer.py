@@ -5,7 +5,6 @@ Phase 33.9.1 - Docker Compose & Service Containers
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List
 
 
 @dataclass
@@ -17,19 +16,19 @@ class ServiceContainer:
 
 @dataclass
 class ComposeState:
-    services: Dict[str, ServiceContainer] = field(default_factory=dict)
+    services: dict[str, ServiceContainer] = field(default_factory=dict)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
 
 class DockerComposeManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.state = ComposeState()
 
     def register_service(self, service: ServiceContainer) -> None:
         self.state.services[service.name] = service
         self.state.updated_at = datetime.utcnow()
 
-    def list_services(self) -> List[str]:
+    def list_services(self) -> list[str]:
         return list(self.state.services.keys())
 
     def health(self) -> bool:

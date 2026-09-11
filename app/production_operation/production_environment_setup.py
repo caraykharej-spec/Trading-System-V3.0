@@ -17,17 +17,17 @@ class ProductionEnvironment:
 
 
 class ProductionEnvironmentManager:
-    def __init__(self):
+    def __init__(self) -> None:
         self.environments: dict[str, ProductionEnvironment] = {}
 
-    def register(self, environment: ProductionEnvironment):
+    def register(self, environment: ProductionEnvironment) -> None:
         self.environments[environment.name] = environment
 
     def validate(self, name: str) -> bool:
         environment = self.environments.get(name)
         return bool(environment and environment.enabled and environment.services)
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "component": "production_environment",
             "status": "healthy",
