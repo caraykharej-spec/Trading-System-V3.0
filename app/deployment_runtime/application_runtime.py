@@ -14,13 +14,13 @@ class RuntimeState:
 
 
 class ApplicationRuntime:
-    def __init__(self):
+    def __init__(self) -> None:
         self.state = RuntimeState(status="STOPPED")
 
-    def start(self):
+    def start(self) -> RuntimeState:
         self.state = RuntimeState(status="RUNNING", started_at=datetime.utcnow())
         return self.state
 
-    def stop(self):
+    def stop(self) -> RuntimeState:
         self.state.status = "STOPPED"
         return self.state
