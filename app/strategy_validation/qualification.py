@@ -87,7 +87,8 @@ class StrategyQualificationEngine:
         if result is None:
             return ValidationCheck("monte_carlo", False, "Monte Carlo evidence is missing")
         passed = (
-            result.median_return_percent
+            result.simulations > 0
+            and result.median_return_percent
             >= self.policy.min_monte_carlo_median_return_percent
             and result.worst_max_drawdown_percent
             <= self.policy.max_monte_carlo_worst_drawdown_percent
@@ -96,6 +97,7 @@ class StrategyQualificationEngine:
             "monte_carlo",
             passed,
             (
+                f"simulations={result.simulations} "
                 f"median_return={result.median_return_percent}% "
                 f"worst_drawdown={result.worst_max_drawdown_percent}%"
             ),
@@ -105,9 +107,13 @@ class StrategyQualificationEngine:
         if report is None:
             return ValidationCheck("cost_stress", False, "cost-stress evidence is missing")
         worst = report.worst_return_degradation_percent
+        passed = (
+            bool(report.outcomes)
+            and worst <= self.policy.max_cost_stress_degradation_percent
+        )
         return ValidationCheck(
             "cost_stress",
-            worst <= self.policy.max_cost_stress_degradation_percent,
+            passed,
             f"worst_return_degradation={worst}% scenarios={len(report.outcomes)}",
         )
 
@@ -124,6 +130,7 @@ class StrategyQualificationEngine:
         passed = (
             report.stable
             and report.max_normalized_spread <= self.policy.max_parameter_normalized_spread
+            and report.feasible_trial_ratio >= self.policy.min_feasible_trial_ratio
         )
         return ValidationCheck(
             "parameter_stability",
