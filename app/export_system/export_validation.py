@@ -6,6 +6,7 @@ external clients such as dashboards and mobile applications.
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -16,16 +17,13 @@ class ExportValidationResult:
 
 
 class ExportValidator:
-    def validate(self, export_payload: dict) -> ExportValidationResult:
-        errors = []
+    def validate(self, export_payload: dict[str, Any]) -> ExportValidationResult:
+        errors: list[str] = []
 
-        if not isinstance(export_payload, dict):
-            errors.append("Export payload must be a dictionary")
-        else:
-            if "export_type" not in export_payload:
-                errors.append("Missing export_type")
-            if "data" not in export_payload:
-                errors.append("Missing data")
+        if "export_type" not in export_payload:
+            errors.append("Missing export_type")
+        if "data" not in export_payload:
+            errors.append("Missing data")
 
         return ExportValidationResult(
             valid=len(errors) == 0,
