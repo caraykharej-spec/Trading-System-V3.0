@@ -25,11 +25,11 @@ class ValidationReport:
 
 
 class HealthValidationMatrix:
-    def __init__(self):
-        self.checks = []
+    def __init__(self) -> None:
+        self.checks: list[ValidationCheck] = []
 
-    def add_check(self, name: str, passed: bool, details: str = ""):
+    def add_check(self, name: str, passed: bool, details: str = "") -> None:
         self.checks.append(ValidationCheck(name, passed, details))
 
     def generate_report(self) -> ValidationReport:
-        return ValidationReport(self.checks)
+        return ValidationReport(self.checks.copy())
