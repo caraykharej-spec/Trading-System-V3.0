@@ -15,25 +15,25 @@ class ProcessState:
 
 
 class ProcessManager:
-    def __init__(self):
-        self.processes = {}
+    def __init__(self) -> None:
+        self.processes: dict[str, ProcessState] = {}
 
-    def register(self, name: str):
+    def register(self, name: str) -> ProcessState:
         self.processes[name] = ProcessState(name=name)
         return self.processes[name]
 
-    def start(self, name: str):
+    def start(self, name: str) -> ProcessState:
         process = self.processes[name]
         process.status = "RUNNING"
         process.updated_at = datetime.utcnow()
         return process
 
-    def stop(self, name: str):
+    def stop(self, name: str) -> ProcessState:
         process = self.processes[name]
         process.status = "STOPPED"
         process.updated_at = datetime.utcnow()
         return process
 
-    def restart(self, name: str):
+    def restart(self, name: str) -> ProcessState:
         self.stop(name)
         return self.start(name)
