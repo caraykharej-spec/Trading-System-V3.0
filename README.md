@@ -1,24 +1,30 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, the Phase 40 evidence-grounded trading copilot, the Phase 41 grounded conversation/orchestration layer, and the Phase 42 production LLM provider/assistant observability boundary. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, the Phase 40 evidence-grounded trading copilot, grounded conversation/production LLM capabilities from the earlier Phase 41–42 roadmap sequence, Phase 40.1 assistant analytics, and the current Phase 41 production FastAPI platform. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 42 — Production LLM Provider Integration & Assistant Observability: IMPLEMENTED AND CI-VALIDATED**
+**Phase 41 — Production FastAPI Platform: IMPLEMENTED AND FEATURE-BRANCH CI-VALIDATED**
 
-Phase 42 adds an optional production LLM adapter above the Phase 41 `GroundedLanguageModel` contract, reliability controls, bounded content-free telemetry, a read-only assistant metrics endpoint, and an explicit production market-data source policy.
+The current API-platform milestone adds a versioned FastAPI/ASGI production adapter above the existing transport-independent `TradingApiService`. It provides Pydantic validation, OpenAPI, fail-closed production API-key/host policy, request IDs, bounded request bodies, process-local rate limiting, structured errors, health/readiness probes, deny-by-default CORS, and lifespan-managed application resources.
 
-Verified Phase 42 implementation validation:
+The active SQLite-backed PAPER application is created and invoked on one serialized application worker thread. This preserves SQLite thread affinity while keeping blocking application/provider work off the ASGI event loop. Horizontal multi-process scaling is deliberately deferred until shared persistence/runtime coordination and distributed/ingress rate limiting exist.
+
+Verified Phase 41 core feature-head validation:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 288 source files**
-- Full pytest suite: **PASS — 329 tests**
-- Branch-aware coverage: **79.42%** (required threshold: 70%)
+- Strict mypy: **PASS — 0 issues in 300 source files**
+- Full pytest suite: **PASS — 375 tests**
+- Branch-aware coverage: **79.54%** (required threshold: 70%)
 
-The Phase 42 external-model path is **disabled by default**. When intentionally enabled, the current provider adapter targets the OpenAI Responses API through a provider-specific boundary, requires `OPENAI_API_KEY` from the environment, enforces a model allowlist, bounded prompt/output sizes, timeout, retry and circuit-breaker behavior, and still inherits Phase 41 citation validation and deterministic fallback. No API key is stored in the repository. CI uses an injected fake transport; the repository does not claim that a paid external model call was executed during CI.
+The final documentation head, PR head, and merged `main` still have to pass the same global `CI / quality` gate before this phase is closed.
 
-Production market-data ownership is now explicit:
+Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
+
+Repository history also contains `PHASE_41_GROUNDED_LLM_CONVERSATION_ORCHESTRATION.md` and `PHASE_42_PRODUCTION_LLM_PROVIDER_ASSISTANT_OBSERVABILITY.md` from an earlier roadmap numbering sequence. Those assistant capabilities remain implemented; `PHASE_41_PRODUCTION_FASTAPI_PLATFORM.md` is the current API-roadmap milestone requested after Phase 40.1.
+
+Production market-data ownership remains explicit:
 
 ```text
 Live price       → Storm only
@@ -27,20 +33,19 @@ OHLCV fallback   → Yahoo Finance
 Storm OHLCV      → disabled until a verified candle endpoint is available
 ```
 
-This removes Gate.io/Yahoo as silent live-price fallbacks from the application composition root while preserving the existing Gate.io → Yahoo OHLCV fallback path.
-
-Phase 42 does **not** add execution authority. Assistant/LLM responses remain evidence-only and cannot submit orders, alter risk sizing, change deterministic gate outcomes, or activate live trading.
-
-Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
+The FastAPI platform does **not** add execution authority. Assistant/API responses cannot submit orders, alter risk sizing, change deterministic gate outcomes, or activate live trading.
 
 See:
 
 - `docs/architecture/CURRENT_ARCHITECTURE_MAP.md`
+- `docs/architecture/21_api_boundary.md`
 - `docs/phases/PHASE_36_REPOSITORY_CONSOLIDATION.md`
 - `docs/phases/PHASE_37_PRODUCTION_MARKET_DATA_PLATFORM.md`
 - `docs/phases/PHASE_38_STRATEGY_SIGNAL_VALIDATION_HARDENING.md`
 - `docs/phases/PHASE_39_MARKET_INTELLIGENCE_CONTEXT_ENGINE_V2.md`
 - `docs/phases/PHASE_40_TRADING_ASSISTANT_COPILOT_LAYER.md`
+- `docs/phases/PHASE_40_1_ASSISTANT_ANALYTICS_EXPANSION.md`
+- `docs/phases/PHASE_41_PRODUCTION_FASTAPI_PLATFORM.md`
 - `docs/phases/PHASE_41_GROUNDED_LLM_CONVERSATION_ORCHESTRATION.md`
 - `docs/phases/PHASE_42_PRODUCTION_LLM_PROVIDER_ASSISTANT_OBSERVABILITY.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
@@ -48,7 +53,7 @@ See:
 
 ## Architecture principles
 
-- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, assistant orchestration, model-provider integration, and presentation are separate concerns.
+- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, assistant orchestration, model-provider integration, API transport, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
@@ -59,6 +64,7 @@ See:
 - Missing or unsupported information remains `UNKNOWN`; conversation state never substitutes for fresh trading evidence.
 - Model-provider failures degrade to deterministic assistant behavior rather than changing trading decisions.
 - Assistant telemetry excludes prompt text, response text, evidence values, session identifiers and secrets.
+- API transport delegates to `TradingApiService`; FastAPI handlers do not own business rules.
 - Live execution is fail-closed and requires explicit production activation.
 - Market-data source ownership is explicit: Storm for live price, Gate.io for primary OHLCV, Yahoo Finance as OHLCV fallback.
 - Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
@@ -80,18 +86,18 @@ The repository includes these major domains:
 - `app/scanner` — market scanning and opportunity generation.
 - `app/context` — news/event policy plus Phase 39 intelligence normalization, deduplication, relevance, classification, confidence, macro enrichment, and historical impact evaluation.
 - `app/strategy` — evidence, scoring, confidence, targets, and strategy integration.
-- `app/strategy_validation` — OOS splitting, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, and fail-closed strategy qualification.
+- `app/strategy_validation` — statistical calibration, OOS splitting, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, and fail-closed strategy qualification.
 - `app/risk` — sizing, policy, portfolio/trade risk, and provider-specific constraints.
 - `app/execution` — paper execution, pending orders, persistence, atomic execution, fills, and risk reservation.
 - `app/position` and `app/portfolio` — position lifecycle, settlement, exposure, correlation, and account state.
 - `app/backtest` and `app/research` — backtesting, realistic costs, walk-forward, Monte Carlo, bounded research/optimization, and sensitivity analysis.
 - `app/copilot` — grounded opportunity explanations, source-labelled facts, gate outcomes, and read-only market briefs.
-- `app/assistant` — grounded routing/grounding/orchestration plus Phase 42 provider adapter, environment-backed runtime policy, retry/circuit breaker and content-free telemetry.
+- `app/assistant` — grounded routing/grounding/orchestration, read-only position/journal/market-change/what-if analytics, provider adapter, runtime policy, retry/circuit breaker and content-free telemetry.
 - `app/journal`, `app/analytics`, and `app/reporting` — journaling, analytics, export/reporting foundations.
 - `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, readiness and operational monitoring.
-- `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations and production validation gates.
+- `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations, API security/rate-limit foundation, and production validation gates.
 - `app/live_operation` — Phase 35 production-operation safety boundary.
-- `interfaces/api` — external API boundary, including copilot routes, grounded assistant query route and read-only assistant metrics.
+- `interfaces/api` — transport-independent application API service, legacy stdlib compatibility adapter, and Phase 41 FastAPI/ASGI production platform.
 
 ## Quality gates
 
@@ -138,6 +144,45 @@ Optional paths:
 python main.py status --db data/trading_system_v3.db --universe config/universe.json
 ```
 
+## Production FastAPI platform
+
+After installation, the production API entry point is:
+
+```bash
+trading-api
+```
+
+The default development bind is `127.0.0.1:8000`. The preferred production topology is one Uvicorn worker behind a TLS-terminating ingress/reverse proxy while the application remains SQLite-backed.
+
+Versioned routes live under:
+
+```text
+/api/v1
+```
+
+Operational probes are:
+
+```text
+GET /healthz
+GET /readyz
+```
+
+Local development exposes `/docs` and `/openapi.json` by default. Production disables docs by default and requires both API-key auth and explicit trusted hosts.
+
+Minimum production configuration example:
+
+```text
+TRADING_API_ENV=production
+TRADING_API_KEY=<secret from environment/secret manager>
+TRADING_API_ALLOWED_HOSTS=api.example.com
+TRADING_API_HOST=0.0.0.0
+TRADING_API_PORT=8000
+```
+
+Optional policy controls include `TRADING_API_CORS_ORIGINS`, request/rate limits, DB/universe paths, and `TRADING_API_RUNTIME_CYCLE_ENABLED`. The runtime-cycle API action is disabled by default and cannot be enabled without required API-key auth.
+
+Phase 41 does not add a client-facing SSE/WebSocket by independently polling the application. The existing Gate.io WebSocket is provider ingress. A future realtime client transport should consume a shared canonical application event/snapshot bus.
+
 ## Risk constants
 
 The initial policy is:
@@ -150,7 +195,7 @@ The initial policy is:
 - Minimum score: **90 / 100**
 - Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, assistant, model-provider, or research code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, assistant, model-provider, API transport, or research code.
 
 ## Strategy evidence and qualification
 
@@ -168,7 +213,7 @@ The opportunity score remains a 100-point ranking model after hard gates:
 
 Score and confidence remain independent.
 
-Phase 38 adds a separate qualification boundary. A high score/confidence signal or strong aggregate backtest cannot by itself qualify a strategy. Qualification evaluates independent OOS, walk-forward, Monte Carlo, cost-stress, parameter-stability, regime, and forward PAPER/SHADOW evidence.
+Phase 38 adds a separate qualification boundary. A high score/confidence signal or strong aggregate backtest cannot by itself qualify a strategy. Qualification evaluates independent OOS, walk-forward, Monte Carlo, cost-stress, parameter-stability, regime, and forward PAPER/SHADOW evidence. Phase 38.1 adds independent statistical threshold calibration without weakening the Phase 38 baseline guardrails.
 
 ## Market intelligence and context boundary
 
@@ -206,25 +251,18 @@ API / Android / Assistant Orchestrator
 
 The application preserves per-symbol strategy/context/risk/portfolio gate outcomes so the copilot can explain why a candidate was `QUALIFIED`, `HOLD`, `REJECTED`, or `NO_TRADE`. Copilot facts are source-labelled and missing data is not fabricated.
 
-Read-only API routes:
-
-```text
-GET /assistant/brief
-GET /assistant/opportunity?symbol=BTCUSD
-```
+Phase 40.1 adds grounded read-only analytics for open positions, journal performance, market change, and bounded what-if scenarios. These analytics do not mutate trading state or authorize execution.
 
 ## Grounded conversation and production LLM boundary
 
-Phase 41 provides the grounded conversation contract; Phase 42 adds an optional production provider and reliability/observability wrapper:
+The earlier assistant roadmap's Phase 41 provides the grounded conversation contract; Phase 42 adds an optional production provider and reliability/observability wrapper:
 
 ```text
 User Query
     ↓
 AssistantIntentRouter
     ↓
-Fresh CopilotMarketBrief
-    ↓
-GroundingBuilder
+Grounded evidence / analytics
     ↓
 Stable EvidenceCitation IDs
     ↓
@@ -255,14 +293,7 @@ OPENAI_API_KEY=<environment secret; never commit>
 
 Additional environment variables control timeout, prompt/output budgets, retry/backoff and circuit-breaker behavior.
 
-Assistant endpoints:
-
-```text
-POST /assistant/query
-GET  /assistant/metrics
-```
-
-`/assistant/metrics` exposes aggregate call/success/failure counts, token usage and average latency only. It does not expose prompts, responses, evidence values, sessions or secrets.
+The versioned FastAPI routes expose these assistant capabilities under `/api/v1/assistant/...`.
 
 ## Research boundary
 
@@ -276,13 +307,13 @@ Research remains reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research, qualification, intelligence, copilot, assistant, and model-provider output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
+Research, qualification, intelligence, copilot, assistant, model-provider, and API output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources and production data boundary
 
 The V3 source boundary currently contains adapters for:
 
-- Storm — authoritative application live-price source in the Phase 42 composition policy
+- Storm — authoritative application live-price source
 - Gate.io — primary OHLCV source
 - Yahoo Finance — OHLCV fallback
 - Public/free context sources under `app/context`
