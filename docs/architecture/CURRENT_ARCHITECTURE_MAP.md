@@ -7,11 +7,16 @@ This document describes the implementation that exists in the active V3 release 
 ## Runtime flow
 
 ```text
-Provider Discovery / Canonical Universe / Symbol Mapping
+Storm Public Markets
         ↓
-Explicit Market-Data Source Policy
-        ├──────────────→ Live Price: Storm only
-        └──────────────→ OHLCV: Gate.io → Yahoo Finance fallback
+type=base + settlement=usdt
+        ↓
+Storm Reference Universe + Storm Reference Price
+        ↓
+OHLCV Source Resolver
+        ├──────────────→ Gate.io closest acceptable comparable market
+        ├──────────────→ Yahoo Finance closest acceptable fallback
+        └──────────────→ explicit NO_DATA when unresolved
         ↓
 Gate.io Public WebSocket + REST / Yahoo REST
         ↓
@@ -50,13 +55,83 @@ Copilot, assistant and external-model paths are explanatory only. They do not ow
 The authoritative application source policy is:
 
 ```text
-Live price       → Storm only
-OHLCV primary    → Gate.io
-OHLCV fallback   → Yahoo Finance
-Storm OHLCV      → disabled until independently verified
+Reference universe → Storm markets where type=base and settlement=usdt
+Reference price    → Storm
+OHLCV primary      → Gate.io market closest to Storm reference price
+OHLCV fallback     → Yahoo Finance market closest to Storm reference price
+Unresolved asset   → explicit NO_DATA coverage entry
+Storm OHLCV        → disabled until independently verified
 ```
 
-The active market-data paths are public/no-key. Provider role selection does not bypass retry, circuit breaker, freshness, OHLC integrity, outlier or reconciliation controls.
+The active market-data paths are public/no-key. Provider selection does not bypass retry, circuit breaker, freshness, OHLC integrity, outlier or reconciliation controls.
+
+### Storm reference-universe boundary
+
+`StormReferenceUniverseProvider` reads the public Storm `/markets` catalog and admits only records satisfying both reference-universe predicates:
+
+```text
+type       = base
+settlement = usdt
+```
+
+Each admitted record carries its Storm provider symbol, canonical `BASE/USDT` identity, reference price and timestamp. Storm is therefore both the market-data universe authority and the price reference used for cross-provider matching.
+
+Storm discovery is a data-universe operation only. A newly discovered asset does not become execution-eligible simply because it exists in Storm.
+
+### Price-proximity OHLCV resolution
+
+`StormDrivenUniverseResolver` resolves each Storm reference asset independently:
+
+```text
+Storm reference asset + Storm reference price
+        ↓
+Gate.io same-base tradable candidates
+        ↓
+Comparable quotes only: USDT / USDC / USD
+        ↓
+Fresh candidate prices
+        ↓
+minimum absolute percentage deviation
+        ↓
+inside configured tolerance?
+        ├── yes → Gate.io OHLCV source
+        └── no  → Yahoo Finance candidates
+                         ↓
+                  minimum price deviation
+                         ↓
+                  inside tolerance?
+                    ├── yes → Yahoo OHLCV source
+                    └── no  → NO_DATA
+```
+
+The default maximum accepted deviation is 5% and is configurable. The closest candidate is not accepted merely because it is the closest: it must also pass the deviation and freshness gates.
+
+Resolution records preserve the selected provider symbol and provider price. When OHLCV is fetched, provider-specific candle symbols are normalized back to the canonical Storm `BASE/USDT` identity.
+
+### Universe coverage reporting
+
+Every resolver run produces a `UniverseCoverageReport` with exhaustive buckets:
+
+```text
+(reference) Storm: N
+Gate.io:           G
+Yahoo Finance:     Y
+No Data:           U
+```
+
+The invariant is enforced:
+
+```text
+G + Y + U = N
+```
+
+The report also exposes resolved count, coverage percentage and per-asset source/reason/proximity evidence. The read-only endpoint is:
+
+```text
+GET /market-data/universe-coverage
+```
+
+No Storm asset is silently dropped because Gate.io or Yahoo Finance cannot provide an acceptable mapping.
 
 ### Gate.io REST and WebSocket
 
@@ -64,17 +139,21 @@ Phase 37.1 adds the real public Gate.io Spot v4 candlestick WebSocket while pres
 
 ```text
 Gate.io
+  ├── REST /spot/tickers
+  │        ↓
+  │   bulk candidate prices for Storm-price matching
+  │
   ├── REST /spot/candlesticks
   │        ↓
   │   GateIOProvider
   │        ↓
-  │   ProviderRouter
+  │   resolved OHLCV reads
   │
   ├── REST /spot/currency_pairs
   │        ↓
   │   GateIOSpotDiscoveryProvider
   │        ↓
-  │   canonical Instrument metadata
+  │   candidate-market metadata for Storm assets
   │
   └── WSS wss://api.gateio.ws/ws/v4/
            ↓
@@ -90,6 +169,8 @@ Gate.io
            ├──→ MarketDataCache
            └──→ CandleHistoryStore
 ```
+
+Gate.io discovery no longer defines active universe membership. It supplies candidate venue markets for assets already admitted by the Storm reference-universe filter.
 
 The WebSocket is configured by the PAPER composition root but is opt-in. Building the application does not open a socket. `start_gateio_stream()` and `stop_gateio_stream()` own the lifecycle.
 
@@ -121,35 +202,45 @@ Gate.io → OHLCV_REST + OHLCV_STREAM + DISCOVERY / HTTPS+WSS / public-no-key
 Yahoo   → OHLCV_REST                          / HTTPS / public-no-key
 ```
 
-The registry is descriptive/operational metadata. `source_policy.py` remains the application authority for which provider owns each read role.
+The registry is descriptive/operational metadata. Universe membership and source resolution are owned by the Storm reference-universe and price-proximity contracts; the registry itself does not activate markets.
 
 ### Dynamic universe
 
-Phase 37's generic `DynamicUniverseDiscovery` remains the canonical reconciliation layer. Phase 37.1 adds an actual Gate.io discovery provider over public spot currency-pair metadata.
+Phase 37's generic `DynamicUniverseDiscovery` remains available as infrastructure, but the active market-data candidate authority is now Storm filtered by `type=base` and `settlement=usdt`.
 
-A discovered Gate.io market is not automatically activated for trading. Strategy/execution eligibility still requires canonical mapping, contract specification, risk configuration and universe eligibility. Discovery may expand the candidate catalog; it cannot expand execution authority by itself.
+Gate.io discovery is subordinate to that reference list: it finds viable provider markets for Storm assets rather than independently expanding the active data universe. Yahoo Finance is evaluated only as fallback when Gate.io has no acceptable price-matched market.
+
+A discovered Storm asset is not automatically activated for execution. Strategy/execution eligibility still requires contract specification, risk configuration and the relevant eligibility path. Data discovery cannot expand execution authority by itself.
 
 ### OHLCV read path
 
-The strategy snapshot loader now consumes `ProductionMarketDataPlatform`:
+For Storm-resolved assets, the intended OHLCV path is:
 
 ```text
-read OHLCV
+Storm reference asset
    ↓
-hot cache
-   ↓ miss
-historical candle store
-   ↓ miss
-Gate.io REST through ProviderRouter
-   ↓ failure / unsupported / invalid
-Yahoo Finance fallback
+Storm reference price
    ↓
-quality/freshness checks
+Gate.io candidate market selection by price proximity
+   ↓ accepted
+Gate.io OHLCV
    ↓
-market analysis / strategy
+canonical BASE/USDT candles
+
+Gate candidate unavailable / outside tolerance
+   ↓
+Yahoo Finance candidate selection by price proximity
+   ↓ accepted
+Yahoo OHLCV
+   ↓
+canonical BASE/USDT candles
+
+Neither acceptable
+   ↓
+NO_DATA + provider-review-required evidence
 ```
 
-Streaming Gate.io candles populate the same cache/history path, so push and pull data converge on canonical storage contracts.
+The existing configured strategy snapshot loader continues to consume `ProductionMarketDataPlatform`. The Storm-driven resolver is exposed in composition and API without granting newly discovered assets contract/risk/execution configuration automatically.
 
 ## Market-intelligence boundary
 
@@ -256,8 +347,8 @@ Phase 37.1 modifies market data only. It does not add Gate.io private endpoints,
 
 | Domain | Primary responsibility |
 |---|---|
-| `app/universe` | canonical instruments, Gate.io/public dynamic discovery, mappings, eligibility, contract specs |
-| `app/data` | provider registry, source roles, Gate.io REST/WSS, streaming normalization, cache, historical OHLC, SLA, quality, failover, reconciliation and clock-skew evidence |
+| `app/universe` | Storm reference-universe discovery, provider candidate resolution, canonical instruments, mappings, eligibility and contract specs |
+| `app/data` | provider registry, Gate.io REST/WSS, public price catalogs, streaming normalization, cache, historical OHLC, SLA, quality, failover, reconciliation and clock-skew evidence |
 | `app/market` | indicators, trend, regime, structure, liquidity |
 | `app/scanner` | scanning and opportunity generation |
 | `app/context` | news/macro policy and intelligence evidence |
@@ -272,7 +363,7 @@ Phase 37.1 modifies market data only. It does not add Gate.io private endpoints,
 | `app/journal` / `app/analytics` | journal and performance/risk analytics |
 | `app/recovery` / `app/observability` | restart/reconciliation, health and readiness |
 | `app/live_operation` | fail-closed production execution safety boundary |
-| `interfaces/api` | external read/control boundary for clients within allowed system modes |
+| `interfaces/api` | external read/control boundary, including read-only universe-coverage reporting |
 
 ## Source-of-truth rules
 
@@ -280,12 +371,16 @@ Phase 37.1 modifies market data only. It does not add Gate.io private endpoints,
 2. Legacy phase branches are reference history only unless re-reviewed and reimplemented.
 3. Historical diverged branches must not be merged wholesale.
 4. The global protected `CI / quality` workflow is the merge/release quality gate.
-5. Market-data consumers use canonical contracts and explicit provider roles.
-6. Storm remains application live-price-only; Storm OHLCV stays disabled until independently verified.
-7. Gate.io is primary OHLCV; Yahoo Finance is fallback.
-8. Gate.io public discovery cannot auto-enable execution for newly discovered markets.
-9. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
-10. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
+5. Storm `type=base` + `settlement=usdt` markets define the reference data universe.
+6. Storm defines the reference price used for provider-market matching.
+7. Gate.io is the primary OHLCV resolver and must select the closest fresh comparable market inside tolerance.
+8. Yahoo Finance is fallback only after Gate.io has no acceptable candidate.
+9. Every unresolved Storm asset remains visible as `NO_DATA`; silent dropping is forbidden.
+10. `Gate.io + Yahoo Finance + No Data` must equal the Storm reference-universe count.
+11. Storm OHLCV stays disabled until independently verified.
+12. Data discovery cannot auto-enable execution for newly discovered assets.
+13. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
+14. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
 
 ## Current modes
 
@@ -307,7 +402,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 37.1 implementation head `ac76df816ebc920bbf3b9583e7c59a85bca1845e` passed: 0 mypy issues across 292 source files, 337 tests and 78.95% branch-aware coverage. Final documentation and merged `main` must also pass the protected `CI / quality` gate before Phase 37.1 is closed.
+Phase 37.1.1 implementation validation passed: 0 mypy issues across 294 source files, 343 tests and 79.49% branch-aware coverage. Final documentation and merged `main` must also pass the protected `CI / quality` gate before the Storm-driven resolution update is closed.
 
 ## Repository governance
 
