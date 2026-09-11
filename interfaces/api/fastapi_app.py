@@ -140,8 +140,8 @@ class PlatformMiddleware(BaseHTTPMiddleware):
                 response.headers["Retry-After"] = str(self._limiter.retry_after(identity))
                 return self._apply_headers(response, request_id)
 
-        response = await call_next(request)
-        return self._apply_headers(response, request_id)
+        downstream_response = await call_next(request)
+        return self._apply_headers(downstream_response, request_id)
 
 
 _ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
