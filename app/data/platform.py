@@ -7,7 +7,7 @@ from app.data.candle_builder import CandleBuilder
 from app.data.historical_store import CandleHistoryStore
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.provider_router import ProviderRouter
-from app.data.streaming import TradeEvent
+from app.data.streaming import CandleStreamEvent, TradeEvent
 
 
 class ProductionMarketDataPlatform:
@@ -103,6 +103,15 @@ class ProductionMarketDataPlatform:
             self.cache.put_candles(closed)
             self.history.upsert(closed)
         return tuple(closed)
+
+    def ingest_candle(self, event: CandleStreamEvent) -> Candle:
+        """Persist a normalized provider candle update idempotently."""
+
+        event.validate()
+        candle = event.candle
+        self.cache.put_candles((candle,))
+        self.history.upsert((candle,))
+        return candle
 
     def flush_open_candles(self, symbol: str) -> tuple[Candle, ...]:
         candles = tuple(
