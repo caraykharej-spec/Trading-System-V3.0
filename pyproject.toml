@@ -7,7 +7,9 @@ name = "trading-system-v3"
 version = "3.0.0.dev2"
 description = "Modular rule-based paper and research trading system"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "websocket-client>=1.8,<2",
+]
 
 [project.optional-dependencies]
 dev = [

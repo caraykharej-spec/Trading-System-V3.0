@@ -21,13 +21,19 @@ from app.context.context_engine import ContextEngine
 from app.context.models import ContextAssessment
 from app.copilot import CopilotExplainer, CopilotItemBrief, CopilotMarketBrief
 from app.core.enums import SystemMode
+from app.data.cache import MarketDataCache
+from app.data.historical_store import CandleHistoryStore, InMemoryCandleStore, SQLiteCandleStore
 from app.data.mapped_provider import MappedMarketProvider
 from app.data.market_data import MarketDataRequest
+from app.data.platform import ProductionMarketDataPlatform
+from app.data.provider_registry import MarketDataProviderRegistry, build_default_provider_registry
 from app.data.provider_router import ProviderRouter
 from app.data.providers.gateio import GateIOProvider
+from app.data.providers.gateio_stream import GateIOCandleSubscription, GateIOWebSocketCandleSource
 from app.data.providers.storm import StormProvider
 from app.data.providers.yahoo import YahooFinanceProvider
 from app.data.source_policy import build_market_data_routers
+from app.data.streaming import CandleStreamEvent, CandleStreamIngestor
 from app.execution.atomic_execution import AtomicExecutionService
 from app.execution.execution_engine import ExecutionEngine, ExecutionPolicy
 from app.execution.models import OrderRequest
@@ -52,6 +58,7 @@ from app.storage.repositories.sqlite_order_repository import SQLiteOrderReposito
 from app.storage.repositories.sqlite_position_repository import SQLitePositionRepository
 from app.universe.config_loader import load_universe
 from app.universe.contract_specs import ContractSpec
+from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
 from app.universe.registry import InstrumentRegistry
 from app.universe.symbol_mapping import SymbolMapper
 from interfaces.api.service import TradingApiService
@@ -83,8 +90,13 @@ class PaperApplication:
     connection: sqlite3.Connection
     registry: InstrumentRegistry
     mapper: SymbolMapper
+    provider_registry: MarketDataProviderRegistry
     live_router: ProviderRouter
     candle_router: ProviderRouter
+    market_data_platform: ProductionMarketDataPlatform
+    gateio_candle_stream: GateIOWebSocketCandleSource | None
+    gateio_candle_ingestor: CandleStreamIngestor | None
+    gateio_discovery: GateIOSpotDiscoveryProvider
     account: Account
     position_repository: SQLitePositionRepository
     pending_repository: SQLitePendingOrderRepository
@@ -96,7 +108,23 @@ class PaperApplication:
     selection_queue: ExplicitPaperSelectionQueue
     assistant_telemetry: AssistantTelemetry
 
+    def start_gateio_stream(self) -> None:
+        stream = self.gateio_candle_stream
+        ingestor = self.gateio_candle_ingestor
+        if stream is None or ingestor is None:
+            raise RuntimeError("Gate.io candle stream is not configured for this universe")
+
+        def handle(event: CandleStreamEvent) -> None:
+            ingestor.ingest(event)
+
+        stream.start(handle)
+
+    def stop_gateio_stream(self) -> None:
+        if self.gateio_candle_stream is not None:
+            self.gateio_candle_stream.stop()
+
     def close(self) -> None:
+        self.stop_gateio_stream()
         self.connection.close()
 
 
@@ -137,6 +165,26 @@ def _validate_universe(
             raise ValueError(f"missing market-data mapping for {symbol}")
 
 
+def _build_gateio_subscriptions(
+    registry: InstrumentRegistry,
+    mapper: SymbolMapper,
+) -> tuple[GateIOCandleSubscription, ...]:
+    subscriptions: list[GateIOCandleSubscription] = []
+    for instrument in registry.all(tradable_only=True):
+        if not mapper.has_mapping(instrument.symbol, "gateio"):
+            continue
+        provider_symbol = mapper.to_provider(instrument.symbol, "gateio")
+        for timeframe in ("15m", "1h", "4h", "1d"):
+            subscriptions.append(
+                GateIOCandleSubscription(
+                    canonical_symbol=instrument.symbol,
+                    provider_symbol=provider_symbol,
+                    timeframe=timeframe,
+                )
+            )
+    return tuple(subscriptions)
+
+
 def build_paper_application(
     *,
     db_path: str | Path = "data/trading_system_v3.db",
@@ -150,8 +198,9 @@ def build_paper_application(
     """Build the real V3 application boundary without performing network I/O.
 
     Network calls occur only when a price/candle/cycle/opportunity operation is
-    explicitly requested. Paper order submission is additionally gated by the
-    explicit selection queue; Top-10 opportunities are never auto-submitted.
+    explicitly requested. The Gate.io WebSocket source is configured but not
+    started automatically. Paper order submission is gated by the explicit
+    selection queue; Top-10 opportunities are never auto-submitted.
     """
     connection = connect(db_path)
     registry, mapper, contract_specs = load_universe(universe_path)
@@ -163,6 +212,36 @@ def build_paper_application(
     gateio = MappedMarketProvider(GateIOProvider(), mapper)
     yahoo = MappedMarketProvider(YahooFinanceProvider(), mapper)
     live_router, candle_router = build_market_data_routers((storm, gateio, yahoo))
+    provider_registry = build_default_provider_registry()
+
+    candle_history: CandleHistoryStore
+    if str(db_path) == ":memory:":
+        candle_history = InMemoryCandleStore()
+    else:
+        candle_history = SQLiteCandleStore(f"{db_path}.market_data.sqlite3")
+    market_data_platform = ProductionMarketDataPlatform(
+        router=candle_router,
+        cache=MarketDataCache(max_candles_per_series=1000),
+        history=candle_history,
+        timeframes=("15m", "1h", "4h", "1d"),
+    )
+
+    gateio_subscriptions = _build_gateio_subscriptions(registry, mapper)
+    gateio_candle_stream = (
+        GateIOWebSocketCandleSource(gateio_subscriptions)
+        if gateio_subscriptions
+        else None
+    )
+
+    def ingest_gateio_candle(event: CandleStreamEvent) -> None:
+        market_data_platform.ingest_candle(event)
+
+    gateio_candle_ingestor = (
+        CandleStreamIngestor(ingest_gateio_candle)
+        if gateio_candle_stream is not None
+        else None
+    )
+    gateio_discovery = GateIOSpotDiscoveryProvider()
 
     position_repository = SQLitePositionRepository(connection)
     position_writer = SQLitePositionRepository(connection, auto_commit=False)
@@ -191,7 +270,7 @@ def build_paper_application(
     ]:
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
-            candles = candle_router.get_candles(
+            candles = market_data_platform.get_candles(
                 MarketDataRequest(symbol=symbol, timeframe=timeframe, limit=260)
             )
             snapshots[timeframe] = analyze_market(symbol, timeframe, candles)
@@ -333,7 +412,7 @@ def build_paper_application(
 
     api = TradingApiService(
         mode=SystemMode.PAPER,
-        version="3.0.0-dev3",
+        version="3.0.0-dev4",
         cycle_runner=runtime.run,
         positions_provider=position_repository.list_open,
         opportunities_provider=opportunities,
@@ -354,8 +433,13 @@ def build_paper_application(
         connection=connection,
         registry=registry,
         mapper=mapper,
+        provider_registry=provider_registry,
         live_router=live_router,
         candle_router=candle_router,
+        market_data_platform=market_data_platform,
+        gateio_candle_stream=gateio_candle_stream,
+        gateio_candle_ingestor=gateio_candle_ingestor,
+        gateio_discovery=gateio_discovery,
         account=account,
         position_repository=position_repository,
         pending_repository=pending_repository,
