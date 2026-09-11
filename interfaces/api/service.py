@@ -30,6 +30,7 @@ class TradingApiService:
         copilot_symbol_provider: Callable[[str], Any] | None = None,
         assistant_query_provider: Callable[[str, str | None], Any] | None = None,
         assistant_metrics_provider: Callable[[], Any] | None = None,
+        universe_coverage_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
@@ -42,6 +43,7 @@ class TradingApiService:
         self._copilot_symbol_provider = copilot_symbol_provider
         self._assistant_query_provider = assistant_query_provider
         self._assistant_metrics_provider = assistant_metrics_provider
+        self._universe_coverage_provider = universe_coverage_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
@@ -77,6 +79,16 @@ class TradingApiService:
             )
         return ApiResponse.ok(
             {"performance": self._serialize(self._analytics_provider())}
+        )
+
+    def universe_coverage(self) -> ApiResponse:
+        if self._universe_coverage_provider is None:
+            return ApiResponse.conflict(
+                "UNIVERSE_COVERAGE_UNAVAILABLE",
+                "Storm-driven market-data universe resolution is not configured",
+            )
+        return ApiResponse.ok(
+            {"universe_coverage": self._serialize(self._universe_coverage_provider())}
         )
 
     def assistant_brief(self) -> ApiResponse:
