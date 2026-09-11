@@ -38,6 +38,34 @@ Positions / Portfolio / Journal / Analytics
 Recovery / Observability / Health / Reporting
 ```
 
+## Strategy qualification boundary
+
+Phase 38 adds a release/research qualification boundary around the existing strategy, backtest, and research engines. It is not a per-order execution shortcut and it cannot activate live trading.
+
+```text
+Historical Dataset
+        ↓
+Chronological Train / Validation / Holdout
+        ↓
+Holdout OOS Performance
+        ├───────────────┐
+        ↓               ↓
+Walk Forward      Monte Carlo
+        ↓               ↓
+Cost Stress       Parameter Stability
+        └───────┬───────┘
+                ↓
+         Regime Coverage
+                ↓
+   Forward PAPER / SHADOW
+                ↓
+ StrategyQualificationEngine
+                ↓
+       QUALIFIED / HOLD
+```
+
+Missing required evidence or a failed critical threshold yields `HOLD`. `QUALIFIED` means only that the configured strategy-validation policy passed; core risk, portfolio, production-readiness, connector-readiness, and live-operation gates remain independently mandatory.
+
 ## Production market-data boundary
 
 Phase 37 adds a production-oriented data boundary while preserving the existing canonical models and provider failover stack:
@@ -92,12 +120,13 @@ A production execution connector is disabled by default. The presence of `app/li
 | `app/scanner` | scanning and opportunity generation |
 | `app/context` | news/economic-event context policy |
 | `app/strategy` | evidence, scoring, confidence, strategy decisions, targets |
+| `app/strategy_validation` | holdout OOS, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, qualification gate |
 | `app/risk` | sizing, risk policy, trade/portfolio gates |
 | `app/execution` | paper execution, pending orders, fills, atomic persistence |
 | `app/position` | position lifecycle and settlement |
 | `app/portfolio` | account state, exposure, correlation, portfolio constraints |
 | `app/backtest` | realistic backtesting, costs, walk-forward and Monte Carlo |
-| `app/research` | bounded reproducible research/optimization |
+| `app/research` | bounded reproducible research/optimization and sensitivity analysis |
 | `app/journal` | trade decision and execution journal |
 | `app/analytics` | performance and risk analytics |
 | `app/reporting` / `app/export_system` | report/export foundations |
@@ -118,6 +147,7 @@ A production execution connector is disabled by default. The presence of `app/li
 6. Strategy, scanner, context, analytics, and assistant/presentation layers may not bypass core risk and execution boundaries.
 7. Live operation remains fail-closed until a validated venue adapter is intentionally enabled.
 8. Market-data consumers must use canonical data contracts and may not bypass data freshness/quality boundaries with ad-hoc provider calls.
+9. Strategy qualification is fail-closed; a single in-sample backtest, score, or confidence value cannot substitute for the required validation evidence set.
 
 ## Current execution modes
 
@@ -141,7 +171,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 37 branch verification is green: 0 mypy issues across 255 source files, 293 passing tests, and 78.66% branch-aware coverage.
+Phase 38 initial branch verification is green: 0 mypy issues across 263 source files, 299 passing tests, and 79.03% branch-aware coverage. The final branch head and merged `main` commit must pass the same workflow before Phase 38 is considered closed.
 
 ## Repository governance
 
