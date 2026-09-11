@@ -15,6 +15,29 @@ class CandleHistoryStore(Protocol):
     def load(self, symbol: str, timeframe: str, *, limit: int = 200) -> list[Candle]: ...
 
 
+class InMemoryCandleStore:
+    """Idempotent candle history store for ephemeral/test application builds."""
+
+    def __init__(self) -> None:
+        self._candles: dict[tuple[str, str, datetime], Candle] = {}
+
+    def upsert(self, candles: list[Candle] | tuple[Candle, ...]) -> None:
+        for candle in candles:
+            key = (candle.symbol.upper(), candle.timeframe, candle.timestamp)
+            self._candles[key] = candle
+
+    def load(self, symbol: str, timeframe: str, *, limit: int = 200) -> list[Candle]:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        normalized = symbol.upper()
+        matching = [
+            candle
+            for (stored_symbol, stored_timeframe, _), candle in self._candles.items()
+            if stored_symbol == normalized and stored_timeframe == timeframe
+        ]
+        return sorted(matching, key=lambda item: item.timestamp)[-limit:]
+
+
 class SQLiteCandleStore:
     """Durable OHLCV history store with idempotent upserts."""
 
