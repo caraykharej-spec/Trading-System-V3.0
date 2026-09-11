@@ -1,0 +1,23 @@
+name: Governance Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  main-protection:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify main protection policy
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/governance/verify_main_protection.py
+          --repository "$GITHUB_REPOSITORY"
+          --policy .github/governance/main-protection-policy.json
