@@ -264,10 +264,19 @@ Market intelligence is advisory evidence. It cannot bypass ContextEngine policy,
 
 ## Strategy qualification boundary
 
-Phase 38 provides a fail-closed validation boundary:
+Phase 38 provides a fail-closed validation boundary, and Phase 38.1 adds a separate statistical policy-calibration layer upstream of candidate qualification:
 
 ```text
-Historical Data
+Independent Historical Validation Cohort
+   ↓
+CalibrationObservation[]
+   ↓
+ThresholdCalibrator
+   ├────────────→ insufficient/invalid evidence → HOLD
+   ↓
+CALIBRATED StrategyValidationPolicy
+   ↓
+Historical Candidate Data
    ↓
 Chronological Train / Validation / Holdout
    ↓
@@ -282,7 +291,13 @@ StrategyQualificationEngine
 QUALIFIED / HOLD
 ```
 
-A high score, confidence value or in-sample result cannot substitute for required validation evidence. `QUALIFIED` does not enable live execution.
+Calibration and qualification have separate evidence roles. The candidate being qualified does not calibrate its own acceptance policy. An optional timezone-aware cutoff admits only calibration observations with `as_of < cutoff`, preventing future or same-boundary evidence from entering threshold estimation.
+
+For higher-is-better metrics, Phase 38.1 takes a lower empirical quantile and applies `max(baseline minimum, empirical threshold)`. For lower-is-better metrics it takes an upper empirical quantile and applies `min(baseline maximum, empirical threshold)`. Statistical calibration can therefore tighten Phase 38 but can never loosen its existing guardrails.
+
+Structural evidence-count requirements remain explicit baseline policy rather than statistically relaxed thresholds. Insufficient cohort size or per-metric coverage produces `HOLD` with no usable policy. Duplicate sample IDs are rejected, and every eligible cohort receives a deterministic SHA-256 fingerprint for audit/reproducibility.
+
+`StrategyQualificationEngine.from_calibration(...)` accepts only a successful calibration report. A high score, confidence value, in-sample result, or calibration result cannot substitute for the full Phase 38 validation evidence. `CALIBRATED` and `QUALIFIED` are research/release states only; neither enables live execution.
 
 ## Trading copilot and assistant boundary
 
@@ -326,7 +341,7 @@ Strategy
    ↓
 Context
    ↓
-Strategy Qualification
+Statistical Calibration Policy + Strategy Qualification
    ↓
 Core Risk
    ↓
@@ -341,7 +356,7 @@ Execution Gateway
 Venue-specific connector (disabled unless explicitly implemented/validated)
 ```
 
-Phase 37.1 modifies market data only. It does not add Gate.io private endpoints, balances, positions, orders, fills or order submission.
+Phase 38.1 changes validation-policy derivation only. It does not alter strategy scoring, position sizing, portfolio risk, order submission, or any live-operation gate.
 
 ## Domain ownership
 
@@ -353,7 +368,7 @@ Phase 37.1 modifies market data only. It does not add Gate.io private endpoints,
 | `app/scanner` | scanning and opportunity generation |
 | `app/context` | news/macro policy and intelligence evidence |
 | `app/strategy` | evidence, scoring, confidence, strategy decisions and targets |
-| `app/strategy_validation` | OOS, cost stress, regime/stability, forward evidence and qualification |
+| `app/strategy_validation` | statistical threshold calibration, OOS, cost stress, regime/stability, forward evidence and fail-closed qualification |
 | `app/risk` | sizing, trade and portfolio risk gates |
 | `app/execution` | PAPER execution, pending orders, fills and atomic persistence |
 | `app/position` / `app/portfolio` | position lifecycle, settlement, exposure and account state |
@@ -379,8 +394,10 @@ Phase 37.1 modifies market data only. It does not add Gate.io private endpoints,
 10. `Gate.io + Yahoo Finance + No Data` must equal the Storm reference-universe count.
 11. Storm OHLCV stays disabled until independently verified.
 12. Data discovery cannot auto-enable execution for newly discovered assets.
-13. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
-14. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
+13. Statistical calibration must use an independent historical cohort and cannot weaken the Phase 38 baseline policy.
+14. Insufficient calibration evidence produces `HOLD`; no downstream component may manufacture a calibrated policy from a failed report.
+15. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
+16. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
 
 ## Current modes
 
@@ -402,7 +419,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 37.1.1 implementation validation passed: 0 mypy issues across 294 source files, 343 tests and 79.49% branch-aware coverage. Final documentation and merged `main` must also pass the protected `CI / quality` gate before the Storm-driven resolution update is closed.
+Phase 38.1 feature-head validation passed: 0 mypy issues across 295 source files, 355 tests and 79.58% branch-aware coverage. The final pull-request head and merged `main` commit must also pass the protected `CI / quality` gate before statistical threshold calibration is closed.
 
 ## Repository governance
 

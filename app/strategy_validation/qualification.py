@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING, Self
 
 from app.backtest.models import BacktestResult
 from app.backtest.monte_carlo import MonteCarloResult
@@ -16,6 +17,9 @@ from .models import (
 )
 from .regime import RegimeValidationReport
 from .stability import ParameterStabilityReport
+
+if TYPE_CHECKING:
+    from .calibration import ThresholdCalibrationReport
 
 
 @dataclass(frozen=True)
@@ -34,6 +38,11 @@ class StrategyQualificationEngine:
 
     def __init__(self, policy: StrategyValidationPolicy | None = None) -> None:
         self.policy = policy or StrategyValidationPolicy()
+
+    @classmethod
+    def from_calibration(cls, report: ThresholdCalibrationReport) -> Self:
+        """Build an engine only from a successfully calibrated policy."""
+        return cls(report.require_policy())
 
     def evaluate(self, evidence: StrategyValidationEvidence) -> StrategyQualificationReport:
         checks = (
