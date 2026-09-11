@@ -21,21 +21,21 @@ class RiskValidationReport:
     created_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
-    def passed(self):
+    def passed(self) -> bool:
         return all(check.passed for check in self.checks)
 
 
 class RiskControlValidationEngine:
-    def __init__(self):
-        self.checks = []
+    def __init__(self) -> None:
+        self.checks: list[RiskCheck] = []
 
-    def register_check(self, check: RiskCheck):
+    def register_check(self, check: RiskCheck) -> None:
         self.checks.append(check)
 
-    def validate(self):
-        return RiskValidationReport(checks=self.checks)
+    def validate(self) -> RiskValidationReport:
+        return RiskValidationReport(checks=self.checks.copy())
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "component": "risk_control_validation",
             "status": "healthy",
