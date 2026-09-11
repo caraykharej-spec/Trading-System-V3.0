@@ -59,7 +59,12 @@ from app.storage.repositories.sqlite_position_repository import SQLitePositionRe
 from app.universe.config_loader import load_universe
 from app.universe.contract_specs import ContractSpec
 from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
+from app.universe.market_data_resolution import (
+    StormDrivenUniverseResolver,
+    UniverseCoverageReport,
+)
 from app.universe.registry import InstrumentRegistry
+from app.universe.storm_discovery import StormReferenceUniverseProvider
 from app.universe.symbol_mapping import SymbolMapper
 from interfaces.api.service import TradingApiService
 
@@ -94,6 +99,7 @@ class PaperApplication:
     live_router: ProviderRouter
     candle_router: ProviderRouter
     market_data_platform: ProductionMarketDataPlatform
+    market_data_universe_resolver: StormDrivenUniverseResolver
     gateio_candle_stream: GateIOWebSocketCandleSource | None
     gateio_candle_ingestor: CandleStreamIngestor | None
     gateio_discovery: GateIOSpotDiscoveryProvider
@@ -107,6 +113,9 @@ class PaperApplication:
     api: TradingApiService
     selection_queue: ExplicitPaperSelectionQueue
     assistant_telemetry: AssistantTelemetry
+
+    def resolve_market_data_universe(self) -> UniverseCoverageReport:
+        return self.market_data_universe_resolver.resolve()
 
     def start_gateio_stream(self) -> None:
         stream = self.gateio_candle_stream
@@ -197,10 +206,11 @@ def build_paper_application(
 ) -> PaperApplication:
     """Build the real V3 application boundary without performing network I/O.
 
-    Network calls occur only when a price/candle/cycle/opportunity operation is
-    explicitly requested. The Gate.io WebSocket source is configured but not
-    started automatically. Paper order submission is gated by the explicit
-    selection queue; Top-10 opportunities are never auto-submitted.
+    Network calls occur only when a price/candle/cycle/opportunity or Storm
+    universe-resolution operation is explicitly requested. The Gate.io WebSocket
+    source is configured but not started automatically. Paper order submission is
+    gated by the explicit selection queue; Top-10 opportunities are never
+    auto-submitted.
     """
     connection = connect(db_path)
     registry, mapper, contract_specs = load_universe(universe_path)
@@ -208,9 +218,12 @@ def build_paper_application(
     persisted_equity = _initialize_account(connection, initial_equity)
     account = Account(starting_equity=persisted_equity)
 
-    storm = MappedMarketProvider(StormProvider(), mapper)
-    gateio = MappedMarketProvider(GateIOProvider(), mapper)
-    yahoo = MappedMarketProvider(YahooFinanceProvider(), mapper)
+    storm_raw = StormProvider()
+    gateio_raw = GateIOProvider()
+    yahoo_raw = YahooFinanceProvider()
+    storm = MappedMarketProvider(storm_raw, mapper)
+    gateio = MappedMarketProvider(gateio_raw, mapper)
+    yahoo = MappedMarketProvider(yahoo_raw, mapper)
     live_router, candle_router = build_market_data_routers((storm, gateio, yahoo))
     provider_registry = build_default_provider_registry()
 
@@ -242,6 +255,12 @@ def build_paper_application(
         else None
     )
     gateio_discovery = GateIOSpotDiscoveryProvider()
+    market_data_universe_resolver = StormDrivenUniverseResolver(
+        storm_universe=StormReferenceUniverseProvider(provider=storm_raw),
+        gate_discovery=gateio_discovery,
+        gate_provider=gateio_raw,
+        yahoo_provider=yahoo_raw,
+    )
 
     position_repository = SQLitePositionRepository(connection)
     position_writer = SQLitePositionRepository(connection, auto_commit=False)
@@ -355,9 +374,7 @@ def build_paper_application(
     )
     selection_queue = ExplicitPaperSelectionQueue()
 
-    symbols = [
-        instrument.symbol for instrument in registry.all(tradable_only=True)
-    ]
+    symbols = [instrument.symbol for instrument in registry.all(tradable_only=True)]
     runtime = RuntimeCycleOrchestrator(
         position_repository=position_repository,
         live_price_provider=live_price,
@@ -412,7 +429,7 @@ def build_paper_application(
 
     api = TradingApiService(
         mode=SystemMode.PAPER,
-        version="3.0.0-dev4",
+        version="3.0.0-dev5",
         cycle_runner=runtime.run,
         positions_provider=position_repository.list_open,
         opportunities_provider=opportunities,
@@ -426,6 +443,7 @@ def build_paper_application(
             query, session_id=session_id
         ),
         assistant_metrics_provider=assistant_telemetry.snapshot,
+        universe_coverage_provider=market_data_universe_resolver.resolve,
     )
 
     return PaperApplication(
@@ -437,6 +455,7 @@ def build_paper_application(
         live_router=live_router,
         candle_router=candle_router,
         market_data_platform=market_data_platform,
+        market_data_universe_resolver=market_data_universe_resolver,
         gateio_candle_stream=gateio_candle_stream,
         gateio_candle_ingestor=gateio_candle_ingestor,
         gateio_discovery=gateio_discovery,
