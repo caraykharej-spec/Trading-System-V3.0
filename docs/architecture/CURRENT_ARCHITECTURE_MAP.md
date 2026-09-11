@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document is the repository-level architecture map for the consolidated V3 system. It describes the implementation that exists in the active Phase 36 line rather than historical phase intentions.
+This document is the repository-level architecture map for the consolidated V3 system. It describes the implementation that exists in the active `main` line rather than historical phase intentions.
 
 ## Runtime flow
 
@@ -84,7 +84,7 @@ A production connector is disabled by default. The presence of `app/live_operati
 
 ## Source-of-truth rules
 
-1. `main` is the release source of truth after Phase 36 merge.
+1. `main` is the release source of truth.
 2. Legacy phase branches are reference history only unless their code is explicitly re-reviewed and reimplemented.
 3. Diverged historical branches must not be merged wholesale into `main`.
 4. The global CI workflow is the merge/release quality gate.
@@ -114,4 +114,8 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 36 is complete only when this pipeline is green on the consolidation line and then on `main` after merge.
+Phase 36 verification is complete: the pipeline is green on the consolidation line and on the merged `main` commit. The verified post-merge result is 0 mypy issues across 248 source files, 285 passing tests, and 78.24% branch-aware coverage.
+
+## Repository governance
+
+The code and CI source of truth is consolidated in `main`, but repository inspection shows that `main` is not yet protected and no repository ruleset is configured. Repository administration should require pull requests and the `CI / quality` check before future merges, block force pushes/deletion, and prevent normal bypass of required checks.

@@ -4,11 +4,21 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current status
 
-**Phase 36 — Repository Consolidation & CI Recovery**
+**Phase 36 — Repository Consolidation & CI Recovery: COMPLETED**
 
-Phase 36 establishes a single source of truth for the repository, reconciles Phase 35 with `main`, audits legacy Phase 29–35 branches, restores the global quality pipeline, and refreshes repository documentation to match the actual implementation.
+Phase 36 has been merged into `main` and establishes `main` as the canonical source of truth. The work reconciled Phase 35, audited legacy Phase 29–35 branches, classified superseded/duplicate implementations, restored the global quality pipeline, and refreshed repository documentation to match the actual implementation.
 
-The Phase 35 live-operation framework is included in the Phase 36 consolidation branch. It provides activation, live-risk, execution-gateway, position-reconciliation, monitoring, incident-management, and circuit-breaker boundaries while remaining fail-closed. It does **not** enable live trading by default and it does **not** contain exchange credentials.
+Post-merge validation on `main` is green:
+
+- Python compile gate: **PASS**
+- Ruff lint/import-order gate: **PASS**
+- Strict mypy: **PASS — 0 issues in 248 source files**
+- Full pytest suite: **PASS — 285 tests**
+- Branch-aware coverage: **78.24%** (required threshold: 70%)
+
+The Phase 35 live-operation framework is now integrated into `main`. It provides activation, live-risk, execution-gateway, position-reconciliation, monitoring, incident-management, and circuit-breaker boundaries while remaining fail-closed. It does **not** enable live trading by default and it does **not** contain exchange credentials.
+
+Repository administration note: `main` is currently not protected by a branch-protection rule or repository ruleset. The connected GitHub integration can verify this state but cannot mutate branch-protection/ruleset administration. Protection must require pull requests and the global `CI / quality` check before future merges.
 
 See:
 
@@ -60,7 +70,7 @@ The repository quality pipeline requires:
 5. the full pytest suite,
 6. at least 70% branch-aware coverage across `app` and `interfaces`.
 
-Phase 36 treats a green global CI run as a release/merge gate.
+Global CI is green on the consolidated `main`. Future repository governance should enforce the same `CI / quality` job as a required merge check through branch protection/rulesets.
 
 ## Run from PyCharm or terminal
 
