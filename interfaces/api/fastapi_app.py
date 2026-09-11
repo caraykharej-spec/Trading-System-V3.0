@@ -215,7 +215,7 @@ def _install_openapi_security(app: FastAPI, settings: FastApiSettings) -> None:
         app.openapi_schema = schema
         return schema
 
-    app.openapi = custom_openapi
+    setattr(app, "openapi", custom_openapi)
 
 
 def create_fastapi_runtime_app(
