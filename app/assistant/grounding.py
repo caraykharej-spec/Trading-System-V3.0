@@ -193,6 +193,7 @@ class GroundingBuilder:
                     symbol.upper() if symbol is not None else None,
                 )
             )
+        lines: tuple[str, ...]
         if not snapshot.items:
             lines = (f"There are no open positions for {scope}." if symbol else "There are no open positions.",)
         else:
@@ -400,6 +401,7 @@ class GroundingBuilder:
                     snapshot.symbol,
                 )
             )
+        lines: tuple[str, ...]
         if snapshot.hypothetical_price is None:
             lines = ("UNKNOWN: the hypothetical price cannot be computed because current live price is unavailable.",)
         else:
@@ -458,6 +460,7 @@ class GroundingBuilder:
         if item is None:
             return GroundingBundle(intent=AssistantIntent.REJECTION_REASON, query=query, symbol=symbol, citations=(), deterministic_lines=("UNKNOWN: no gate evidence is available for that symbol.",), missing=("gate_evidence",))
         citations = _item_citations(item)
+        lines: tuple[str, ...]
         if item.status is CopilotStatus.QUALIFIED:
             lines = (f"{item.symbol} is QUALIFIED in the current brief, so there is no recorded rejection reason.",)
         elif item.reasons:
