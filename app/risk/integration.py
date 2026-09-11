@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Mapping
 
 
 @dataclass(frozen=True)
@@ -16,11 +17,11 @@ class RiskDecision:
 class RiskIntegration:
     """Validates strategy outputs before portfolio/execution layers."""
 
-    def __init__(self, max_risk_score: Decimal = Decimal("100")):
+    def __init__(self, max_risk_score: Decimal = Decimal("100")) -> None:
         self.max_risk_score = max_risk_score
 
-    def evaluate(self, signals: list[dict]) -> list[RiskDecision]:
-        decisions = []
+    def evaluate(self, signals: list[Mapping[str, object]]) -> list[RiskDecision]:
+        decisions: list[RiskDecision] = []
 
         for signal in signals:
             score = Decimal(str(signal.get("risk_score", 0)))
