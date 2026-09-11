@@ -19,9 +19,13 @@ class StormProvider(MarketDataProvider):
     base_url: str = "https://api5.storm.tg/api"
     client: HttpClient = HttpClient()
 
-    def get_live_price(self, symbol: str) -> LivePrice:
+    def list_market_records(self) -> tuple[dict[str, Any], ...]:
+        """Return normalized public Storm market records from one `/markets` request."""
         payload = self.client.get_json(f"{self.base_url}/markets")
-        record = self._find_market(payload, symbol)
+        return tuple(self._market_items(payload))
+
+    def get_live_price(self, symbol: str) -> LivePrice:
+        record = self._find_market(self.list_market_records(), symbol)
         if record is None:
             raise ProviderError(f"Storm market not found: {symbol}")
         price = self._extract_price(record)
@@ -34,18 +38,31 @@ class StormProvider(MarketDataProvider):
         raise ProviderError("Storm OHLCV adapter is not enabled until its candle endpoint is verified")
 
     @staticmethod
-    def _find_market(payload: Any, symbol: str) -> dict[str, Any] | None:
+    def _market_items(payload: Any) -> list[dict[str, Any]]:
         items = payload.get("data", payload) if isinstance(payload, dict) else payload
         if isinstance(items, dict):
             items = items.get("markets", items.get("items", []))
         if not isinstance(items, list):
-            return None
-        wanted = symbol.upper().replace("/", "")
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            candidates = [item.get(k) for k in ("symbol", "name", "market", "ticker")]
-            if any(str(v).upper().replace("/", "") == wanted for v in candidates if v is not None):
+            raise ProviderError("Storm markets response does not contain a market list")
+        return [item for item in items if isinstance(item, dict)]
+
+    @staticmethod
+    def _find_market(
+        records: tuple[dict[str, Any], ...] | list[dict[str, Any]], symbol: str
+    ) -> dict[str, Any] | None:
+        wanted = symbol.upper().replace("/", "").replace("_", "").replace("-", "")
+        for item in records:
+            candidates = [item.get(k) for k in ("symbol", "name", "market", "ticker", "id")]
+            if any(
+                str(value)
+                .upper()
+                .replace("/", "")
+                .replace("_", "")
+                .replace("-", "")
+                == wanted
+                for value in candidates
+                if value is not None
+            ):
                 return item
         return None
 
