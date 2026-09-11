@@ -2,7 +2,13 @@ from .adapters import records_from_news_items
 from .classification import RuleBasedIntelligenceClassifier
 from .deduplication import deduplicate_news
 from .engine import MarketIntelligenceEngine
-from .historical import HistoricalImpactEvaluator, HistoricalImpactObservation, HistoricalImpactReport
+from .historical import (
+    HistoricalEventImpactObservation,
+    HistoricalEventImpactReport,
+    HistoricalImpactEvaluator,
+    HistoricalImpactObservation,
+    HistoricalImpactReport,
+)
 from .macro import enrich_macro_events
 from .models import (
     ClassificationResult,
@@ -23,6 +29,8 @@ __all__ = [
     "ClassificationResult",
     "EntityResolver",
     "EventIntelligence",
+    "HistoricalEventImpactObservation",
+    "HistoricalEventImpactReport",
     "HistoricalImpactEvaluator",
     "HistoricalImpactObservation",
     "HistoricalImpactReport",
