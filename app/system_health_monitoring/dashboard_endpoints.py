@@ -4,17 +4,25 @@ from datetime import datetime
 
 
 class DashboardEndpointProvider:
-    def runtime_status(self):
-        return {"component": "runtime", "status": "unknown", "checked_at": datetime.utcnow().isoformat()}
+    @staticmethod
+    def _status(component: str) -> dict[str, str]:
+        return {
+            "component": component,
+            "status": "unknown",
+            "checked_at": datetime.utcnow().isoformat(),
+        }
 
-    def data_pipeline_status(self):
-        return {"component": "data_pipeline", "status": "unknown", "checked_at": datetime.utcnow().isoformat()}
+    def runtime_status(self) -> dict[str, str]:
+        return self._status("runtime")
 
-    def connectivity_status(self):
-        return {"component": "connectivity", "status": "unknown", "checked_at": datetime.utcnow().isoformat()}
+    def data_pipeline_status(self) -> dict[str, str]:
+        return self._status("data_pipeline")
 
-    def exchange_status(self):
-        return {"component": "exchange", "status": "unknown", "checked_at": datetime.utcnow().isoformat()}
+    def connectivity_status(self) -> dict[str, str]:
+        return self._status("connectivity")
 
-    def oracle_status(self):
-        return {"component": "oracle", "status": "unknown", "checked_at": datetime.utcnow().isoformat()}
+    def exchange_status(self) -> dict[str, str]:
+        return self._status("exchange")
+
+    def oracle_status(self) -> dict[str, str]:
+        return self._status("oracle")
