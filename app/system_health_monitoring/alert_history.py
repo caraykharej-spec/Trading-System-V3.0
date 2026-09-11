@@ -1,15 +1,14 @@
 """Alert history foundation."""
 
 from dataclasses import dataclass, field
-from typing import List
 
 
 @dataclass
 class AlertHistory:
-    alerts: List[object] = field(default_factory=list)
+    alerts: list[object] = field(default_factory=list)
 
-    def add(self, alert):
+    def add(self, alert: object) -> None:
         self.alerts.append(alert)
 
-    def get_all(self):
-        return self.alerts
+    def get_all(self) -> list[object]:
+        return list(self.alerts)
