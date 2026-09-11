@@ -1,22 +1,22 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, and the Phase 37 production market-data platform. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, and the Phase 38 strategy/signal qualification layer. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 37 — Production Market Data Platform: IMPLEMENTED AND CI-VALIDATED**
+**Phase 38 — Strategy & Signal Validation Hardening: IMPLEMENTED AND CI-VALIDATED**
 
-Phase 37 extends the consolidated `main` architecture with dynamic universe discovery, transport-neutral streaming ingestion, duplicate/sequence guards, deterministic candle building, bounded hot cache, durable SQLite OHLC history, data-SLA monitoring, and a unified production data platform that reuses the existing ProviderRouter failover/quality stack.
+Phase 38 adds a fail-closed strategy qualification boundary on top of the existing backtest/research stack. Qualification requires holdout OOS evidence, walk-forward consistency, Monte Carlo robustness, execution-cost stress tolerance, parameter stability, regime coverage, and forward PAPER/SHADOW observations. Missing critical evidence produces `HOLD`, not an implicit pass.
 
-Verified Phase 37 branch validation:
+Verified Phase 38 branch validation:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 255 source files**
-- Full pytest suite: **PASS — 293 tests**
-- Branch-aware coverage: **78.66%** (required threshold: 70%)
+- Strict mypy: **PASS — 0 issues in 263 source files**
+- Full pytest suite: **PASS — 299 tests**
+- Branch-aware coverage: **79.03%** (required threshold: 70%)
 
-The Phase 35 live-operation framework remains fail-closed. Phase 37 does **not** enable live trading, add credentials, or assume any unverified Storm WebSocket/OHLC endpoint.
+Phase 38 does **not** enable live trading. A `QUALIFIED` strategy has only satisfied the configured research/release evidence policy; it still cannot bypass core risk, portfolio, production-readiness, connector-readiness, circuit-breaker, or Phase 35 live-operation gates.
 
 Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
 
@@ -25,15 +25,17 @@ See:
 - `docs/architecture/CURRENT_ARCHITECTURE_MAP.md`
 - `docs/phases/PHASE_36_REPOSITORY_CONSOLIDATION.md`
 - `docs/phases/PHASE_37_PRODUCTION_MARKET_DATA_PLATFORM.md`
+- `docs/phases/PHASE_38_STRATEGY_SIGNAL_VALIDATION_HARDENING.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
 - `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
 ## Architecture principles
 
-- Strategy, context, risk, portfolio, execution, storage, research, operations, and presentation are separate concerns.
+- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
+- Strategy qualification is fail-closed and independent from live-execution activation.
 - Live execution is fail-closed and requires explicit production activation.
 - Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
 - Streaming transport is isolated behind provider contracts so venue-specific networking does not leak into scanner/strategy logic.
@@ -54,10 +56,11 @@ The repository includes these major domains:
 - `app/scanner` — market scanning and opportunity generation.
 - `app/context` — news/event context and trading-window policy.
 - `app/strategy` — evidence, scoring, confidence, targets, and strategy integration.
+- `app/strategy_validation` — OOS splitting, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, and fail-closed strategy qualification.
 - `app/risk` — sizing, policy, portfolio/trade risk, and provider-specific constraints.
 - `app/execution` — paper execution, pending orders, persistence, atomic execution, fills, and risk reservation.
 - `app/position` and `app/portfolio` — position lifecycle, settlement, exposure, correlation, and account state.
-- `app/backtest` and `app/research` — backtesting, costs, walk-forward, Monte Carlo, and bounded research/optimization.
+- `app/backtest` and `app/research` — backtesting, realistic costs, walk-forward, Monte Carlo, bounded research/optimization, and sensitivity analysis.
 - `app/journal`, `app/analytics`, and `app/reporting` — journaling, analytics, export/reporting foundations.
 - `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, and readiness monitoring.
 - `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations and production validation gates.
@@ -74,7 +77,7 @@ The repository quality pipeline requires:
 5. the full pytest suite,
 6. at least 70% branch-aware coverage across `app` and `interfaces`.
 
-Phase 37 preserves the same global `CI / quality` gate established by Phase 36. A phase is not complete until the branch and merged `main` both pass that gate.
+A phase is not complete until the feature branch and merged `main` both pass the global `CI / quality` workflow.
 
 ## Run from PyCharm or terminal
 
@@ -122,7 +125,7 @@ The initial policy is:
 
 These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI or research code.
 
-## Strategy evidence
+## Strategy evidence and qualification
 
 The V3 analysis/evidence stack includes EMA 20/50/200, SMA 50, RSI 14, MACD, ATR 14, ADX 14, Supertrend direction, rolling VWAP, volume confirmation, and Bollinger Bands.
 
@@ -138,6 +141,8 @@ The opportunity score remains a 100-point ranking model after hard gates:
 
 Score and confidence remain independent.
 
+Phase 38 adds a separate qualification boundary. A high score/confidence signal or strong aggregate backtest cannot by itself qualify a strategy. Qualification evaluates independent OOS, walk-forward, Monte Carlo, cost-stress, parameter-stability, regime, and forward PAPER/SHADOW evidence.
+
 ## Research boundary
 
 Research remains reproducible and controlled:
@@ -150,7 +155,7 @@ Research remains reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research never overrides strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
+Research and qualification never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources and production data boundary
 
