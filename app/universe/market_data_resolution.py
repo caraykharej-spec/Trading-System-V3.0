@@ -210,12 +210,37 @@ class StormDrivenUniverseResolver:
             if live is None or live.price <= 0 or not self._fresh(live):
                 continue
             matches.append(self._match(reference.reference_price, pair, live.price))
-        return min(matches, key=lambda item: (item.deviation_percent, item.provider_symbol)) if matches else None
+        return self._minimum_match(matches)
 
     def _closest_yahoo_match(self, reference: StormReferenceAsset) -> _PriceMatch | None:
+        static_matches = self._yahoo_matches(
+            reference,
+            self._static_yahoo_candidates(reference.base_asset),
+        )
+        best_static = self._minimum_match(static_matches)
+        if best_static is not None and self._acceptable(best_static):
+            return best_static
+
+        try:
+            discovered = self.yahoo_provider.search_symbols(reference.base_asset, limit=8)
+        except ProviderError:
+            discovered = ()
+        discovered_matches = self._yahoo_matches(reference, discovered)
+        return self._minimum_match(static_matches + discovered_matches)
+
+    def _yahoo_matches(
+        self,
+        reference: StormReferenceAsset,
+        symbols: tuple[str, ...],
+    ) -> list[_PriceMatch]:
         matches: list[_PriceMatch] = []
-        for quote in self.yahoo_quote_candidates:
-            symbol = f"{reference.base_asset}-{quote.upper()}"
+        seen: set[str] = set()
+        for raw_symbol in symbols:
+            symbol = raw_symbol.strip()
+            upper = symbol.upper()
+            if not symbol or upper in seen:
+                continue
+            seen.add(upper)
             try:
                 live = self.yahoo_provider.get_live_price(symbol)
             except ProviderError:
@@ -223,7 +248,41 @@ class StormDrivenUniverseResolver:
             if live.price <= 0 or not self._fresh(live):
                 continue
             matches.append(self._match(reference.reference_price, symbol, live.price))
-        return min(matches, key=lambda item: (item.deviation_percent, item.provider_symbol)) if matches else None
+        return matches
+
+    def _static_yahoo_candidates(self, base_asset: str) -> tuple[str, ...]:
+        base = base_asset.upper()
+        candidates: list[str] = [base]
+        candidates.extend(f"{base}-{quote.upper()}" for quote in self.yahoo_quote_candidates)
+
+        if len(base) == 3 and base.isalpha():
+            candidates.append(f"{base}USD=X")
+        if len(base) == 6 and base.isalpha():
+            candidates.append(f"{base}=X")
+
+        commodity_aliases: dict[str, tuple[str, ...]] = {
+            "XAU": ("GC=F", "XAUUSD=X"),
+            "XAG": ("SI=F", "XAGUSD=X"),
+            "USOIL": ("CL=F",),
+            "UKOIL": ("BZ=F",),
+        }
+        candidates.extend(commodity_aliases.get(base, ()))
+
+        result: list[str] = []
+        seen: set[str] = set()
+        for candidate in candidates:
+            upper = candidate.upper()
+            if upper in seen:
+                continue
+            seen.add(upper)
+            result.append(candidate)
+        return tuple(result)
+
+    @staticmethod
+    def _minimum_match(matches: list[_PriceMatch]) -> _PriceMatch | None:
+        if not matches:
+            return None
+        return min(matches, key=lambda item: (item.deviation_percent, item.provider_symbol))
 
     @staticmethod
     def _match(reference_price: Decimal, symbol: str, price: Decimal) -> _PriceMatch:
