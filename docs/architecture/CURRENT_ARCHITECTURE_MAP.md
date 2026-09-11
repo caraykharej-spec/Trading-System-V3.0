@@ -44,11 +44,12 @@ Order Preparation
 PAPER/SHADOW Execution
         ↓
 Positions / Portfolio / Journal / Analytics
+        ├──────────────→ Assistant Analytics (read-only)
         ↓
 Recovery / Observability / Health / Reporting
 ```
 
-Copilot, assistant and external-model paths are explanatory only. They do not own strategy, risk, portfolio or execution decisions.
+Copilot, assistant, assistant-analytics and external-model paths are explanatory/read-only. They do not own strategy, risk, portfolio or execution decisions.
 
 ## Production market-data boundary
 
@@ -197,9 +198,9 @@ This monitors clock drift; it does not mutate the host clock and it does not bli
 `MarketDataProviderRegistry` records explicit capabilities:
 
 ```text
-Storm   → LIVE_PRICE                          / HTTPS / public-no-key
+Storm   → LIVE_PRICE                              / HTTPS / public-no-key
 Gate.io → OHLCV_REST + OHLCV_STREAM + DISCOVERY / HTTPS+WSS / public-no-key
-Yahoo   → OHLCV_REST                          / HTTPS / public-no-key
+Yahoo   → OHLCV_REST                              / HTTPS / public-no-key
 ```
 
 The registry is descriptive/operational metadata. Universe membership and source resolution are owned by the Storm reference-universe and price-proximity contracts; the registry itself does not activate markets.
@@ -301,27 +302,37 @@ Structural evidence-count requirements remain explicit baseline policy rather th
 
 ## Trading copilot and assistant boundary
 
-Phase 40 preserves deterministic gate evidence and exposes read-only explanations. Phases 41–42 add grounded conversation, optional external-model narration and content-free assistant telemetry.
+Phase 40 preserves deterministic gate evidence and exposes read-only explanations. Phases 41–42 add grounded conversation, optional external-model narration and content-free assistant telemetry. Phase 40.1 expands the evidence surface to positions, journal analytics, market change and bounded what-if simulation.
 
 ```text
-DecisionEvidence + Gate Trace
-        ↓
-CopilotExplainer
-        ↓
-Structured Copilot Brief
-        ↓
-AssistantIntentRouter / GroundingBuilder
-        ↓
-AssistantOrchestrator
-   ├────────────→ deterministic grounded answer
-   └────────────→ optional ProductionLanguageModel
-                         ↓
-                   retry / circuit breaker
-                         ↓
-                   citation validation
-                         ↓
-                 answer or safe fallback
+DecisionEvidence + Gate Trace ─→ CopilotExplainer ─→ Structured Copilot Brief ─┐
+                                                                               │
+Position Repository ────────────────────────────────────────────────────────────┤
+Journal Repository ─────────────────────────────────────────────────────────────┤
+Live Price Provider ────────────────────────────────────────────────────────────┤
+ProductionMarketDataPlatform ───────────────────────────────────────────────────┤
+                                                                               ↓
+                                                                    AssistantIntentRouter
+                                                                               ↓
+                                                              AssistantAnalyticsService / GroundingBuilder
+                                                                               ↓
+                                                                    EvidenceCitation[]
+                                                                               ↓
+                                                                    AssistantOrchestrator
+                                                               ├────────→ deterministic answer
+                                                               └────────→ optional ProductionLanguageModel
+                                                                               ↓
+                                                                  citation validation / safe fallback
 ```
+
+Analytics behavior:
+
+- `POSITIONS` reads authoritative open positions and computes read-only unrealized P&L using the existing position P&L contract;
+- `JOURNAL` reads immutable completed trades and reuses existing performance analytics;
+- `MARKET_CHANGE` compares the current live price with the prior completed candle close for `15m`, `1h`, `4h` and `1d` when available;
+- `WHAT_IF` accepts an explicit bounded percentage scenario and computes hypothetical price/P&L effects without mutating any trading state.
+
+When the configured universe is supplied to the assistant, analytics-only intents resolve symbols without forcing an opportunity/Copilot scan. Copilot evaluation remains lazy and is loaded only for market-brief, symbol-opportunity, rejection and risk-summary intents.
 
 Rules:
 
@@ -330,6 +341,8 @@ Rules:
 - invalid/missing citations fail closed to deterministic output;
 - assistant/model failures do not alter trading decisions;
 - telemetry excludes prompts, responses, evidence values, session IDs and secrets;
+- what-if output is hypothetical analytics, never a forecast or trade instruction;
+- assistant analytics cannot change stops, take-profit values, leverage, position size, risk budgets, orders or venue state;
 - all assistant responses have no execution authority.
 
 ## Execution and live-operation boundary
@@ -356,7 +369,7 @@ Execution Gateway
 Venue-specific connector (disabled unless explicitly implemented/validated)
 ```
 
-Phase 38.1 changes validation-policy derivation only. It does not alter strategy scoring, position sizing, portfolio risk, order submission, or any live-operation gate.
+Phase 38.1 changes validation-policy derivation only. Phase 40.1 changes assistant-side read-only analytics only. Neither alters strategy scoring, position sizing, portfolio risk, order submission, or any live-operation gate.
 
 ## Domain ownership
 
@@ -374,11 +387,11 @@ Phase 38.1 changes validation-policy derivation only. It does not alter strategy
 | `app/position` / `app/portfolio` | position lifecycle, settlement, exposure and account state |
 | `app/backtest` / `app/research` | backtesting, walk-forward, Monte Carlo and reproducible research |
 | `app/copilot` | grounded read-only decision explanations |
-| `app/assistant` | grounded conversation, optional LLM provider/reliability and telemetry |
-| `app/journal` / `app/analytics` | journal and performance/risk analytics |
+| `app/assistant` | grounded conversation, read-only position/journal/market-change/what-if analytics, optional LLM provider/reliability and telemetry |
+| `app/journal` / `app/analytics` | authoritative trade journal and performance/risk analytics |
 | `app/recovery` / `app/observability` | restart/reconciliation, health and readiness |
 | `app/live_operation` | fail-closed production execution safety boundary |
-| `interfaces/api` | external read/control boundary, including read-only universe-coverage reporting |
+| `interfaces/api` | external read/control boundary, including grounded assistant query and read-only universe-coverage reporting |
 
 ## Source-of-truth rules
 
@@ -396,8 +409,10 @@ Phase 38.1 changes validation-policy derivation only. It does not alter strategy
 12. Data discovery cannot auto-enable execution for newly discovered assets.
 13. Statistical calibration must use an independent historical cohort and cannot weaken the Phase 38 baseline policy.
 14. Insufficient calibration evidence produces `HOLD`; no downstream component may manufacture a calibrated policy from a failed report.
-15. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
-16. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
+15. Assistant analytics must cite authoritative position, journal or market-data evidence; missing inputs stay unavailable.
+16. What-if calculations are hypothetical, bounded and read-only and cannot mutate trading state or authorize execution.
+17. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
+18. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
 
 ## Current modes
 
@@ -419,7 +434,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 38.1 feature-head validation passed: 0 mypy issues across 295 source files, 355 tests and 79.58% branch-aware coverage. The final pull-request head and merged `main` commit must also pass the protected `CI / quality` gate before statistical threshold calibration is closed.
+Phase 40.1 core feature-head validation passed: 0 mypy issues across 296 source files, 362 tests and 79.81% branch-aware coverage. The final documentation head, pull-request head and merged `main` commit must also pass the protected `CI / quality` gate before Assistant Analytics Expansion is closed.
 
 ## Repository governance
 
