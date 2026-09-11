@@ -89,10 +89,36 @@ The default policy is intentionally configurable and represents a release gate, 
 
 Projects may tighten these thresholds, but downstream components may not bypass a failed qualification by changing presentation or execution code.
 
+## Phase 38.1 extension — Statistical Threshold Calibration
+
+Phase 38.1 adds `app/strategy_validation/calibration.py` above the existing policy model. It calibrates continuous validation thresholds from an independent historical evidence cohort while preserving all original Phase 38 guardrails.
+
+Core rules:
+
+- candidate evidence cannot calibrate its own thresholds;
+- optional temporal cutoff excludes future/same-boundary observations;
+- lower quantiles calibrate higher-is-better minimums;
+- upper quantiles calibrate lower-is-better maximums;
+- calibrated values may tighten but never loosen the baseline Phase 38 policy;
+- insufficient cohort or metric coverage produces `HOLD` and no usable policy;
+- duplicate sample IDs are rejected;
+- each eligible cohort receives a deterministic SHA-256 fingerprint;
+- structural evidence-count requirements remain explicit, non-calibrated guardrails.
+
+`StrategyQualificationEngine.from_calibration(...)` accepts only a successful `CALIBRATED` report. The normal Phase 38 qualification checks remain unchanged and mandatory.
+
+See `docs/phases/PHASE_38_1_STATISTICAL_THRESHOLD_CALIBRATION.md` for the calibration contract, metric directions, leakage controls, and audit semantics.
+
 ## Validation flow
 
 ```text
-Historical Data
+Independent Historical Validation Cohort
+              ↓
+   Statistical Threshold Calibration
+              ↓
+   Calibrated Policy / HOLD
+              ↓
+Historical Candidate Data
       ↓
 Chronological Train / Validation / Holdout
       ↓
@@ -117,6 +143,8 @@ Cost Stress       Parameter Stability
 
 `QUALIFIED` means the strategy has satisfied the configured evidence policy. It does **not** mean live trading is activated, risk-free, or guaranteed profitable.
 
+Statistical calibration does not modify strategy scoring, risk sizing, portfolio controls, execution permissions, or live-operation activation.
+
 Live execution remains disabled/fail-closed unless all independent production and live-operation gates are intentionally satisfied and a validated venue-specific connector is configured.
 
 ## Verified CI
@@ -130,4 +158,13 @@ Initial Phase 38 implementation was validated by the global GitHub Actions quali
 - branch-aware coverage: 79.03%;
 - required coverage threshold: 70%.
 
-The final branch head must also pass the same global workflow after documentation and hardening changes, and the merged `main` commit must pass before Phase 38 is considered closed.
+Phase 38.1 core calibration validation on its feature branch reached:
+
+- compileall: PASS;
+- Ruff: PASS;
+- strict mypy: PASS — 0 issues in 295 source files;
+- pytest: PASS — 354 tests;
+- branch-aware coverage: 79.57%;
+- required coverage threshold: 70%.
+
+The final Phase 38.1 branch head and merged `main` commit must also pass the global workflow after all documentation and integration changes before Phase 38.1 is considered closed.
