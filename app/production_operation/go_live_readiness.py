@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
 
 
 @dataclass
@@ -13,7 +12,7 @@ class ReadinessCheck:
 
 @dataclass
 class GoLiveReadinessReport:
-    checks: List[ReadinessCheck] = field(default_factory=list)
+    checks: list[ReadinessCheck] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
@@ -22,17 +21,17 @@ class GoLiveReadinessReport:
 
 
 class GoLiveReadinessEngine:
-    def __init__(self):
-        self.checks: List[ReadinessCheck] = []
+    def __init__(self) -> None:
+        self.checks: list[ReadinessCheck] = []
 
-    def register_check(self, check: ReadinessCheck):
+    def register_check(self, check: ReadinessCheck) -> None:
         self.checks.append(check)
 
     def generate_report(self) -> GoLiveReadinessReport:
-        return GoLiveReadinessReport(checks=self.checks)
+        return GoLiveReadinessReport(checks=self.checks.copy())
 
-    def health(self):
+    def health(self) -> dict[str, str]:
         return {
             "component": "go_live_readiness",
-            "status": "healthy"
+            "status": "healthy",
         }
