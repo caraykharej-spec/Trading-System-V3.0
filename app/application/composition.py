@@ -14,8 +14,12 @@ from app.application.opportunity_pipeline import (
 )
 from app.application.runtime_cycle import RuntimeCycleOrchestrator
 from app.application.strategy_pipeline import StrategyPipeline
+from app.assistant.observability import AssistantTelemetry
+from app.assistant.orchestrator import AssistantOrchestrator
+from app.assistant.runtime import AssistantRuntimeConfig, build_production_language_model
 from app.context.context_engine import ContextEngine
 from app.context.models import ContextAssessment
+from app.copilot import CopilotExplainer
 from app.core.enums import SystemMode
 from app.data.mapped_provider import MappedMarketProvider
 from app.data.market_data import MarketDataRequest
@@ -23,6 +27,7 @@ from app.data.provider_router import ProviderRouter
 from app.data.providers.gateio import GateIOProvider
 from app.data.providers.storm import StormProvider
 from app.data.providers.yahoo import YahooFinanceProvider
+from app.data.source_policy import build_market_data_routers
 from app.execution.atomic_execution import AtomicExecutionService
 from app.execution.execution_engine import ExecutionEngine, ExecutionPolicy
 from app.execution.models import OrderRequest
@@ -89,6 +94,7 @@ class PaperApplication:
     health: SystemHealthService
     api: TradingApiService
     selection_queue: ExplicitPaperSelectionQueue
+    assistant_telemetry: AssistantTelemetry
 
     def close(self) -> None:
         self.connection.close()
@@ -139,6 +145,7 @@ def build_paper_application(
     leverage_by_symbol: dict[str, Decimal] | None = None,
     correlation_matrix: CorrelationMatrix | None = None,
     context_loader: ContextLoader | None = None,
+    assistant_config: AssistantRuntimeConfig | None = None,
 ) -> PaperApplication:
     """Build the real V3 application boundary without performing network I/O.
 
@@ -155,10 +162,7 @@ def build_paper_application(
     storm = MappedMarketProvider(StormProvider(), mapper)
     gateio = MappedMarketProvider(GateIOProvider(), mapper)
     yahoo = MappedMarketProvider(YahooFinanceProvider(), mapper)
-    live_router = ProviderRouter(
-        (storm, gateio, yahoo), max_live_age_seconds=120
-    )
-    candle_router = ProviderRouter((gateio, yahoo))
+    live_router, candle_router = build_market_data_routers((storm, gateio, yahoo))
 
     position_repository = SQLitePositionRepository(connection)
     position_writer = SQLitePositionRepository(connection, auto_commit=False)
@@ -188,13 +192,9 @@ def build_paper_application(
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
             candles = candle_router.get_candles(
-                MarketDataRequest(
-                    symbol=symbol, timeframe=timeframe, limit=260
-                )
+                MarketDataRequest(symbol=symbol, timeframe=timeframe, limit=260)
             )
-            snapshots[timeframe] = analyze_market(
-                symbol, timeframe, candles
-            )
+            snapshots[timeframe] = analyze_market(symbol, timeframe, candles)
         return (
             snapshots["1d"],
             snapshots["4h"],
@@ -208,8 +208,7 @@ def build_paper_application(
         lambda symbol: context_engine.assess(symbol)
     )
     leverage_map = {
-        key.upper(): value
-        for key, value in (leverage_by_symbol or {}).items()
+        key.upper(): value for key, value in (leverage_by_symbol or {}).items()
     }
     matrix = correlation_matrix or CorrelationMatrix()
 
@@ -219,9 +218,7 @@ def build_paper_application(
         leverage = leverage_map.get(symbol.upper(), Decimal("1"))
         if leverage <= 0:
             raise ValueError(f"invalid configured leverage for {symbol}")
-        active_pending = [
-            pending.order for pending in pending_repository.list_active()
-        ]
+        active_pending = [pending.order for pending in pending_repository.list_active()]
         reservation = reserve_pending_order_risk(
             active_pending, market_price_provider=live_price
         )
@@ -230,9 +227,7 @@ def build_paper_application(
                 "cannot quantify pending order risk: "
                 + ",".join(reservation.unresolved_order_ids)
             )
-        execution_venue = (
-            "STORM" if mapper.has_mapping(symbol, "storm") else None
-        )
+        execution_venue = "STORM" if mapper.has_mapping(symbol, "storm") else None
         return RiskContext(
             account=account,
             positions=position_repository.list_open(),
@@ -267,9 +262,7 @@ def build_paper_application(
         pending_repository,
         atomic_execution,
     )
-    pending_manager = PendingOrderManager(
-        pending_repository, paper_executor
-    )
+    pending_manager = PendingOrderManager(pending_repository, paper_executor)
     recovery = RecoveryReconciler(
         order_repository, fill_repository, position_repository
     )
@@ -284,8 +277,7 @@ def build_paper_application(
     selection_queue = ExplicitPaperSelectionQueue()
 
     symbols = [
-        instrument.symbol
-        for instrument in registry.all(tradable_only=True)
+        instrument.symbol for instrument in registry.all(tradable_only=True)
     ]
     runtime = RuntimeCycleOrchestrator(
         position_repository=position_repository,
@@ -322,13 +314,26 @@ def build_paper_application(
     )
 
     def opportunities() -> list[GatedOpportunity]:
-        return list(
-            opportunity_pipeline.evaluate(symbols, top_n=10).qualified
-        )
+        return list(opportunity_pipeline.evaluate(symbols, top_n=10).qualified)
+
+    copilot = CopilotExplainer()
+
+    def copilot_brief():
+        return copilot.market_brief(opportunity_pipeline.evaluate(symbols, top_n=10))
+
+    def copilot_symbol(symbol: str):
+        return copilot.find_symbol(copilot_brief(), symbol)
+
+    assistant_telemetry = AssistantTelemetry()
+    effective_assistant_config = assistant_config or AssistantRuntimeConfig.from_env()
+    assistant_model = build_production_language_model(
+        effective_assistant_config, assistant_telemetry
+    )
+    assistant = AssistantOrchestrator(copilot_brief, model=assistant_model)
 
     api = TradingApiService(
         mode=SystemMode.PAPER,
-        version="3.0.0-dev2",
+        version="3.0.0-dev3",
         cycle_runner=runtime.run,
         positions_provider=position_repository.list_open,
         opportunities_provider=opportunities,
@@ -336,6 +341,12 @@ def build_paper_application(
             starting_equity=initial_equity
         ),
         readiness_provider=health.readiness,
+        copilot_brief_provider=copilot_brief,
+        copilot_symbol_provider=copilot_symbol,
+        assistant_query_provider=lambda query, session_id: assistant.ask(
+            query, session_id=session_id
+        ),
+        assistant_metrics_provider=assistant_telemetry.snapshot,
     )
 
     return PaperApplication(
@@ -354,4 +365,5 @@ def build_paper_application(
         health=health,
         api=api,
         selection_queue=selection_queue,
+        assistant_telemetry=assistant_telemetry,
     )
