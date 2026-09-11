@@ -193,7 +193,7 @@ def test_api_report_uses_requested_storm_gate_yfinance_no_data_counts() -> None:
     response = service.universe_coverage()
 
     assert response.status_code == 200
-    coverage = response.body["data"]["universe_coverage"]
+    coverage = response.body["universe_coverage"]
     assert coverage["reference_storm"] == 3
     assert coverage["gateio"] == 1
     assert coverage["yfinance"] == 1
