@@ -1,5 +1,11 @@
 # Phase 36 — Repository Consolidation & CI Recovery
 
+## Status
+
+**COMPLETED**
+
+Phase 36 was merged into `main` through PR #9. The consolidated `main` head is the canonical source of truth, and post-merge global CI completed successfully.
+
 ## Objective
 
 Consolidate the active repository line, reconcile Phase 35 with `main`, classify legacy phase branches, restore the global CI gate, and make `main` the unambiguous release source of truth.
@@ -92,12 +98,11 @@ Status: **INTEGRATED IN `main`**
 
 ### Phase 35 — `phase-35-live-trading-operation-framework`
 
-Status: **KEEP / RECONCILE**
+Status: **INTEGRATED IN `main`**
 
-- 27 commits ahead of pre-Phase-36 `main` and 0 commits behind.
-- Cleanly descends from commit `212df5e22c750bc32767f639a6f85347d297b62f`.
-- Adds the fail-closed live-operation framework and dedicated Phase 35 CI.
-- Decision: Phase 36 is based directly on Phase 35 head `24bfbaf73c89c981bcf8f9782f6f9c29109d0a64` so the Phase 35 line is preserved without conflict or history rewriting.
+- The Phase 35 branch was a clean descendant of pre-Phase-36 `main`.
+- Phase 36 used Phase 35 directly as its consolidation base, preserving the fail-closed live-operation framework without conflict or history rewriting.
+- Phase 35 functionality is now represented in consolidated `main`.
 
 ## Duplicate/superseded policy
 
@@ -113,13 +118,14 @@ This prevents parallel models such as multiple portfolio states, execution model
 4. Run the complete pytest suite with branch-aware coverage.
 5. Repair functional regressions and coverage deficits if present.
 6. Merge Phase 36 to `main` only after CI success.
-7. Require the global CI check for future merges through branch protection/rulesets.
+7. Re-run the global CI pipeline on the merge commit in `main`.
+8. Require the global CI check for future merges through branch protection/rulesets.
 
 ## Verified CI recovery result
 
-Global CI was recovered on the Phase 36 consolidation line without weakening the strict typing gate or lowering the coverage threshold.
+Global CI was recovered without weakening the strict typing gate or lowering the coverage threshold.
 
-Verified result on GitHub Actions:
+Verified result on the Phase 36 line and again on the post-merge `main` commit:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
@@ -127,13 +133,11 @@ Verified result on GitHub Actions:
 - Full pytest suite: **PASS — 285 tests**
 - Branch-aware coverage: **78.24%**
 - Required coverage threshold: **70%**
-- CI run: **success**
+- CI run: **SUCCESS**
 
 The original strict-mypy failure set was reduced from 182 errors across 63 files to zero. The pytest collection collision between duplicate test basenames was fixed with pytest `importlib` import mode; no tests were deleted or excluded to obtain the green result.
 
 ## Source-of-truth decision
-
-After Phase 36 merges:
 
 - `main` is the canonical release line.
 - Phase 29–31 branches are historical reference branches and must not be merged wholesale.
@@ -142,7 +146,7 @@ After Phase 36 merges:
 
 ## Main protection gate
 
-Phase 36 requires `main` to reject merges unless the global CI check is green. The connected GitHub integration used for this consolidation can read branch-protection/ruleset state but does not expose administration write access for protection/ruleset mutation. Therefore protection must be enabled through repository administration after the consolidated commit is green on `main`.
+Repository inspection confirms that `main` is currently **not protected**, and the repository currently has **no rulesets**. The connected GitHub integration can read this administration state but does not expose branch-protection/ruleset mutation, so this final governance control cannot be applied through the connector used for Phase 36.
 
 Required policy:
 
@@ -152,6 +156,8 @@ Required policy:
 - require branches to be up to date before merging;
 - block force pushes and branch deletion;
 - do not allow bypass of required checks for normal merges.
+
+Until this repository-administration setting is enabled, the code/CI portion of Phase 36 is complete but the governance control remains an explicit administrative follow-up.
 
 ## Safety boundary
 
