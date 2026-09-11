@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Any
 
 
 @dataclass
@@ -17,18 +16,18 @@ class DatabaseSession:
 
 
 class DatabaseRuntime:
-    def __init__(self):
-        self.configs: Dict[str, DatabaseConfig] = {}
-        self.sessions: Dict[str, DatabaseSession] = {}
+    def __init__(self) -> None:
+        self.configs: dict[str, DatabaseConfig] = {}
+        self.sessions: dict[str, DatabaseSession] = {}
 
-    def register_database(self, config: DatabaseConfig):
+    def register_database(self, config: DatabaseConfig) -> None:
         self.configs[config.name] = config
 
-    def connect(self, name: str):
+    def connect(self, name: str) -> None:
         if name in self.configs:
             self.configs[name].connected = True
 
-    def health_check(self, name: str) -> Dict[str, Any]:
+    def health_check(self, name: str) -> dict[str, object]:
         config = self.configs.get(name)
         return {
             "database": name,
