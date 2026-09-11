@@ -22,7 +22,7 @@ from app.context.models import ContextAssessment
 from app.copilot import CopilotExplainer, CopilotItemBrief, CopilotMarketBrief
 from app.core.enums import SystemMode
 from app.data.cache import MarketDataCache
-from app.data.historical_store import InMemoryCandleStore, SQLiteCandleStore
+from app.data.historical_store import CandleHistoryStore, InMemoryCandleStore, SQLiteCandleStore
 from app.data.mapped_provider import MappedMarketProvider
 from app.data.market_data import MarketDataRequest
 from app.data.platform import ProductionMarketDataPlatform
@@ -109,13 +109,15 @@ class PaperApplication:
     assistant_telemetry: AssistantTelemetry
 
     def start_gateio_stream(self) -> None:
-        if self.gateio_candle_stream is None or self.gateio_candle_ingestor is None:
+        stream = self.gateio_candle_stream
+        ingestor = self.gateio_candle_ingestor
+        if stream is None or ingestor is None:
             raise RuntimeError("Gate.io candle stream is not configured for this universe")
 
         def handle(event: CandleStreamEvent) -> None:
-            self.gateio_candle_ingestor.ingest(event)
+            ingestor.ingest(event)
 
-        self.gateio_candle_stream.start(handle)
+        stream.start(handle)
 
     def stop_gateio_stream(self) -> None:
         if self.gateio_candle_stream is not None:
@@ -212,6 +214,7 @@ def build_paper_application(
     live_router, candle_router = build_market_data_routers((storm, gateio, yahoo))
     provider_registry = build_default_provider_registry()
 
+    candle_history: CandleHistoryStore
     if str(db_path) == ":memory:":
         candle_history = InMemoryCandleStore()
     else:
