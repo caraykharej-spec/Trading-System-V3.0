@@ -1,22 +1,22 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, and the Phase 40 evidence-grounded trading copilot. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, the Phase 40 evidence-grounded trading copilot, and the Phase 41 grounded conversation/orchestration layer. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 40 — Trading Assistant / Copilot Layer: IMPLEMENTED AND CI-VALIDATED**
+**Phase 41 — Grounded LLM Conversation & Assistant Orchestration: IMPLEMENTED AND CI-VALIDATED**
 
-Phase 40 adds a read-only assistant boundary that converts deterministic strategy, context, risk, portfolio, ranking, and gate-trace evidence into structured explanations. It preserves symbol-level NO_TRADE/HOLD/REJECTED reasons that were previously reduced to aggregate counts and exposes grounded copilot briefs for API/mobile clients.
+Phase 41 adds a provider-neutral conversation layer above the Phase 40 copilot contract. It performs deterministic intent routing, builds bounded evidence bundles with stable citation IDs, supports limited in-memory follow-up context, and optionally delegates narration to a `GroundedLanguageModel` implementation. Model output is accepted only when citations are valid and visibly present; invalid, uncited, execution-oriented, or failed model responses fall back to deterministic copilot explanations.
 
-Verified Phase 40 implementation validation:
+Verified Phase 41 implementation validation:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 276 source files**
-- Full pytest suite: **PASS — 310 tests**
-- Branch-aware coverage: **79.51%** (required threshold: 70%)
+- Strict mypy: **PASS — 0 issues in 283 source files**
+- Full pytest suite: **PASS — 319 tests**
+- Branch-aware coverage: **79.61%** (required threshold: 70%)
 
-Phase 40 does **not** add an LLM dependency or execution authority. Copilot responses are evidence-only, set `execution_authority = False`, and cannot submit orders, alter risk sizing, convert rejected/held candidates into trades, or bypass context, strategy qualification, core risk, portfolio, readiness, circuit-breaker, connector, or Phase 35 live-operation gates.
+Phase 41 does **not** hard-code or auto-enable an external LLM provider, and it does not add execution authority. The model boundary is an injectable protocol; without a configured model the assistant remains fully deterministic. Every assistant response sets `execution_authority = False`, and the assistant cannot submit orders, alter risk sizing, convert rejected/held candidates into trades, or bypass context, strategy qualification, core risk, portfolio, readiness, circuit-breaker, connector, or Phase 35 live-operation gates.
 
 Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
 
@@ -28,19 +28,21 @@ See:
 - `docs/phases/PHASE_38_STRATEGY_SIGNAL_VALIDATION_HARDENING.md`
 - `docs/phases/PHASE_39_MARKET_INTELLIGENCE_CONTEXT_ENGINE_V2.md`
 - `docs/phases/PHASE_40_TRADING_ASSISTANT_COPILOT_LAYER.md`
+- `docs/phases/PHASE_41_GROUNDED_LLM_CONVERSATION_ORCHESTRATION.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
 - `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
 ## Architecture principles
 
-- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, and presentation are separate concerns.
+- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, assistant orchestration, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
 - Strategy qualification is fail-closed and independent from live-execution activation.
 - Market intelligence is evidence-only and may not bypass `ContextEngine`, strategy, risk, portfolio, or execution gates.
 - Copilot output is evidence-only and may not invent missing values or own trading decisions.
-- Model-backed/LLM classifiers or narrators, if added later, must consume bounded structured contracts rather than execution interfaces.
+- LLM narration may consume only bounded grounded evidence and must expose provenance through valid citation IDs.
+- Missing or unsupported information remains `UNKNOWN`; conversation state never substitutes for fresh trading evidence.
 - Live execution is fail-closed and requires explicit production activation.
 - Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
 - Streaming transport is isolated behind provider contracts so venue-specific networking does not leak into scanner/strategy logic.
@@ -67,11 +69,12 @@ The repository includes these major domains:
 - `app/position` and `app/portfolio` — position lifecycle, settlement, exposure, correlation, and account state.
 - `app/backtest` and `app/research` — backtesting, realistic costs, walk-forward, Monte Carlo, bounded research/optimization, and sensitivity analysis.
 - `app/copilot` — grounded opportunity explanations, source-labelled facts, gate outcomes, and read-only market briefs.
+- `app/assistant` — Phase 41 intent routing, evidence grounding, model protocol, citation validation, bounded conversation state, and fail-closed orchestration.
 - `app/journal`, `app/analytics`, and `app/reporting` — journaling, analytics, export/reporting foundations.
 - `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, and readiness monitoring.
 - `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations and production validation gates.
 - `app/live_operation` — Phase 35 production-operation safety boundary.
-- `interfaces/api` — external API boundary, including read-only copilot routes.
+- `interfaces/api` — external API boundary, including read-only copilot routes and the grounded assistant query route.
 
 ## Quality gates
 
@@ -130,7 +133,7 @@ The initial policy is:
 - Minimum score: **90 / 100**
 - Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, or research code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, assistant, or research code.
 
 ## Strategy evidence and qualification
 
@@ -181,10 +184,10 @@ CopilotExplainer
     ↓
 Structured Copilot Brief
     ↓
-API / Android / Future LLM UI
+API / Android / Assistant Orchestrator
 ```
 
-The application now preserves per-symbol strategy/context/risk/portfolio gate outcomes so the assistant can explain why a candidate was `QUALIFIED`, `HOLD`, `REJECTED`, or `NO_TRADE`. Copilot facts are source-labelled and missing data is not fabricated.
+The application preserves per-symbol strategy/context/risk/portfolio gate outcomes so the copilot can explain why a candidate was `QUALIFIED`, `HOLD`, `REJECTED`, or `NO_TRADE`. Copilot facts are source-labelled and missing data is not fabricated.
 
 Read-only API routes:
 
@@ -193,7 +196,42 @@ GET /assistant/brief
 GET /assistant/opportunity?symbol=BTCUSD
 ```
 
-A future LLM may narrate these structured briefs, but it must not receive execution authority or reinterpret failed gates as trade instructions.
+## Grounded conversation and LLM boundary
+
+Phase 41 adds conversation orchestration above the structured copilot contract:
+
+```text
+User Query
+    ↓
+AssistantIntentRouter
+    ↓
+Fresh CopilotMarketBrief
+    ↓
+GroundingBuilder
+    ↓
+Stable EvidenceCitation IDs
+    ↓
+AssistantOrchestrator
+    ├────────────→ deterministic answer
+    └────────────→ optional GroundedLanguageModel
+                         ↓
+               citation/output validation
+                         ↓
+             model answer or safe fallback
+```
+
+Supported routing includes market brief, symbol explanation, rejection/hold reason, risk summary, help, and `UNKNOWN`. Session context is bounded and retains only recent user queries plus routed symbol/intent; fresh copilot evidence is reloaded for every request.
+
+The optional model must return citation IDs that were supplied in its prompt and include them visibly as `[citation_id]`. Unknown citation IDs, missing citations, duplicate citations, model errors, or execution-oriented phrases cause fail-closed fallback to deterministic output.
+
+Conversational API route:
+
+```text
+POST /assistant/query
+{"query": "Why was ETHUSD rejected?", "session_id": "mobile_1"}
+```
+
+No external provider SDK is hard-coded in Phase 41. A future provider adapter may implement `GroundedLanguageModel`, but the model has no strategy/risk/execution interface and cannot activate orders.
 
 ## Research boundary
 
@@ -207,7 +245,7 @@ Research remains reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research, qualification, intelligence, and copilot output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
+Research, qualification, intelligence, copilot, and assistant output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources and production data boundary
 

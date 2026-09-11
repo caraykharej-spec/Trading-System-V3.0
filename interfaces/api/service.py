@@ -12,7 +12,7 @@ class TradingApiService:
     """Thin application-facing API service.
 
     The service deliberately does not implement strategy, risk, portfolio,
-    copilot reasoning, or execution rules. It exposes already-authorized
+    copilot/assistant reasoning, or execution rules. It exposes already-authorized
     application callbacks to future HTTP/Android clients.
     """
 
@@ -28,6 +28,7 @@ class TradingApiService:
         readiness_provider: Callable[[], Any] | None = None,
         copilot_brief_provider: Callable[[], Any] | None = None,
         copilot_symbol_provider: Callable[[str], Any] | None = None,
+        assistant_query_provider: Callable[[str, str | None], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
@@ -38,6 +39,7 @@ class TradingApiService:
         self._readiness_provider = readiness_provider
         self._copilot_brief_provider = copilot_brief_provider
         self._copilot_symbol_provider = copilot_symbol_provider
+        self._assistant_query_provider = assistant_query_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
@@ -97,6 +99,24 @@ class TradingApiService:
             return ApiResponse.not_found(
                 "COPILOT_SYMBOL_NOT_FOUND", "no copilot evidence is available for symbol"
             )
+        return ApiResponse.ok({"assistant": self._serialize(result)})
+
+    def assistant_query(self, query: str, session_id: str | None = None) -> ApiResponse:
+        normalized = " ".join(query.strip().split())
+        if not normalized:
+            return ApiResponse.bad_request("INVALID_QUERY", "query must not be empty")
+        if len(normalized) > 2000:
+            return ApiResponse.bad_request(
+                "INVALID_QUERY", "query must not exceed 2000 characters"
+            )
+        if self._assistant_query_provider is None:
+            return ApiResponse.conflict(
+                "ASSISTANT_UNAVAILABLE", "grounded assistant orchestration is not configured"
+            )
+        try:
+            result = self._assistant_query_provider(normalized, session_id)
+        except ValueError as exc:
+            return ApiResponse.bad_request("INVALID_ASSISTANT_REQUEST", str(exc))
         return ApiResponse.ok({"assistant": self._serialize(result)})
 
     def run_cycle(self) -> ApiResponse:
