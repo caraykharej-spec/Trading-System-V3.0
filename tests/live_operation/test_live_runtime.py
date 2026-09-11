@@ -13,10 +13,7 @@ from app.live_operation.incident_management import (
     TradingIncident,
 )
 from app.live_operation.live_runtime import LiveTradingRuntime
-from app.live_operation.position_synchronization import (
-    LivePositionSynchronizer,
-    LocalPositionSnapshot,
-)
+from app.live_operation.position_synchronization import LivePositionSynchronizer
 from app.live_operation.realtime_monitoring import LiveOperationMonitor
 from app.risk.risk_pipeline import ApprovedRiskPackage
 
