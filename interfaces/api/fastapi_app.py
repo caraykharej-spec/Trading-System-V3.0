@@ -7,13 +7,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from hashlib import sha256
 import re
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, Query, Request, Security
+from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
-from fastapi.security import APIKeyHeader
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -164,6 +164,60 @@ async def _invoke(request: Request, operation: ServiceOperation) -> JSONResponse
     return _json_response(response)
 
 
+def _install_openapi_security(app: FastAPI, settings: FastApiSettings) -> None:
+    """Document dynamic API-key auth without coupling runtime auth to annotations."""
+
+    if not settings.require_api_key:
+        return
+
+    public_paths = {
+        f"{settings.api_prefix}/health",
+        f"{settings.api_prefix}/ready",
+    }
+
+    def custom_openapi() -> dict[str, Any]:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            routes=app.routes,
+        )
+        components = schema.setdefault("components", {})
+        security_schemes = components.setdefault("securitySchemes", {})
+        security_schemes["ApiKeyAuth"] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": settings.api_key_header,
+        }
+
+        paths = schema.get("paths", {})
+        for path, path_item in paths.items():
+            if path in public_paths or not path.startswith(settings.api_prefix):
+                continue
+            if not isinstance(path_item, dict):
+                continue
+            for method, operation in path_item.items():
+                if method.lower() not in {
+                    "get",
+                    "post",
+                    "put",
+                    "patch",
+                    "delete",
+                    "options",
+                    "head",
+                    "trace",
+                }:
+                    continue
+                if isinstance(operation, dict):
+                    operation["security"] = [{"ApiKeyAuth": []}]
+
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi
+
+
 def create_fastapi_runtime_app(
     runtime_factory: RuntimeFactory,
     *,
@@ -233,13 +287,10 @@ def create_fastapi_runtime_app(
         limiter=limiter,
     )
 
-    api_key_header = APIKeyHeader(name=effective.api_key_header, auto_error=False)
-
-    def require_access(
-        api_key: Annotated[str | None, Security(api_key_header)],
-    ) -> None:
+    def require_access(request: Request) -> None:
         if not effective.require_api_key:
             return
+        api_key = request.headers.get(effective.api_key_header)
         if api_key is None or not authentication.validate_key(api_key):
             raise ApiPlatformError(
                 401,
@@ -358,6 +409,7 @@ def create_fastapi_runtime_app(
 
     app.include_router(public)
     app.include_router(protected)
+    _install_openapi_security(app, effective)
     return app
 
 
