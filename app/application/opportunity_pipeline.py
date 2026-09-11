@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from enum import Enum
 from typing import Callable, Iterable
 
 from app.application.decision_evidence import DecisionEvidence
@@ -16,6 +17,27 @@ from app.risk.risk_policy import RiskPolicy
 from app.strategy.strategy_engine import StrategySignal
 from app.universe.contract_specs import ContractSpec
 from app.universe.instrument import Instrument
+
+
+class GateStage(str, Enum):
+    STRATEGY = "STRATEGY"
+    CONTEXT = "CONTEXT"
+    RISK = "RISK"
+    PORTFOLIO = "PORTFOLIO"
+
+
+class GateOutcome(str, Enum):
+    NO_TRADE = "NO_TRADE"
+    HOLD = "HOLD"
+    REJECTED = "REJECTED"
+
+
+@dataclass(frozen=True)
+class GateRejection:
+    symbol: str
+    stage: GateStage
+    outcome: GateOutcome
+    reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -52,6 +74,7 @@ class OpportunityPipelineResult:
     risk_rejected: int
     portfolio_rejected: int
     qualified: tuple[GatedOpportunity, ...]
+    rejections: tuple[GateRejection, ...] = ()
 
 
 class OpportunityPipeline:
@@ -79,10 +102,21 @@ class OpportunityPipeline:
     def evaluate(self, symbols: Iterable[str], top_n: int = 10) -> OpportunityPipelineResult:
         if top_n < 1:
             raise ValueError("top_n must be positive")
-        evaluated, signals = self.strategy_pipeline.evaluate_all(symbols)
+        evaluated, signals, strategy_rejections = (
+            self.strategy_pipeline.evaluate_all_with_rejections(symbols)
+        )
         gated: list[
             tuple[StrategySignal, RiskAssessment, PortfolioAssessment, DecisionEvidence]
         ] = []
+        rejections: list[GateRejection] = [
+            GateRejection(
+                symbol=item.symbol,
+                stage=GateStage.STRATEGY,
+                outcome=GateOutcome.NO_TRADE,
+                reasons=item.reasons,
+            )
+            for item in strategy_rejections
+        ]
         context_rejected = risk_rejected = portfolio_rejected = 0
 
         for signal in signals:
@@ -91,6 +125,15 @@ class OpportunityPipeline:
                 context_assessment = self.context_loader(signal.symbol)
                 if context_assessment.blocking or context_assessment.delay:
                     context_rejected += 1
+                    reasons = context_assessment.reasons or ("context gate active",)
+                    rejections.append(
+                        GateRejection(
+                            symbol=signal.symbol,
+                            stage=GateStage.CONTEXT,
+                            outcome=GateOutcome.HOLD,
+                            reasons=reasons,
+                        )
+                    )
                     continue
 
             risk_context = self.risk_context_loader(signal.symbol)
@@ -121,6 +164,14 @@ class OpportunityPipeline:
             )
             if not risk.approved:
                 risk_rejected += 1
+                rejections.append(
+                    GateRejection(
+                        symbol=signal.symbol,
+                        stage=GateStage.RISK,
+                        outcome=GateOutcome.REJECTED,
+                        reasons=risk.reasons or ("risk gate rejected candidate",),
+                    )
+                )
                 continue
 
             portfolio = assess_portfolio(
@@ -139,6 +190,14 @@ class OpportunityPipeline:
             )
             if not portfolio.approved:
                 portfolio_rejected += 1
+                rejections.append(
+                    GateRejection(
+                        symbol=signal.symbol,
+                        stage=GateStage.PORTFOLIO,
+                        outcome=GateOutcome.REJECTED,
+                        reasons=portfolio.reasons or ("portfolio gate rejected candidate",),
+                    )
+                )
                 continue
 
             evidence = DecisionEvidence.build(
@@ -158,10 +217,11 @@ class OpportunityPipeline:
             for rank, (signal, risk, portfolio, evidence) in enumerate(gated[:top_n], start=1)
         )
         return OpportunityPipelineResult(
-            evaluated,
-            len(signals),
-            context_rejected,
-            risk_rejected,
-            portfolio_rejected,
-            selected,
+            evaluated=evaluated,
+            strategy_qualified=len(signals),
+            context_rejected=context_rejected,
+            risk_rejected=risk_rejected,
+            portfolio_rejected=portfolio_rejected,
+            qualified=selected,
+            rejections=tuple(rejections),
         )

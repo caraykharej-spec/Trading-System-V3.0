@@ -1,23 +1,22 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, and the Phase 39 market-intelligence/context V2 layer. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, the Phase 37 production market-data platform, the Phase 38 strategy/signal qualification layer, the Phase 39 market-intelligence/context V2 layer, and the Phase 40 evidence-grounded trading copilot. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 39 — Market Intelligence & Context Engine V2: IMPLEMENTED AND CI-VALIDATED**
+**Phase 40 — Trading Assistant / Copilot Layer: IMPLEMENTED AND CI-VALIDATED**
 
-Phase 39 adds deterministic market-intelligence processing ahead of the existing `ContextEngine`: normalization, cross-source deduplication, entity/symbol relevance, context-event classification, bounded impact/confidence scoring, macro-event symbol enrichment, and historical impact evaluation. Existing RSS/news adapters remain compatible through a bridge into the V2 raw-news contract.
+Phase 40 adds a read-only assistant boundary that converts deterministic strategy, context, risk, portfolio, ranking, and gate-trace evidence into structured explanations. It preserves symbol-level NO_TRADE/HOLD/REJECTED reasons that were previously reduced to aggregate counts and exposes grounded copilot briefs for API/mobile clients.
 
-Verified Phase 39 validation on the implementation line:
+Verified Phase 40 implementation validation:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 273 source files**
-- Full pytest suite: **PASS — at least 304 tests**
-- Branch-aware coverage: **79.52%** on the first complete V2 core run (required threshold: 70%)
-- The subsequent historical macro-event impact extension also passed the same global workflow.
+- Strict mypy: **PASS — 0 issues in 276 source files**
+- Full pytest suite: **PASS — 310 tests**
+- Branch-aware coverage: **79.51%** (required threshold: 70%)
 
-Phase 39 does **not** enable live trading or allow news/LLM intelligence to submit orders. Intelligence enriches context evidence only; the existing context policy, strategy qualification, core risk, portfolio, production-readiness, circuit-breaker, connector-readiness, and Phase 35 live-operation gates remain independently mandatory.
+Phase 40 does **not** add an LLM dependency or execution authority. Copilot responses are evidence-only, set `execution_authority = False`, and cannot submit orders, alter risk sizing, convert rejected/held candidates into trades, or bypass context, strategy qualification, core risk, portfolio, readiness, circuit-breaker, connector, or Phase 35 live-operation gates.
 
 Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
 
@@ -28,18 +27,20 @@ See:
 - `docs/phases/PHASE_37_PRODUCTION_MARKET_DATA_PLATFORM.md`
 - `docs/phases/PHASE_38_STRATEGY_SIGNAL_VALIDATION_HARDENING.md`
 - `docs/phases/PHASE_39_MARKET_INTELLIGENCE_CONTEXT_ENGINE_V2.md`
+- `docs/phases/PHASE_40_TRADING_ASSISTANT_COPILOT_LAYER.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
 - `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
 ## Architecture principles
 
-- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, and presentation are separate concerns.
+- Strategy, context, risk, portfolio, execution, storage, research, validation, operations, copilot, and presentation are separate concerns.
 - Hard eligibility gates are separate from opportunity scoring and research objectives.
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
 - Strategy qualification is fail-closed and independent from live-execution activation.
 - Market intelligence is evidence-only and may not bypass `ContextEngine`, strategy, risk, portfolio, or execution gates.
-- Model-backed/LLM classifiers, if added later, must implement bounded intelligence contracts rather than owning trading decisions.
+- Copilot output is evidence-only and may not invent missing values or own trading decisions.
+- Model-backed/LLM classifiers or narrators, if added later, must consume bounded structured contracts rather than execution interfaces.
 - Live execution is fail-closed and requires explicit production activation.
 - Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
 - Streaming transport is isolated behind provider contracts so venue-specific networking does not leak into scanner/strategy logic.
@@ -65,10 +66,12 @@ The repository includes these major domains:
 - `app/execution` — paper execution, pending orders, persistence, atomic execution, fills, and risk reservation.
 - `app/position` and `app/portfolio` — position lifecycle, settlement, exposure, correlation, and account state.
 - `app/backtest` and `app/research` — backtesting, realistic costs, walk-forward, Monte Carlo, bounded research/optimization, and sensitivity analysis.
+- `app/copilot` — grounded opportunity explanations, source-labelled facts, gate outcomes, and read-only market briefs.
 - `app/journal`, `app/analytics`, and `app/reporting` — journaling, analytics, export/reporting foundations.
 - `app/recovery`, `app/observability`, and `app/system_health_monitoring` — recovery, reconciliation, health, alerts, and readiness monitoring.
 - `app/deployment_runtime` and `app/production_operation` — deployment/runtime foundations and production validation gates.
 - `app/live_operation` — Phase 35 production-operation safety boundary.
+- `interfaces/api` — external API boundary, including read-only copilot routes.
 
 ## Quality gates
 
@@ -127,7 +130,7 @@ The initial policy is:
 - Minimum score: **90 / 100**
 - Minimum confidence: **90%**
 
-These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI or research code.
+These are policy defaults and must be enforced by the risk/strategy layers, not scattered across UI, copilot, or research code.
 
 ## Strategy evidence and qualification
 
@@ -167,6 +170,31 @@ ContextEngine
 
 The deterministic rule-based classifier is a baseline, not an execution authority. Unrelated news remains unknown/global rather than being force-mapped to an asset. Historical evaluation measures directional news outcomes and macro-event move magnitude without inventing directional interpretations for economic releases.
 
+## Trading copilot boundary
+
+Phase 40 adds a read-only explanation layer after deterministic opportunity gating:
+
+```text
+DecisionEvidence + Gate Trace
+    ↓
+CopilotExplainer
+    ↓
+Structured Copilot Brief
+    ↓
+API / Android / Future LLM UI
+```
+
+The application now preserves per-symbol strategy/context/risk/portfolio gate outcomes so the assistant can explain why a candidate was `QUALIFIED`, `HOLD`, `REJECTED`, or `NO_TRADE`. Copilot facts are source-labelled and missing data is not fabricated.
+
+Read-only API routes:
+
+```text
+GET /assistant/brief
+GET /assistant/opportunity?symbol=BTCUSD
+```
+
+A future LLM may narrate these structured briefs, but it must not receive execution authority or reinterpret failed gates as trade instructions.
+
 ## Research boundary
 
 Research remains reproducible and controlled:
@@ -179,7 +207,7 @@ Research remains reproducible and controlled:
 - parameter sensitivity can be analyzed after a run,
 - experiment results can be persisted idempotently in memory or SQLite.
 
-Research, qualification, and intelligence never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
+Research, qualification, intelligence, and copilot output never override strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
 ## Data sources and production data boundary
 

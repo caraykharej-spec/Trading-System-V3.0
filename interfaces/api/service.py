@@ -11,9 +11,9 @@ from interfaces.api.models import ApiResponse, HealthResponse
 class TradingApiService:
     """Thin application-facing API service.
 
-    The service deliberately does not implement strategy, risk, portfolio, or
-    execution rules. It exposes already-authorized application callbacks to
-    future HTTP/Android clients.
+    The service deliberately does not implement strategy, risk, portfolio,
+    copilot reasoning, or execution rules. It exposes already-authorized
+    application callbacks to future HTTP/Android clients.
     """
 
     def __init__(
@@ -26,6 +26,8 @@ class TradingApiService:
         opportunities_provider: Callable[[], list[Any]] | None = None,
         analytics_provider: Callable[[], Any] | None = None,
         readiness_provider: Callable[[], Any] | None = None,
+        copilot_brief_provider: Callable[[], Any] | None = None,
+        copilot_symbol_provider: Callable[[str], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
@@ -34,6 +36,8 @@ class TradingApiService:
         self._opportunities_provider = opportunities_provider or (lambda: [])
         self._analytics_provider = analytics_provider
         self._readiness_provider = readiness_provider
+        self._copilot_brief_provider = copilot_brief_provider
+        self._copilot_symbol_provider = copilot_symbol_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
@@ -70,6 +74,30 @@ class TradingApiService:
         return ApiResponse.ok(
             {"performance": self._serialize(self._analytics_provider())}
         )
+
+    def assistant_brief(self) -> ApiResponse:
+        if self._copilot_brief_provider is None:
+            return ApiResponse.conflict(
+                "COPILOT_UNAVAILABLE", "copilot market brief is not configured"
+            )
+        return ApiResponse.ok(
+            {"assistant": self._serialize(self._copilot_brief_provider())}
+        )
+
+    def assistant_opportunity(self, symbol: str) -> ApiResponse:
+        target = symbol.strip().upper()
+        if not target:
+            return ApiResponse.bad_request("INVALID_SYMBOL", "symbol must not be empty")
+        if self._copilot_symbol_provider is None:
+            return ApiResponse.conflict(
+                "COPILOT_UNAVAILABLE", "copilot symbol explanation is not configured"
+            )
+        result = self._copilot_symbol_provider(target)
+        if result is None:
+            return ApiResponse.not_found(
+                "COPILOT_SYMBOL_NOT_FOUND", "no copilot evidence is available for symbol"
+            )
+        return ApiResponse.ok({"assistant": self._serialize(result)})
 
     def run_cycle(self) -> ApiResponse:
         if self._cycle_runner is None:

@@ -33,6 +33,9 @@ Strategy Qualification Boundary
         ↓
 Core Risk Engine + Portfolio Gate
         ↓
+DecisionEvidence + Gate Trace
+        ├──────────────→ CopilotExplainer → API / Android / Future LLM UI
+        ↓
 Order Preparation
         ↓
 PAPER/SHADOW Execution
@@ -41,6 +44,8 @@ Positions / Portfolio / Journal / Analytics
         ↓
 Recovery / Observability / Health / Reporting
 ```
+
+The copilot branch is explanatory only. It is not on the execution-authority path and cannot write back into strategy, risk, portfolio, readiness, or execution decisions.
 
 ## Market-intelligence boundary
 
@@ -110,6 +115,39 @@ Cost Stress       Parameter Stability
 
 Missing required evidence or a failed critical threshold yields `HOLD`. `QUALIFIED` means only that the configured strategy-validation policy passed; core risk, portfolio, production-readiness, connector-readiness, and live-operation gates remain independently mandatory.
 
+## Trading-copilot boundary
+
+Phase 40 adds a read-only explanation layer over deterministic domain evidence.
+
+```text
+Strategy Result
+Context Assessment
+Risk Assessment
+Portfolio Assessment
+        ↓
+DecisionEvidence + Gate Trace
+        ↓
+CopilotExplainer
+        ↓
+CopilotItemBrief / CopilotMarketBrief
+        ↓
+GET /assistant/brief
+GET /assistant/opportunity?symbol=...
+        ↓
+Android / Dashboard / Future Model Narrator
+```
+
+The application pipeline now preserves symbol-level outcomes for stages that previously contributed only aggregate rejection counters:
+
+- STRATEGY → NO_TRADE
+- CONTEXT → HOLD
+- RISK → REJECTED
+- PORTFOLIO → REJECTED
+
+Upstream reason strings are preserved as evidence. Copilot objects set `execution_authority = False`. A missing fact is not reconstructed from assumptions.
+
+A future model-backed narrator must consume the structured copilot contract. It may summarize or translate evidence but may not call execution interfaces, change gate outcomes, invent prices/scores/probabilities, or transform a failed gate into a trade recommendation.
+
 ## Production market-data boundary
 
 Phase 37 adds a production-oriented data boundary while preserving the existing canonical models and provider failover stack:
@@ -171,6 +209,7 @@ A production execution connector is disabled by default. The presence of `app/li
 | `app/portfolio` | account state, exposure, correlation, portfolio constraints |
 | `app/backtest` | realistic backtesting, costs, walk-forward and Monte Carlo |
 | `app/research` | bounded reproducible research/optimization and sensitivity analysis |
+| `app/copilot` | grounded, read-only explanation of deterministic opportunity and gate evidence |
 | `app/journal` | trade decision and execution journal |
 | `app/analytics` | performance and risk analytics |
 | `app/reporting` / `app/export_system` | report/export foundations |
@@ -179,7 +218,7 @@ A production execution connector is disabled by default. The presence of `app/li
 | `app/deployment_runtime` | deployment/runtime abstractions |
 | `app/production_operation` | production validation and go-live checks |
 | `app/live_operation` | live-operation safety and execution boundary |
-| `interfaces/api` | external API boundary for clients |
+| `interfaces/api` | external API boundary for clients, including read-only copilot routes |
 
 ## Source-of-truth rules
 
@@ -188,12 +227,14 @@ A production execution connector is disabled by default. The presence of `app/li
 3. Diverged historical branches must not be merged wholesale into `main`.
 4. The global CI workflow is the merge/release quality gate.
 5. Architecture documents must describe current code, not merely planned phase names.
-6. Strategy, scanner, context, analytics, and assistant/presentation layers may not bypass core risk and execution boundaries.
+6. Strategy, scanner, context, analytics, copilot, and presentation layers may not bypass core risk and execution boundaries.
 7. Live operation remains fail-closed until a validated venue adapter is intentionally enabled.
 8. Market-data consumers must use canonical data contracts and may not bypass data freshness/quality boundaries with ad-hoc provider calls.
 9. Strategy qualification is fail-closed; a single in-sample backtest, score, or confidence value cannot substitute for the required validation evidence set.
 10. Market intelligence is evidence-only. Classifier confidence or news sentiment cannot replace ContextEngine policy, strategy qualification, core risk, portfolio, or execution gates.
 11. Unrelated news must remain unknown/global rather than being force-mapped to an asset.
+12. Copilot output must remain grounded in recorded domain evidence; missing values must remain unavailable rather than inferred.
+13. Copilot and any future LLM narrator have no execution authority and may not change `NO_TRADE`, `HOLD`, or `REJECTED` outcomes.
 
 ## Current execution modes
 
@@ -217,7 +258,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 39 V2 core verification is green: 0 mypy issues across 273 source files, 304 passing tests, and 79.52% branch-aware coverage. The subsequent historical macro-event impact extension also passed the same global workflow. The final branch head and merged `main` commit must pass the workflow before Phase 39 is considered closed.
+Phase 40 implementation verification is green: 0 mypy issues across 276 source files, 310 passing tests, and 79.51% branch-aware coverage. The final documentation head and merged `main` commit must pass the workflow before Phase 40 is considered closed.
 
 ## Repository governance
 
