@@ -15,7 +15,7 @@ class MarginSnapshot:
 
 
 class MarginAnalytics:
-    def evaluate(self, used_margin: float, available_margin: float):
+    def evaluate(self, used_margin: float, available_margin: float) -> MarginSnapshot:
         total = used_margin + available_margin
         ratio = used_margin / total if total else 0.0
 
