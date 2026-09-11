@@ -69,6 +69,8 @@ class TradingHttpHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/assistant/opportunity":
                 symbol = parse_qs(parsed.query).get("symbol", [""])[0]
                 self._write(service.assistant_opportunity(symbol))
+            elif parsed.path == "/assistant/metrics":
+                self._write(service.assistant_metrics())
             else:
                 self._write(ApiResponse.not_found("NOT_FOUND", "endpoint not found"))
         except Exception:

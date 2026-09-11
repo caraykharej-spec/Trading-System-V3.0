@@ -20,6 +20,10 @@ class ModelPrompt:
 class ModelReply:
     text: str
     citations: tuple[str, ...]
+    provider: str | None = None
+    model: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class GroundedLanguageModel(Protocol):
