@@ -64,6 +64,8 @@ class TradingHttpHandler(BaseHTTPRequestHandler):
                 self._write(service.opportunities(limit))
             elif parsed.path == "/analytics/performance":
                 self._write(service.performance())
+            elif parsed.path == "/market-data/universe-coverage":
+                self._write(service.universe_coverage())
             elif parsed.path == "/assistant/brief":
                 self._write(service.assistant_brief())
             elif parsed.path == "/assistant/opportunity":

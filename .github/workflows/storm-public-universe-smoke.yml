@@ -1,0 +1,28 @@
+name: Storm Public Universe Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "phase-37-1-1-*"
+    paths:
+      - "app/data/providers/storm.py"
+      - "app/universe/storm_discovery.py"
+      - "app/universe/market_data_resolution.py"
+      - "scripts/market_data/storm_universe_smoke.py"
+      - ".github/workflows/storm-public-universe-smoke.yml"
+
+jobs:
+  storm-public-universe-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project
+        run: python -m pip install -e .
+      - name: Validate Storm-driven public coverage resolution
+        run: python scripts/market_data/storm_universe_smoke.py
