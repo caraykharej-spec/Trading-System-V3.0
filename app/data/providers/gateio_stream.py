@@ -14,7 +14,9 @@ from app.data.streaming import CandleStreamEvent
 from app.data.time_sync import ClockSkewMonitor, ClockSyncSnapshot
 
 _GATE_SPOT_WS_URL = "wss://api.gateio.ws/ws/v4/"
-_SUPPORTED_INTERVALS = frozenset({"10s", "1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d", "7d"})
+_SUPPORTED_INTERVALS = frozenset(
+    {"10s", "1m", "5m", "15m", "30m", "1h", "4h", "8h", "1d", "7d"}
+)
 
 
 class WebSocketConnection(Protocol):
@@ -26,6 +28,16 @@ class WebSocketConnection(Protocol):
 
 
 ConnectionFactory = Callable[[str, float], WebSocketConnection]
+
+
+def _coerce_positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
 
 
 @dataclass(frozen=True)
@@ -133,10 +145,10 @@ class GateIOWebSocketCandleSource:
                 time.sleep(delay)
                 delay = min(delay * 2.0, self.reconnect_max_seconds)
             finally:
-                connection = self._connection
-                if connection is not None:
+                active_connection = self._connection
+                if active_connection is not None:
                     try:
-                        connection.close()
+                        active_connection.close()
                     except Exception:
                         pass
                 self._connection = None
@@ -206,19 +218,8 @@ class GateIOWebSocketCandleSource:
 
     @staticmethod
     def _extract_server_time_ms(payload: dict[object, object]) -> int | None:
-        raw_ms = payload.get("time_ms")
+        raw_ms = _coerce_positive_int(payload.get("time_ms"))
         if raw_ms is not None:
-            try:
-                value = int(raw_ms)
-            except (TypeError, ValueError):
-                return None
-            return value if value > 0 else None
-
-        raw_seconds = payload.get("time")
-        if raw_seconds is None:
-            return None
-        try:
-            value = int(raw_seconds) * 1000
-        except (TypeError, ValueError):
-            return None
-        return value if value > 0 else None
+            return raw_ms
+        raw_seconds = _coerce_positive_int(payload.get("time"))
+        return raw_seconds * 1000 if raw_seconds is not None else None
