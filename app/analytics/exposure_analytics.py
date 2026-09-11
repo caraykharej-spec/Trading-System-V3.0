@@ -4,7 +4,7 @@ Provides portfolio exposure calculations used by risk analytics.
 """
 
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Iterable, Mapping
 
 
 @dataclass
@@ -12,19 +12,19 @@ class ExposureSnapshot:
     total_exposure: float
     long_exposure: float
     short_exposure: float
-    concentration: Dict[str, float]
+    concentration: dict[str, float]
 
 
 class ExposureAnalytics:
-    def calculate(self, positions):
+    def calculate(self, positions: Iterable[Mapping[str, Any]]) -> ExposureSnapshot:
         long_exposure = 0.0
         short_exposure = 0.0
-        concentration = {}
+        concentration: dict[str, float] = {}
 
         for position in positions:
-            value = abs(position.get("notional", 0.0))
-            symbol = position.get("symbol", "UNKNOWN")
-            side = position.get("side", "LONG")
+            value = abs(float(position.get("notional", 0.0)))
+            symbol = str(position.get("symbol", "UNKNOWN"))
+            side = str(position.get("side", "LONG"))
 
             concentration[symbol] = concentration.get(symbol, 0.0) + value
 
