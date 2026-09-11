@@ -20,39 +20,58 @@ class StormHttpClient:
         return {
             "data": [
                 {
-                    "symbol": "BTC_USDT",
-                    "base": "BTC",
-                    "type": "base",
-                    "settlement": "usdt",
-                    "price": "100.00",
+                    "config": {
+                        "ticker": "BTC/USD-CM",
+                        "baseAsset": "BTC",
+                        "type": "coinm",
+                        "settlementToken": "NOT",
+                    },
+                    "amm": {"indexPrice": "999000000000"},
                 },
                 {
-                    "symbol": "ETH_USDT",
-                    "base": "ETH",
-                    "type": "base",
-                    "settlement": "usdt",
-                    "price": "200.00",
+                    "config": {
+                        "ticker": "BTC/USDT",
+                        "baseAsset": "BTC",
+                        "type": "base",
+                        "settlementToken": "USDT",
+                    },
+                    "amm": {"indexPrice": "100000000000"},
                 },
                 {
-                    "symbol": "ABC_USDT",
-                    "base": "ABC",
-                    "type": "base",
-                    "settlement": "usdt",
-                    "price": "50.00",
+                    "config": {
+                        "ticker": "ETH/USDT",
+                        "baseAsset": "ETH",
+                        "type": "base",
+                        "settlementToken": "USDT",
+                    },
+                    "amm": {"indexPrice": "200000000000"},
                 },
                 {
-                    "symbol": "XRP_USDT",
-                    "base": "XRP",
-                    "type": "index",
-                    "settlement": "usdt",
-                    "price": "1.00",
+                    "config": {
+                        "ticker": "ABC/USDT",
+                        "baseAsset": "ABC",
+                        "type": "base",
+                        "settlementToken": "USDT",
+                    },
+                    "amm": {"indexPrice": "50000000000"},
                 },
                 {
-                    "symbol": "SOL_USDC",
-                    "base": "SOL",
-                    "type": "base",
-                    "settlement": "usdc",
-                    "price": "150.00",
+                    "config": {
+                        "ticker": "XRP/USDT",
+                        "baseAsset": "XRP",
+                        "type": "index",
+                        "settlementToken": "USDT",
+                    },
+                    "amm": {"indexPrice": "1000000000"},
+                },
+                {
+                    "config": {
+                        "ticker": "SOL/USDC",
+                        "baseAsset": "SOL",
+                        "type": "base",
+                        "settlementToken": "USDC",
+                    },
+                    "amm": {"indexPrice": "150000000000"},
                 },
             ]
         }
@@ -131,6 +150,25 @@ def _resolver() -> StormDrivenUniverseResolver:
         yahoo_provider=yahoo,
         max_price_deviation_percent=Decimal("5"),
     )
+
+
+def test_storm_nested_schema_filters_reference_universe_and_scales_price() -> None:
+    storm = StormProvider(client=StormHttpClient())  # type: ignore[arg-type]
+    assets = StormReferenceUniverseProvider(provider=storm).discover()
+
+    assert [asset.base_asset for asset in assets] == ["ABC", "BTC", "ETH"]
+    btc = next(asset for asset in assets if asset.base_asset == "BTC")
+    assert btc.provider_symbol == "BTC/USDT"
+    assert btc.reference_price == Decimal("100")
+
+
+def test_storm_live_price_prefers_base_usdt_market_over_coin_margined_market() -> None:
+    storm = StormProvider(client=StormHttpClient())  # type: ignore[arg-type]
+
+    live = storm.get_live_price("BTC")
+
+    assert live.price == Decimal("100")
+    assert live.provider == "storm"
 
 
 def test_storm_is_reference_universe_and_coverage_buckets_are_exhaustive() -> None:
