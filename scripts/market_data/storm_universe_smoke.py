@@ -1,7 +1,41 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from app.data.providers.storm import StormProvider
 from app.universe.storm_discovery import StormReferenceUniverseProvider
+
+
+INTERESTING = (
+    "type",
+    "settle",
+    "base",
+    "quote",
+    "symbol",
+    "ticker",
+    "name",
+    "oracle",
+    "price",
+    "asset",
+    "market",
+)
+
+
+def _diagnose_mapping(value: Mapping[str, Any], prefix: str, depth: int = 0) -> None:
+    if depth > 3:
+        return
+    print(f"{prefix} keys={sorted(str(key) for key in value.keys())}")
+    for raw_key, child in value.items():
+        key = str(raw_key)
+        path = f"{prefix}.{key}"
+        if isinstance(child, Mapping):
+            _diagnose_mapping(child, path, depth + 1)
+        elif any(token in key.lower() for token in INTERESTING):
+            rendered = repr(child)
+            if len(rendered) > 500:
+                rendered = rendered[:497] + "..."
+            print(f"{path}={rendered}")
 
 
 def main() -> None:
@@ -12,28 +46,7 @@ def main() -> None:
     if not assets:
         print(f"Storm diagnostic: records={len(records)}")
         for index, record in enumerate(records[:3]):
-            print(f"record[{index}] keys={sorted(record.keys())}")
-            for key in (
-                "symbol",
-                "name",
-                "market",
-                "ticker",
-                "id",
-                "type",
-                "marketType",
-                "market_type",
-                "settlement",
-                "settlementAsset",
-                "settlement_asset",
-                "base",
-                "baseAsset",
-                "base_asset",
-                "asset",
-                "underlying",
-                "underlyingAsset",
-            ):
-                if key in record:
-                    print(f"record[{index}].{key}={record.get(key)!r}")
+            _diagnose_mapping(record, f"record[{index}]")
         raise RuntimeError(
             "Storm public universe smoke found no type=base settlement=usdt markets"
         )
