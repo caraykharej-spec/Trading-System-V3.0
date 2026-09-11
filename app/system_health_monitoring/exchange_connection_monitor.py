@@ -13,7 +13,12 @@ class ExchangeConnectionStatus:
 
 
 class ExchangeConnectionMonitor:
-    def check(self, exchange: str, connected: bool = True, authenticated: bool = False):
+    def check(
+        self,
+        exchange: str,
+        connected: bool = True,
+        authenticated: bool = False,
+    ) -> ExchangeConnectionStatus:
         return ExchangeConnectionStatus(
             exchange=exchange,
             connected=connected,
