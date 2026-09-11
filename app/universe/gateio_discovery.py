@@ -8,11 +8,11 @@ from app.universe.instrument import AssetClass, Instrument
 
 
 def _step_from_precision(value: object) -> Decimal | None:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
         return None
     try:
         precision = int(value)
-    except (TypeError, ValueError):
+    except ValueError:
         return None
     if precision < 0:
         return None
