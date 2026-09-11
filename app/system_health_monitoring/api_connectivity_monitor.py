@@ -13,7 +13,12 @@ class APIHealthStatus:
 
 
 class APIConnectivityMonitor:
-    def check(self, service: str, latency_ms: float = 0.0, available: bool = True):
+    def check(
+        self,
+        service: str,
+        latency_ms: float = 0.0,
+        available: bool = True,
+    ) -> APIHealthStatus:
         return APIHealthStatus(
             service=service,
             available=available,
