@@ -14,12 +14,21 @@ class Opportunity:
 
 
 @dataclass(frozen=True)
+class StrategyRejection:
+    symbol: str
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class StrategyPipelineResult:
     evaluated: int
     qualified: tuple[Opportunity, ...]
+    rejected: tuple[StrategyRejection, ...] = ()
 
 
-SnapshotLoader = Callable[[str], tuple[MarketSnapshot, MarketSnapshot, MarketSnapshot, MarketSnapshot]]
+SnapshotLoader = Callable[
+    [str], tuple[MarketSnapshot, MarketSnapshot, MarketSnapshot, MarketSnapshot]
+]
 
 
 class StrategyPipeline:
@@ -41,26 +50,43 @@ class StrategyPipeline:
         )
         return signals
 
-    def evaluate_all(self, symbols: Iterable[str]) -> tuple[int, tuple[StrategySignal, ...]]:
+    def evaluate_all_with_rejections(
+        self,
+        symbols: Iterable[str],
+    ) -> tuple[int, tuple[StrategySignal, ...], tuple[StrategyRejection, ...]]:
         signals: list[StrategySignal] = []
+        rejections: list[StrategyRejection] = []
         evaluated = 0
         for symbol in symbols:
             evaluated += 1
             try:
                 daily, four_hour, one_hour, fifteen = self.snapshot_loader(symbol)
                 signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
-            except (ValueError, KeyError):
+            except (ValueError, KeyError) as exc:
+                reason = str(exc) or exc.__class__.__name__
+                rejections.append(StrategyRejection(symbol=symbol, reasons=(reason,)))
                 continue
             if signal.state.value == "READY_FOR_RISK_REVIEW":
                 signals.append(signal)
-        return evaluated, tuple(self._rank(signals))
+                continue
+            reasons = signal.reasons or (f"strategy state is {signal.state.value}",)
+            rejections.append(StrategyRejection(symbol=symbol, reasons=reasons))
+        return evaluated, tuple(self._rank(signals)), tuple(rejections)
+
+    def evaluate_all(self, symbols: Iterable[str]) -> tuple[int, tuple[StrategySignal, ...]]:
+        evaluated, signals, _ = self.evaluate_all_with_rejections(symbols)
+        return evaluated, signals
 
     def evaluate(self, symbols: Iterable[str], top_n: int = 10) -> StrategyPipelineResult:
         if top_n < 1:
             raise ValueError("top_n must be positive")
-        evaluated, signals = self.evaluate_all(symbols)
+        evaluated, signals, rejections = self.evaluate_all_with_rejections(symbols)
         selected = tuple(
             Opportunity(signal=signal, rank=index)
             for index, signal in enumerate(signals[:top_n], start=1)
         )
-        return StrategyPipelineResult(evaluated=evaluated, qualified=selected)
+        return StrategyPipelineResult(
+            evaluated=evaluated,
+            qualified=selected,
+            rejected=rejections,
+        )
