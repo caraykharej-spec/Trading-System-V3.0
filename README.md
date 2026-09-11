@@ -1,29 +1,30 @@
 # Trading-System-V3.0
 
-A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository currently contains the validated paper/research trading core, production-operation validation, and the Phase 35 live-operation safety framework. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
+A modular, rule-based trading system designed for local development in PyCharm and deployment behind an API/mobile client. The repository contains the validated paper/research trading core, production-operation validation, the fail-closed Phase 35 live-operation safety framework, and the Phase 37 production market-data platform. Live execution remains disabled by default and requires an explicitly configured, venue-specific production connector plus all safety gates.
 
 ## Current status
 
-**Phase 36 — Repository Consolidation & CI Recovery: COMPLETED**
+**Phase 37 — Production Market Data Platform: IMPLEMENTED AND CI-VALIDATED**
 
-Phase 36 has been merged into `main` and establishes `main` as the canonical source of truth. The work reconciled Phase 35, audited legacy Phase 29–35 branches, classified superseded/duplicate implementations, restored the global quality pipeline, and refreshed repository documentation to match the actual implementation.
+Phase 37 extends the consolidated `main` architecture with dynamic universe discovery, transport-neutral streaming ingestion, duplicate/sequence guards, deterministic candle building, bounded hot cache, durable SQLite OHLC history, data-SLA monitoring, and a unified production data platform that reuses the existing ProviderRouter failover/quality stack.
 
-Post-merge validation on `main` is green:
+Verified Phase 37 branch validation:
 
 - Python compile gate: **PASS**
 - Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 248 source files**
-- Full pytest suite: **PASS — 285 tests**
-- Branch-aware coverage: **78.24%** (required threshold: 70%)
+- Strict mypy: **PASS — 0 issues in 255 source files**
+- Full pytest suite: **PASS — 293 tests**
+- Branch-aware coverage: **78.66%** (required threshold: 70%)
 
-The Phase 35 live-operation framework is now integrated into `main`. It provides activation, live-risk, execution-gateway, position-reconciliation, monitoring, incident-management, and circuit-breaker boundaries while remaining fail-closed. It does **not** enable live trading by default and it does **not** contain exchange credentials.
+The Phase 35 live-operation framework remains fail-closed. Phase 37 does **not** enable live trading, add credentials, or assume any unverified Storm WebSocket/OHLC endpoint.
 
-Repository administration note: `main` is currently not protected by a branch-protection rule or repository ruleset. The connected GitHub integration can verify this state but cannot mutate branch-protection/ruleset administration. Protection must require pull requests and the global `CI / quality` check before future merges.
+Repository administration note: Phase 36 inspection showed that `main` was not protected by a branch-protection rule or repository ruleset. Issue #10 tracks the required policy to require pull requests and the global `CI / quality` check before future merges.
 
 See:
 
 - `docs/architecture/CURRENT_ARCHITECTURE_MAP.md`
 - `docs/phases/PHASE_36_REPOSITORY_CONSOLIDATION.md`
+- `docs/phases/PHASE_37_PRODUCTION_MARKET_DATA_PLATFORM.md`
 - `35_LIVE_TRADING_OPERATION/README.md`
 - `docs/live_operation/LIVE_OPERATION_RUNBOOK.md`
 
@@ -34,6 +35,8 @@ See:
 - Existing core risk approval remains mandatory for every execution path.
 - Strategy and scanner layers do not submit production orders directly.
 - Live execution is fail-closed and requires explicit production activation.
+- Market-data consumers use canonical data contracts rather than ad-hoc provider calls.
+- Streaming transport is isolated behind provider contracts so venue-specific networking does not leak into scanner/strategy logic.
 - Open-position stop-loss monitoring runs at the beginning of every trading-state cycle after restart/recovery checks.
 - Realized P&L is calculated from the position's total amount/notional model, with provider-specific contract rules isolated from generic portfolio logic.
 - No fixed maximum number of open positions. Portfolio limits are risk, exposure, correlation, margin, leverage, and capital constraints.
@@ -45,7 +48,8 @@ See:
 
 The repository includes these major domains:
 
-- `app/data` — provider routing, freshness, quality, reconciliation, and reliability.
+- `app/universe` — canonical instruments, provider mappings, dynamic discovery, eligibility, and contract specifications.
+- `app/data` — provider routing/failover, streaming ingestion, freshness, SLA, hot cache, candle building, historical OHLC persistence, quality, reconciliation, and reliability.
 - `app/market` — indicators, trend, structure, liquidity, volatility/regime analysis.
 - `app/scanner` — market scanning and opportunity generation.
 - `app/context` — news/event context and trading-window policy.
@@ -70,7 +74,7 @@ The repository quality pipeline requires:
 5. the full pytest suite,
 6. at least 70% branch-aware coverage across `app` and `interfaces`.
 
-Global CI is green on the consolidated `main`. Future repository governance should enforce the same `CI / quality` job as a required merge check through branch protection/rulesets.
+Phase 37 preserves the same global `CI / quality` gate established by Phase 36. A phase is not complete until the branch and merged `main` both pass that gate.
 
 ## Run from PyCharm or terminal
 
@@ -148,7 +152,7 @@ Research remains reproducible and controlled:
 
 Research never overrides strategy, risk, portfolio, execution, production-readiness, or live-operation hard gates.
 
-## Data sources
+## Data sources and production data boundary
 
 The V3 source boundary currently contains adapters for:
 
@@ -159,7 +163,35 @@ The V3 source boundary currently contains adapters for:
 
 Pyth is deliberately excluded from the current V3 architecture.
 
-The configured universe is not hard-coded by asset count; canonical instruments, provider mappings, and contract specifications are loaded from configuration.
+The configured universe is not hard-coded by asset count; canonical instruments, provider mappings, and contract specifications are loaded from configuration. Phase 37 additionally defines provider metadata discovery through `DynamicUniverseDiscovery` so supported markets can be reconciled into the canonical registry when a venue-specific discovery adapter is supplied.
+
+The production market-data read path is:
+
+```text
+Hot Cache
+    ↓ miss
+Historical OHLC Store
+    ↓ miss
+ProviderRouter
+    ↓
+Retry / Circuit Breaker / Quality Validation / Provider Failover
+```
+
+The streaming path is transport-neutral:
+
+```text
+Venue Stream Adapter
+    ↓
+MarketDataStreamIngestor
+    ↓
+Trade Validation / Dedup / Sequence Guard
+    ↓
+Candle Builders + Live Cache
+    ↓
+Historical OHLC Store
+```
+
+Venue-specific WebSocket clients must be implemented only against verified provider API contracts.
 
 ## Safety and execution boundary
 
