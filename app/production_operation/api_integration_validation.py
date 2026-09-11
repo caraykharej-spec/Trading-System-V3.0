@@ -5,7 +5,6 @@ Production Operation Layer
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List
 
 
 @dataclass
@@ -18,7 +17,7 @@ class APICheck:
 
 @dataclass
 class APIValidationReport:
-    checks: List[APICheck] = field(default_factory=list)
+    checks: list[APICheck] = field(default_factory=list)
     created_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
@@ -27,16 +26,16 @@ class APIValidationReport:
 
 
 class APIIntegrationValidationEngine:
-    def __init__(self):
-        self.checks: List[APICheck] = []
+    def __init__(self) -> None:
+        self.checks: list[APICheck] = []
 
-    def register_check(self, check: APICheck):
+    def register_check(self, check: APICheck) -> None:
         self.checks.append(check)
 
     def validate(self) -> APIValidationReport:
-        return APIValidationReport(checks=self.checks)
+        return APIValidationReport(checks=self.checks.copy())
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "component": "api_integration_validation",
             "status": "healthy",
