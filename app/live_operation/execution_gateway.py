@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.execution.models import OrderRequest, OrderResult, OrderStatus
+
 from .activation import LiveActivationResult
+from .circuit_breaker import LiveTradingCircuitBreaker
 from .exchange_connector import ExchangeProductionConnector
 
 
@@ -19,12 +21,17 @@ class LiveExecutionResult:
 class LiveExecutionGateway:
     """Single guarded boundary for production order submission.
 
-    The gateway is fail-closed and enforces activation, connector readiness,
-    idempotency, and an explicit risk approval flag supplied by the caller.
+    The gateway is fail-closed and enforces activation, emergency halt state,
+    connector readiness, idempotency, and an explicit live-risk approval flag.
     """
 
-    def __init__(self, connector: ExchangeProductionConnector) -> None:
+    def __init__(
+        self,
+        connector: ExchangeProductionConnector,
+        circuit_breaker: LiveTradingCircuitBreaker | None = None,
+    ) -> None:
         self.connector = connector
+        self.circuit_breaker = circuit_breaker or LiveTradingCircuitBreaker()
         self._submitted_order_ids: set[str] = set()
 
     def submit(
@@ -36,8 +43,11 @@ class LiveExecutionGateway:
     ) -> LiveExecutionResult:
         reason: str | None = None
         status = self.connector.status()
+        circuit = self.circuit_breaker.snapshot()
         if not activation.active:
             reason = f"live activation blocked: {activation.reason}"
+        elif not self.circuit_breaker.allows_submission:
+            reason = f"live circuit breaker open: {circuit.reason}"
         elif not risk_approved:
             reason = "live risk controller rejected order"
         elif not status.ready:
