@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 import hashlib
-from typing import Iterable, Mapping
+from typing import Iterable
 
 from app.context.context_engine import ContextEngine
 from app.context.models import EconomicEvent, NewsItem
