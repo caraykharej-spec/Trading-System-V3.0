@@ -1,0 +1,33 @@
+name: Phase 35 Live Operation CI
+
+on:
+  push:
+    branches: ["phase-35-live-trading-operation-framework"]
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/live_operation/**"
+      - "tests/live_operation/**"
+      - ".github/workflows/phase-35-ci.yml"
+
+jobs:
+  live-operation-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project and dev dependencies
+        run: python -m pip install -e ".[dev]"
+      - name: Compile Phase 35 modules
+        run: python -m compileall -q app/live_operation tests/live_operation
+      - name: Ruff Phase 35
+        run: python -m ruff check app/live_operation tests/live_operation
+      - name: Type-check Phase 35 boundary
+        run: >-
+          python -m mypy app/live_operation
+          --follow-imports=skip
+      - name: Run Phase 35 tests
+        run: python -m pytest -q tests/live_operation
