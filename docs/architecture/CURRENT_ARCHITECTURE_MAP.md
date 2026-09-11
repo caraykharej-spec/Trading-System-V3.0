@@ -34,7 +34,17 @@ Strategy Qualification Boundary
 Core Risk Engine + Portfolio Gate
         ↓
 DecisionEvidence + Gate Trace
-        ├──────────────→ CopilotExplainer → API / Android / Future LLM UI
+        ├──────────────→ CopilotExplainer
+        │                       ↓
+        │              Structured Copilot Brief
+        │                       ↓
+        │              Assistant Orchestrator
+        │                ├─────────────→ Deterministic Answer
+        │                └─────────────→ Optional Grounded LLM
+        │                                      ↓
+        │                           Citation / Output Validation
+        │                                      ↓
+        │                              API / Android / UI
         ↓
 Order Preparation
         ↓
@@ -45,7 +55,7 @@ Positions / Portfolio / Journal / Analytics
 Recovery / Observability / Health / Reporting
 ```
 
-The copilot branch is explanatory only. It is not on the execution-authority path and cannot write back into strategy, risk, portfolio, readiness, or execution decisions.
+The copilot/assistant branch is explanatory only. It is not on the execution-authority path and cannot write back into strategy, risk, portfolio, readiness, or execution decisions.
 
 ## Market-intelligence boundary
 
@@ -133,11 +143,9 @@ CopilotItemBrief / CopilotMarketBrief
         ↓
 GET /assistant/brief
 GET /assistant/opportunity?symbol=...
-        ↓
-Android / Dashboard / Future Model Narrator
 ```
 
-The application pipeline now preserves symbol-level outcomes for stages that previously contributed only aggregate rejection counters:
+The application pipeline preserves symbol-level outcomes for stages that previously contributed only aggregate rejection counters:
 
 - STRATEGY → NO_TRADE
 - CONTEXT → HOLD
@@ -146,7 +154,57 @@ The application pipeline now preserves symbol-level outcomes for stages that pre
 
 Upstream reason strings are preserved as evidence. Copilot objects set `execution_authority = False`. A missing fact is not reconstructed from assumptions.
 
-A future model-backed narrator must consume the structured copilot contract. It may summarize or translate evidence but may not call execution interfaces, change gate outcomes, invent prices/scores/probabilities, or transform a failed gate into a trade recommendation.
+## Grounded assistant / LLM boundary
+
+Phase 41 adds a conversation orchestration layer above the Phase 40 copilot contract.
+
+```text
+User Query
+    ↓
+AssistantIntentRouter
+    ↓
+Fresh CopilotMarketBrief
+    ↓
+GroundingBuilder
+    ↓
+EvidenceCitation[]
+    ↓
+AssistantOrchestrator
+    ├──────────────→ Deterministic grounded response
+    │
+    └──────────────→ GroundedLanguageModel (optional protocol)
+                              ↓
+                       ModelReply
+                              ↓
+                Citation / instruction validator
+                     ↓                ↓
+                  accept           reject
+                     ↓                ↓
+                model answer    deterministic fallback
+```
+
+Supported intents are:
+
+- MARKET_BRIEF
+- SYMBOL_EXPLANATION
+- REJECTION_REASON
+- RISK_SUMMARY
+- HELP
+- UNKNOWN
+
+Every market/trading fact given to an optional model is represented by a stable `EvidenceCitation` containing citation ID, key, value, source, and optional symbol. The model must return only citation IDs present in its prompt and render each used citation visibly as `[citation_id]`. Missing citations, unknown citations, duplicate citations, provider errors, or execution-oriented output fail closed to deterministic output.
+
+Conversation state is bounded and deliberately weak: the in-memory store keeps only a small number of recent user queries plus routed intent/symbol. It does not retain model answers as authoritative state and it does not cache market/risk evidence. Every request reloads the fresh `CopilotMarketBrief` before grounding.
+
+The assistant route is:
+
+```text
+POST /assistant/query
+```
+
+The request body accepts `query` and optional `session_id`. Phase 41 does not hard-code an external provider SDK. A provider-specific client may later implement `GroundedLanguageModel`, but it receives no execution interface.
+
+All `AssistantResponse` objects set `execution_authority = False`.
 
 ## Production market-data boundary
 
@@ -210,6 +268,7 @@ A production execution connector is disabled by default. The presence of `app/li
 | `app/backtest` | realistic backtesting, costs, walk-forward and Monte Carlo |
 | `app/research` | bounded reproducible research/optimization and sensitivity analysis |
 | `app/copilot` | grounded, read-only explanation of deterministic opportunity and gate evidence |
+| `app/assistant` | grounded conversation routing, citation bundles, bounded session context, model protocol, validation, and fallback orchestration |
 | `app/journal` | trade decision and execution journal |
 | `app/analytics` | performance and risk analytics |
 | `app/reporting` / `app/export_system` | report/export foundations |
@@ -218,7 +277,7 @@ A production execution connector is disabled by default. The presence of `app/li
 | `app/deployment_runtime` | deployment/runtime abstractions |
 | `app/production_operation` | production validation and go-live checks |
 | `app/live_operation` | live-operation safety and execution boundary |
-| `interfaces/api` | external API boundary for clients, including read-only copilot routes |
+| `interfaces/api` | external API boundary for clients, including copilot and grounded assistant routes |
 
 ## Source-of-truth rules
 
@@ -227,14 +286,16 @@ A production execution connector is disabled by default. The presence of `app/li
 3. Diverged historical branches must not be merged wholesale into `main`.
 4. The global CI workflow is the merge/release quality gate.
 5. Architecture documents must describe current code, not merely planned phase names.
-6. Strategy, scanner, context, analytics, copilot, and presentation layers may not bypass core risk and execution boundaries.
+6. Strategy, scanner, context, analytics, copilot, assistant, and presentation layers may not bypass core risk and execution boundaries.
 7. Live operation remains fail-closed until a validated venue adapter is intentionally enabled.
 8. Market-data consumers must use canonical data contracts and may not bypass data freshness/quality boundaries with ad-hoc provider calls.
 9. Strategy qualification is fail-closed; a single in-sample backtest, score, or confidence value cannot substitute for the required validation evidence set.
 10. Market intelligence is evidence-only. Classifier confidence or news sentiment cannot replace ContextEngine policy, strategy qualification, core risk, portfolio, or execution gates.
 11. Unrelated news must remain unknown/global rather than being force-mapped to an asset.
 12. Copilot output must remain grounded in recorded domain evidence; missing values must remain unavailable rather than inferred.
-13. Copilot and any future LLM narrator have no execution authority and may not change `NO_TRADE`, `HOLD`, or `REJECTED` outcomes.
+13. Copilot and assistant/LLM narration have no execution authority and may not change `NO_TRADE`, `HOLD`, or `REJECTED` outcomes.
+14. LLM output must cite only evidence supplied for the current request; invalid or missing provenance causes fail-closed fallback.
+15. Conversation memory is contextual convenience only and must never replace a fresh read of deterministic trading evidence.
 
 ## Current execution modes
 
@@ -258,7 +319,7 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 40 implementation verification is green: 0 mypy issues across 276 source files, 310 passing tests, and 79.51% branch-aware coverage. The final documentation head and merged `main` commit must pass the workflow before Phase 40 is considered closed.
+Phase 41 implementation verification is green: 0 mypy issues across 283 source files, 319 passing tests, and 79.61% branch-aware coverage. The final documentation head and merged `main` commit must pass the workflow before Phase 41 is considered closed.
 
 ## Repository governance
 
