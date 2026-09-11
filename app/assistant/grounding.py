@@ -104,8 +104,17 @@ class GroundingBuilder:
 
     @staticmethod
     def _market_brief(query: str, brief: CopilotMarketBrief) -> GroundingBundle:
-        citations = (
-            EvidenceCitation("MARKET:copilot:evaluated", "evaluated", str(brief.evaluated), "copilot"),
+        ranked = sorted(
+            (item for item in brief.items if item.status is CopilotStatus.QUALIFIED),
+            key=lambda item: item.rank if item.rank is not None else 10_000,
+        )
+        citations: list[EvidenceCitation] = [
+            EvidenceCitation(
+                "MARKET:copilot:evaluated",
+                "evaluated",
+                str(brief.evaluated),
+                "copilot",
+            ),
             EvidenceCitation(
                 "MARKET:copilot:strategy_qualified",
                 "strategy_qualified",
@@ -130,11 +139,14 @@ class GroundingBuilder:
                 str(brief.portfolio_rejected),
                 "copilot",
             ),
-        )
-        ranked = sorted(
-            (item for item in brief.items if item.status is CopilotStatus.QUALIFIED),
-            key=lambda item: item.rank if item.rank is not None else 10_000,
-        )
+        ]
+        for item in ranked[:10]:
+            citations.extend(
+                citation
+                for citation in _item_citations(item)
+                if citation.key in {"status", "rank"}
+            )
+
         lines = [
             f"The current brief evaluated {brief.evaluated} symbols and has "
             f"{len(ranked)} qualified opportunities.",
@@ -157,7 +169,7 @@ class GroundingBuilder:
         return GroundingBundle(
             intent=AssistantIntent.MARKET_BRIEF,
             query=query,
-            citations=citations,
+            citations=tuple(citations),
             deterministic_lines=tuple(lines),
         )
 
@@ -170,7 +182,9 @@ class GroundingBuilder:
                 query=query,
                 symbol=symbol,
                 citations=(),
-                deterministic_lines=("UNKNOWN: no grounded copilot evidence is available for that symbol.",),
+                deterministic_lines=(
+                    "UNKNOWN: no grounded copilot evidence is available for that symbol.",
+                ),
                 missing=("symbol_evidence",),
             )
         lines = [f"{item.symbol} is currently {item.status.value} in the copilot brief."]
@@ -198,6 +212,7 @@ class GroundingBuilder:
                 missing=("gate_evidence",),
             )
         citations = _item_citations(item)
+        lines: tuple[str, ...]
         if item.status is CopilotStatus.QUALIFIED:
             lines = (
                 f"{item.symbol} is QUALIFIED in the current brief, so there is no recorded rejection reason.",
@@ -221,7 +236,11 @@ class GroundingBuilder:
 
     @staticmethod
     def _risk_summary(query: str, symbol: str | None, brief: CopilotMarketBrief) -> GroundingBundle:
-        items = [item for item in brief.items if symbol is None or item.symbol.upper() == symbol.upper()]
+        items = [
+            item
+            for item in brief.items
+            if symbol is None or item.symbol.upper() == symbol.upper()
+        ]
         risk_citations: list[EvidenceCitation] = []
         for item in items:
             for citation in _item_citations(item):
@@ -235,11 +254,15 @@ class GroundingBuilder:
                 query=query,
                 symbol=symbol,
                 citations=(),
-                deterministic_lines=(f"UNKNOWN: no grounded risk facts are available for {target}.",),
+                deterministic_lines=(
+                    f"UNKNOWN: no grounded risk facts are available for {target}.",
+                ),
                 missing=("risk_evidence",),
             )
         if symbol is not None:
-            lines = (f"Grounded risk facts for {symbol.upper()} are listed in the cited evidence.",)
+            lines = (
+                f"Grounded risk facts for {symbol.upper()} are listed in the cited evidence.",
+            )
         else:
             symbols = sorted({item.symbol for item in items})
             lines = (
