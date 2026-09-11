@@ -12,12 +12,54 @@ from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_n
 
 @dataclass(frozen=True)
 class YahooFinanceProvider(MarketDataProvider):
-    """Public Yahoo Finance chart adapter; no API credential is required."""
+    """Public Yahoo Finance chart/search adapter; no API credential is required."""
 
     requires_credentials: ClassVar[bool] = False
     name: str = "yahoo"
     base_url: str = "https://query1.finance.yahoo.com"
     client: HttpClient = HttpClient()
+
+    def search_symbols(self, query: str, *, limit: int = 8) -> tuple[str, ...]:
+        """Return public Yahoo quote-search symbols for provider resolution."""
+        normalized = query.strip()
+        if not normalized:
+            return ()
+        bounded_limit = max(1, min(limit, 20))
+        encoded = quote(normalized, safe="")
+        url = (
+            f"{self.base_url}/v1/finance/search?q={encoded}"
+            f"&quotesCount={bounded_limit}&newsCount=0&listsCount=0"
+            "&enableFuzzyQuery=false&enableCb=false&enableNavLinks=false"
+        )
+        payload = self.client.get_json(url)
+        if not isinstance(payload, dict):
+            raise ProviderError(f"Yahoo search response is not an object: {query}")
+        quotes = payload.get("quotes") or []
+        if not isinstance(quotes, list):
+            return ()
+        supported_types = {
+            "CRYPTOCURRENCY",
+            "CURRENCY",
+            "EQUITY",
+            "ETF",
+            "FUTURE",
+            "INDEX",
+        }
+        symbols: list[str] = []
+        seen: set[str] = set()
+        for item in quotes:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "").strip()
+            quote_type = str(item.get("quoteType") or "").upper()
+            if not symbol or (quote_type and quote_type not in supported_types):
+                continue
+            upper = symbol.upper()
+            if upper in seen:
+                continue
+            seen.add(upper)
+            symbols.append(symbol)
+        return tuple(symbols)
 
     def get_live_price(self, symbol: str) -> LivePrice:
         chart = self._chart(symbol, range_value="1d", interval="1m")
