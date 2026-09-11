@@ -2,30 +2,28 @@
 
 ## Purpose
 
-This document is the repository-level architecture map for the consolidated V3 system. It describes the implementation that exists in the active release line rather than historical phase intentions.
+This document describes the implementation that exists in the active V3 release line. `main` is the release source of truth after a feature branch passes the protected `CI / quality` gate and is merged.
 
 ## Runtime flow
 
 ```text
-Dynamic Universe Discovery / Provider Mapping
+Provider Discovery / Canonical Universe / Symbol Mapping
         ↓
 Explicit Market-Data Source Policy
         ├──────────────→ Live Price: Storm only
         └──────────────→ OHLCV: Gate.io → Yahoo Finance fallback
         ↓
-ProviderRouter Retry / Circuit Breaker / Quality Validation
+Gate.io Public WebSocket + REST / Yahoo REST
         ↓
-Hot Cache / Candle Builder / Historical OHLC Store
+Canonical Market Events / ProviderRouter
         ↓
-Freshness / SLA / Quality / Reliability / Reconciliation
+Cache / Historical OHLC / Freshness / Quality / SLA
         ↓
 Market Analysis + Regime + Structure + Liquidity
         ↓
 Market Scanner / Opportunity Pipeline
         ↓
-Market Intelligence V2
-        ↓
-Context Engine Policy (news + macro events)
+Market Intelligence V2 → Context Engine Policy
         ↓
 Strategy Evidence / Score / Confidence / Targets
         ↓
@@ -34,21 +32,7 @@ Strategy Qualification Boundary
 Core Risk Engine + Portfolio Gate
         ↓
 DecisionEvidence + Gate Trace
-        ├──────────────→ CopilotExplainer
-        │                       ↓
-        │              Structured Copilot Brief
-        │                       ↓
-        │              Assistant Orchestrator
-        │                ├─────────────→ Deterministic Answer
-        │                └─────────────→ ProductionLanguageModel
-        │                                      ↓
-        │                           Retry / Circuit Breaker
-        │                                      ↓
-        │                           OpenAIResponsesModel
-        │                                      ↓
-        │                           Citation / Output Validation
-        │                                      ↓
-        │                              API / Android / UI
+        ├──────────────→ Copilot / Grounded Assistant / Optional LLM
         ↓
 Order Preparation
         ↓
@@ -59,326 +43,257 @@ Positions / Portfolio / Journal / Analytics
 Recovery / Observability / Health / Reporting
 ```
 
-The copilot/assistant/model-provider branch is explanatory only. It is not on the execution-authority path and cannot write back into strategy, risk, portfolio, readiness, or execution decisions.
+Copilot, assistant and external-model paths are explanatory only. They do not own strategy, risk, portfolio or execution decisions.
 
-## Market-data source boundary
+## Production market-data boundary
 
-Phase 42 makes provider ownership explicit at the composition root:
-
-```text
-Live price
-    ↓
-Storm
-    ↓
-Freshness / price-quality validation
-    ↓
-Runtime / risk / PAPER execution consumers
-
-OHLCV
-    ↓
-Gate.io (primary)
-    ↓ failure / unsupported / invalid
-Yahoo Finance (fallback)
-    ↓
-Freshness / candle-integrity / outlier validation
-    ↓
-Market analysis / strategy
-```
-
-Rules:
-
-- Storm is the configured application live-price source.
-- Gate.io is the primary OHLCV source.
-- Yahoo Finance is the OHLCV fallback.
-- Storm OHLCV remains disabled until its candle endpoint/contract is independently verified.
-- The role policy fails closed if a configured required provider is missing.
-- Provider role selection does not bypass the existing `ProviderRouter` retry, circuit-breaker, freshness, OHLC integrity, and outlier checks.
-
-The broader Phase 37 streaming/data-platform abstractions remain available behind canonical contracts:
+The authoritative application source policy is:
 
 ```text
-Provider Metadata ──→ DynamicUniverseDiscovery ──→ InstrumentRegistry
-
-REST Providers ─────→ ProviderRouter ─────────────┐
-                                                  ├─→ ProductionMarketDataPlatform
-Streaming Adapter ──→ MarketDataStreamIngestor ───┘
-                                                           ↓
-                                           Live Price Cache / Candle Builders
-                                                           ↓
-                                           SQLite Historical OHLC Store
-                                                           ↓
-                                             Scanner / Strategy Consumers
+Live price       → Storm only
+OHLCV primary    → Gate.io
+OHLCV fallback   → Yahoo Finance
+Storm OHLCV      → disabled until independently verified
 ```
 
-Venue-specific WebSocket implementations remain behind the `MarketDataStreamSource` protocol. No unverified Storm streaming/OHLC endpoint is assumed by the architecture.
+The active market-data paths are public/no-key. Provider role selection does not bypass retry, circuit breaker, freshness, OHLC integrity, outlier or reconciliation controls.
+
+### Gate.io REST and WebSocket
+
+Phase 37.1 adds the real public Gate.io Spot v4 candlestick WebSocket while preserving Gate.io REST as the primary pull-based OHLCV provider:
+
+```text
+Gate.io
+  ├── REST /spot/candlesticks
+  │        ↓
+  │   GateIOProvider
+  │        ↓
+  │   ProviderRouter
+  │
+  ├── REST /spot/currency_pairs
+  │        ↓
+  │   GateIOSpotDiscoveryProvider
+  │        ↓
+  │   canonical Instrument metadata
+  │
+  └── WSS wss://api.gateio.ws/ws/v4/
+           ↓
+      spot.candlesticks
+           ↓
+      GateIOWebSocketCandleSource
+           ↓
+      CandleStreamEvent
+           ↓
+      CandleStreamIngestor
+           ↓
+      ProductionMarketDataPlatform
+           ├──→ MarketDataCache
+           └──→ CandleHistoryStore
+```
+
+The WebSocket is configured by the PAPER composition root but is opt-in. Building the application does not open a socket. `start_gateio_stream()` and `stop_gateio_stream()` own the lifecycle.
+
+Native Gate.io OHLCV updates are not converted into artificial trade events. `CandleStreamEvent` and `CandleStreamIngestor` provide the canonical direct-candle path, including validation, duplicate rejection and per-provider/symbol/timeframe sequence protection. Existing `TradeEvent`, `MarketDataStreamIngestor` and `CandleBuilder` remain available for venues that publish trades instead of native candles.
+
+### Time synchronization
+
+Gate.io WebSocket `time_ms` / `time` metadata feeds `ClockSkewMonitor`:
+
+```text
+provider server timestamp
+        ↓
+local UTC receive timestamp
+        ↓
+EWMA observed offset + maximum absolute skew
+        ↓
+ClockSyncSnapshot / healthy-or-unhealthy evidence
+```
+
+This monitors clock drift; it does not mutate the host clock and it does not blindly trust provider time.
+
+### Provider registry
+
+`MarketDataProviderRegistry` records explicit capabilities:
+
+```text
+Storm   → LIVE_PRICE                          / HTTPS / public-no-key
+Gate.io → OHLCV_REST + OHLCV_STREAM + DISCOVERY / HTTPS+WSS / public-no-key
+Yahoo   → OHLCV_REST                          / HTTPS / public-no-key
+```
+
+The registry is descriptive/operational metadata. `source_policy.py` remains the application authority for which provider owns each read role.
+
+### Dynamic universe
+
+Phase 37's generic `DynamicUniverseDiscovery` remains the canonical reconciliation layer. Phase 37.1 adds an actual Gate.io discovery provider over public spot currency-pair metadata.
+
+A discovered Gate.io market is not automatically activated for trading. Strategy/execution eligibility still requires canonical mapping, contract specification, risk configuration and universe eligibility. Discovery may expand the candidate catalog; it cannot expand execution authority by itself.
+
+### OHLCV read path
+
+The strategy snapshot loader now consumes `ProductionMarketDataPlatform`:
+
+```text
+read OHLCV
+   ↓
+hot cache
+   ↓ miss
+historical candle store
+   ↓ miss
+Gate.io REST through ProviderRouter
+   ↓ failure / unsupported / invalid
+Yahoo Finance fallback
+   ↓
+quality/freshness checks
+   ↓
+market analysis / strategy
+```
+
+Streaming Gate.io candles populate the same cache/history path, so push and pull data converge on canonical storage contracts.
 
 ## Market-intelligence boundary
 
-Phase 39 adds an evidence-processing layer before the existing `ContextEngine`. The ContextEngine remains the policy owner for blocking/delay behavior.
+Phase 39 processes public news and macro context before `ContextEngine`:
 
 ```text
-NewsProvider / Public Feeds
+News / Economic Events
         ↓
-RawNewsRecord
+Normalize / Deduplicate
         ↓
-Normalization + URL Canonicalization
+Entity + Asset Relevance
         ↓
-Cross-source Deduplication
+Classification / Impact / Confidence
         ↓
-Entity / Symbol Relevance
-        ↓
-Category + Impact + Confidence
-        ↓
-Canonical NewsIntelligence
-        ↓
-NewsItem bridge
+Canonical NewsItem / EconomicEvent
         ↓
 ContextEngine
 ```
 
-Macro events use a parallel path:
-
-```text
-EconomicEvent
-    ↓
-Currency / Symbol Inference
-    ↓
-Macro / Regulatory Classification
-    ↓
-Event Confidence
-    ↓
-Existing Critical / High Event Windows
-```
-
-Historical intelligence evidence is evaluated without introducing execution authority. Directional news can be checked against forward returns; economic events are evaluated by forward move magnitude unless an explicit directional model exists.
+Market intelligence is advisory evidence. It cannot bypass ContextEngine policy, Strategy Qualification, Risk, Portfolio or Execution.
 
 ## Strategy qualification boundary
 
-Phase 38 adds a release/research qualification boundary around the existing strategy, backtest, and research engines. It is not a per-order execution shortcut and it cannot activate live trading.
+Phase 38 provides a fail-closed validation boundary:
 
 ```text
-Historical Dataset
-        ↓
+Historical Data
+   ↓
 Chronological Train / Validation / Holdout
-        ↓
-Holdout OOS Performance
-        ├───────────────┐
-        ↓               ↓
-Walk Forward      Monte Carlo
-        ↓               ↓
-Cost Stress       Parameter Stability
-        └───────┬───────┘
-                ↓
-         Regime Coverage
-                ↓
-   Forward PAPER / SHADOW
-                ↓
- StrategyQualificationEngine
-                ↓
-       QUALIFIED / HOLD
+   ↓
+OOS + Walk Forward + Monte Carlo
+   ↓
+Cost Stress + Parameter Stability + Regime Coverage
+   ↓
+Forward PAPER / SHADOW Evidence
+   ↓
+StrategyQualificationEngine
+   ↓
+QUALIFIED / HOLD
 ```
 
-Missing required evidence or a failed critical threshold yields `HOLD`. `QUALIFIED` means only that the configured strategy-validation policy passed; core risk, portfolio, production-readiness, connector-readiness, and live-operation gates remain independently mandatory.
+A high score, confidence value or in-sample result cannot substitute for required validation evidence. `QUALIFIED` does not enable live execution.
 
-## Trading-copilot boundary
+## Trading copilot and assistant boundary
 
-Phase 40 adds a read-only explanation layer over deterministic domain evidence.
+Phase 40 preserves deterministic gate evidence and exposes read-only explanations. Phases 41–42 add grounded conversation, optional external-model narration and content-free assistant telemetry.
 
 ```text
-Strategy Result
-Context Assessment
-Risk Assessment
-Portfolio Assessment
-        ↓
 DecisionEvidence + Gate Trace
         ↓
 CopilotExplainer
         ↓
-CopilotItemBrief / CopilotMarketBrief
+Structured Copilot Brief
         ↓
-GET /assistant/brief
-GET /assistant/opportunity?symbol=...
-```
-
-The application pipeline preserves symbol-level outcomes for stages that previously contributed only aggregate rejection counters:
-
-- STRATEGY → NO_TRADE
-- CONTEXT → HOLD
-- RISK → REJECTED
-- PORTFOLIO → REJECTED
-
-Upstream reason strings are preserved as evidence. Copilot objects set `execution_authority = False`. A missing fact is not reconstructed from assumptions.
-
-## Grounded assistant and production LLM boundary
-
-Phase 41 defines the grounded conversation contract. Phase 42 adds an optional production provider runtime above that contract without expanding authority.
-
-```text
-User Query
-    ↓
-AssistantIntentRouter
-    ↓
-Fresh CopilotMarketBrief
-    ↓
-GroundingBuilder
-    ↓
-EvidenceCitation[]
-    ↓
+AssistantIntentRouter / GroundingBuilder
+        ↓
 AssistantOrchestrator
-    ├──────────────→ Deterministic grounded response
-    │
-    └──────────────→ ProductionLanguageModel
-                              ↓
-                 Retry / Circuit Breaker / Telemetry
-                              ↓
-                    OpenAIResponsesModel
-                              ↓
-                         ModelReply
-                              ↓
-                Citation / instruction validator
-                     ↓                ↓
-                  accept           reject
-                     ↓                ↓
-                model answer    deterministic fallback
+   ├────────────→ deterministic grounded answer
+   └────────────→ optional ProductionLanguageModel
+                         ↓
+                   retry / circuit breaker
+                         ↓
+                   citation validation
+                         ↓
+                 answer or safe fallback
 ```
 
-The production model path is disabled by default. Enabling it requires environment-backed configuration and an external API key. `OpenAIResponsesModel` uses the bounded `ModelPrompt` contract and receives no execution tools/callbacks.
+Rules:
 
-Production safeguards include:
+- missing facts remain `UNKNOWN`/unavailable;
+- external models receive no execution tools;
+- invalid/missing citations fail closed to deterministic output;
+- assistant/model failures do not alter trading decisions;
+- telemetry excludes prompts, responses, evidence values, session IDs and secrets;
+- all assistant responses have no execution authority.
 
-- explicit enable flag,
-- provider/model allowlist validation,
-- prompt-character budget,
-- output-token budget,
-- request timeout,
-- bounded retry/backoff,
-- circuit breaker,
-- Phase 41 citation/output validation,
-- deterministic fallback on provider/model failure,
-- no execution authority.
+## Execution and live-operation boundary
 
-Model/network CI tests use injected transports; CI does not require or expose a real external API secret.
-
-### Assistant observability
-
-`AssistantTelemetry` records bounded operational metadata only:
-
-- provider,
-- model,
-- prompt-version identifier,
-- success/failure outcome,
-- latency,
-- evidence count,
-- output character count,
-- reported input/output token counts,
-- error type,
-- UTC event time.
-
-It deliberately excludes:
-
-- API keys or other secrets,
-- prompt/query text,
-- model-response text,
-- evidence values,
-- session IDs.
-
-Read-only observability endpoint:
+The active composition root remains PAPER/SHADOW. Phase 35 provides a fail-closed live-operation framework, but no venue-specific production execution connector is enabled by default.
 
 ```text
-GET /assistant/metrics
-```
-
-It returns aggregate calls, successes, failures, token counts and average latency. Conversation/query behavior remains on:
-
-```text
-POST /assistant/query
-```
-
-Every `AssistantResponse` retains `execution_authority = False`.
-
-## Production-operation boundary
-
-Phase 35 adds a fail-closed operational boundary above the validated core:
-
-```text
-Signal Production
-    ↓
-Core Risk Approval
-    ↓
-Live Risk Controller
-    ↓
-Production Activation Gate
-    ↓
+Strategy
+   ↓
+Context
+   ↓
+Strategy Qualification
+   ↓
+Core Risk
+   ↓
+Portfolio Gate
+   ↓
+Production Readiness
+   ↓
+Live Risk / Circuit Breaker
+   ↓
 Execution Gateway
-    ↓
-Venue-specific Exchange Connector
-    ↓
-Position Reconciliation
-    ↓
-Monitoring / Incidents / Operations Dashboard
+   ↓
+Venue-specific connector (disabled unless explicitly implemented/validated)
 ```
 
-A production execution connector is disabled by default. The presence of `app/live_operation` does not by itself enable real-money execution.
+Phase 37.1 modifies market data only. It does not add Gate.io private endpoints, balances, positions, orders, fills or order submission.
 
 ## Domain ownership
 
 | Domain | Primary responsibility |
 |---|---|
-| `app/universe` | canonical instruments, dynamic discovery, mappings, eligibility, contract specs |
-| `app/data` | explicit source roles, providers, streaming ingest, routing/failover, cache, candle building, historical OHLC, SLA, quality, reconciliation, reliability |
+| `app/universe` | canonical instruments, Gate.io/public dynamic discovery, mappings, eligibility, contract specs |
+| `app/data` | provider registry, source roles, Gate.io REST/WSS, streaming normalization, cache, historical OHLC, SLA, quality, failover, reconciliation and clock-skew evidence |
 | `app/market` | indicators, trend, regime, structure, liquidity |
 | `app/scanner` | scanning and opportunity generation |
-| `app/context` | news/economic-event policy plus intelligence normalization, deduplication, relevance, classification, confidence, macro enrichment, and historical impact evidence |
-| `app/strategy` | evidence, scoring, confidence, strategy decisions, targets |
-| `app/strategy_validation` | holdout OOS, cost stress, regime analysis, parameter stability, forward PAPER/SHADOW evidence, qualification gate |
-| `app/risk` | sizing, risk policy, trade/portfolio gates |
-| `app/execution` | paper execution, pending orders, fills, atomic persistence |
-| `app/position` | position lifecycle and settlement |
-| `app/portfolio` | account state, exposure, correlation, portfolio constraints |
-| `app/backtest` | realistic backtesting, costs, walk-forward and Monte Carlo |
-| `app/research` | bounded reproducible research/optimization and sensitivity analysis |
-| `app/copilot` | grounded, read-only explanation of deterministic opportunity and gate evidence |
-| `app/assistant` | grounded conversation routing, citations, bounded sessions, provider/runtime policy, LLM adapter, reliability and assistant telemetry |
-| `app/journal` | trade decision and execution journal |
-| `app/analytics` | performance and risk analytics |
-| `app/reporting` / `app/export_system` | report/export foundations |
-| `app/recovery` | restart recovery and reconciliation |
-| `app/observability` / `app/system_health_monitoring` | health, alerts, readiness and operational monitoring |
-| `app/deployment_runtime` | deployment/runtime abstractions |
-| `app/production_operation` | production validation and go-live checks |
-| `app/live_operation` | live-operation safety and execution boundary |
-| `interfaces/api` | external API boundary for clients, including copilot, grounded assistant and assistant metrics routes |
+| `app/context` | news/macro policy and intelligence evidence |
+| `app/strategy` | evidence, scoring, confidence, strategy decisions and targets |
+| `app/strategy_validation` | OOS, cost stress, regime/stability, forward evidence and qualification |
+| `app/risk` | sizing, trade and portfolio risk gates |
+| `app/execution` | PAPER execution, pending orders, fills and atomic persistence |
+| `app/position` / `app/portfolio` | position lifecycle, settlement, exposure and account state |
+| `app/backtest` / `app/research` | backtesting, walk-forward, Monte Carlo and reproducible research |
+| `app/copilot` | grounded read-only decision explanations |
+| `app/assistant` | grounded conversation, optional LLM provider/reliability and telemetry |
+| `app/journal` / `app/analytics` | journal and performance/risk analytics |
+| `app/recovery` / `app/observability` | restart/reconciliation, health and readiness |
+| `app/live_operation` | fail-closed production execution safety boundary |
+| `interfaces/api` | external read/control boundary for clients within allowed system modes |
 
 ## Source-of-truth rules
 
-1. `main` is the release source of truth after a phase passes global CI and is merged.
-2. Legacy phase branches are reference history only unless their code is explicitly re-reviewed and reimplemented.
-3. Diverged historical branches must not be merged wholesale into `main`.
-4. The global CI workflow is the merge/release quality gate.
-5. Architecture documents must describe current code, not merely planned phase names.
-6. Strategy, scanner, context, analytics, copilot, assistant, LLM provider, and presentation layers may not bypass core risk and execution boundaries.
-7. Live operation remains fail-closed until a validated venue adapter is intentionally enabled.
-8. Market-data consumers must use canonical data contracts and the explicit source-role policy; application live price is Storm-only and OHLCV is Gate.io with Yahoo fallback.
-9. Storm OHLCV must remain disabled until the candle endpoint/contract is independently verified.
-10. Strategy qualification is fail-closed; a single in-sample backtest, score, or confidence value cannot substitute for the required validation evidence set.
-11. Market intelligence is evidence-only. Classifier confidence or news sentiment cannot replace ContextEngine policy, strategy qualification, core risk, portfolio, or execution gates.
-12. Unrelated news must remain unknown/global rather than being force-mapped to an asset.
-13. Copilot output must remain grounded in recorded domain evidence; missing values must remain unavailable rather than inferred.
-14. Copilot and assistant/LLM narration have no execution authority and may not change `NO_TRADE`, `HOLD`, or `REJECTED` outcomes.
-15. LLM output must cite only evidence supplied for the current request; invalid or missing provenance causes fail-closed fallback.
-16. Conversation memory is contextual convenience only and must never replace a fresh read of deterministic trading evidence.
-17. External-model secrets are environment-only and must never be committed.
-18. Assistant telemetry must remain content-free and must not persist prompt text, model output, evidence values, session IDs or secrets.
+1. `main` is the release source of truth after protected PR merge.
+2. Legacy phase branches are reference history only unless re-reviewed and reimplemented.
+3. Historical diverged branches must not be merged wholesale.
+4. The global protected `CI / quality` workflow is the merge/release quality gate.
+5. Market-data consumers use canonical contracts and explicit provider roles.
+6. Storm remains application live-price-only; Storm OHLCV stays disabled until independently verified.
+7. Gate.io is primary OHLCV; Yahoo Finance is fallback.
+8. Gate.io public discovery cannot auto-enable execution for newly discovered markets.
+9. Strategy, context, intelligence, copilot, assistant and presentation layers cannot bypass deterministic risk/execution gates.
+10. Live operation remains fail-closed until a venue execution adapter is explicitly implemented, validated and enabled.
 
-## Current execution modes
+## Current modes
 
-- PAPER: supported by the core execution stack.
-- SHADOW: architecture-compatible and intended for production observation without venue submission.
-- LIVE: framework exists, but a venue-specific production connector must be explicitly configured and validated; default state remains disabled.
+- **PAPER:** supported.
+- **SHADOW:** architecture-supported for observation without venue submission.
+- **LIVE:** safety framework exists, but production venue execution remains disabled by default.
 
 ## Quality boundary
-
-The global quality gate covers:
 
 ```text
 compileall
@@ -392,8 +307,8 @@ full pytest
 branch-aware coverage >= 70%
 ```
 
-Phase 42 implementation verification is green: 0 mypy issues across 288 source files, 329 passing tests, and 79.42% branch-aware coverage. The final documentation head and merged `main` commit must pass the workflow before Phase 42 is considered closed.
+Phase 37.1 implementation head `ac76df816ebc920bbf3b9583e7c59a85bca1845e` passed: 0 mypy issues across 292 source files, 337 tests and 78.95% branch-aware coverage. Final documentation and merged `main` must also pass the protected `CI / quality` gate before Phase 37.1 is closed.
 
 ## Repository governance
 
-The code and CI source of truth is consolidated in `main`, but repository inspection from Phase 36 showed that `main` was not protected and no repository ruleset was configured. Issue #10 tracks the required repository administration policy: require pull requests and the `CI / quality` check, block force pushes/deletion, and prevent normal bypass of required checks.
+Phase 36.1 closed the remaining repository-governance gap. `main` is protected by the active `main-protection` ruleset: pull requests are required, `CI / quality` is a strict required check, branches must be up to date, force-push/non-fast-forward updates and deletion are blocked, and normal bypass is disabled.
