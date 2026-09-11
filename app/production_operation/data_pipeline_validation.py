@@ -26,16 +26,16 @@ class PipelineValidationReport:
 
 
 class DataPipelineValidationEngine:
-    def __init__(self):
+    def __init__(self) -> None:
         self.checks: list[PipelineCheck] = []
 
-    def register_check(self, check: PipelineCheck):
+    def register_check(self, check: PipelineCheck) -> None:
         self.checks.append(check)
 
     def validate(self) -> PipelineValidationReport:
         return PipelineValidationReport(checks=list(self.checks))
 
-    def health(self):
+    def health(self) -> dict[str, object]:
         return {
             "component": "data_pipeline_validation",
             "status": "healthy",
