@@ -14,6 +14,7 @@ from app.application.opportunity_pipeline import (
 )
 from app.application.runtime_cycle import RuntimeCycleOrchestrator
 from app.application.strategy_pipeline import StrategyPipeline
+from app.assistant.analytics import AssistantAnalyticsService
 from app.assistant.observability import AssistantTelemetry
 from app.assistant.orchestrator import AssistantOrchestrator
 from app.assistant.runtime import AssistantRuntimeConfig, build_production_language_model
@@ -24,7 +25,7 @@ from app.core.enums import SystemMode
 from app.data.cache import MarketDataCache
 from app.data.historical_store import CandleHistoryStore, InMemoryCandleStore, SQLiteCandleStore
 from app.data.mapped_provider import MappedMarketProvider
-from app.data.market_data import MarketDataRequest
+from app.data.market_data import Candle, MarketDataRequest
 from app.data.platform import ProductionMarketDataPlatform
 from app.data.provider_registry import MarketDataProviderRegistry, build_default_provider_registry
 from app.data.provider_router import ProviderRouter
@@ -109,6 +110,7 @@ class PaperApplication:
     opportunity_pipeline: OpportunityPipeline
     runtime: RuntimeCycleOrchestrator
     analytics: AnalyticsService
+    assistant_analytics: AssistantAnalyticsService
     health: SystemHealthService
     api: TradingApiService
     selection_queue: ExplicitPaperSelectionQueue
@@ -420,16 +422,32 @@ def build_paper_application(
     def copilot_symbol(symbol: str) -> CopilotItemBrief | None:
         return copilot.find_symbol(copilot_brief(), symbol)
 
+    def assistant_candles(symbol: str, timeframe: str, limit: int) -> list[Candle]:
+        return market_data_platform.get_candles(
+            MarketDataRequest(symbol=symbol, timeframe=timeframe, limit=limit)
+        )
+
+    assistant_analytics = AssistantAnalyticsService(
+        positions_provider=position_repository.list_open,
+        journal_provider=journal_repository.list_all,
+        live_price_provider=live_price,
+        candles_provider=assistant_candles,
+    )
     assistant_telemetry = AssistantTelemetry()
     effective_assistant_config = assistant_config or AssistantRuntimeConfig.from_env()
     assistant_model = build_production_language_model(
         effective_assistant_config, assistant_telemetry
     )
-    assistant = AssistantOrchestrator(copilot_brief, model=assistant_model)
+    assistant = AssistantOrchestrator(
+        copilot_brief,
+        model=assistant_model,
+        analytics=assistant_analytics,
+        symbols_provider=lambda: tuple(symbols),
+    )
 
     api = TradingApiService(
         mode=SystemMode.PAPER,
-        version="3.0.0-dev5",
+        version="3.0.0-dev6",
         cycle_runner=runtime.run,
         positions_provider=position_repository.list_open,
         opportunities_provider=opportunities,
@@ -465,6 +483,7 @@ def build_paper_application(
         opportunity_pipeline=opportunity_pipeline,
         runtime=runtime,
         analytics=analytics,
+        assistant_analytics=assistant_analytics,
         health=health,
         api=api,
         selection_queue=selection_queue,

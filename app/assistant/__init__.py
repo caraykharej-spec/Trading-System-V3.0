@@ -1,3 +1,14 @@
+from .analytics import (
+    AssistantAnalyticsService,
+    JournalAnalyticsSnapshot,
+    JournalTradeView,
+    MarketChangePoint,
+    MarketChangeSnapshot,
+    PositionAnalyticsItem,
+    PositionAnalyticsSnapshot,
+    WhatIfPositionImpact,
+    WhatIfSnapshot,
+)
 from .grounding import GroundingBuilder
 from .model import GroundedLanguageModel, ModelPrompt, ModelReply
 from .models import (
@@ -19,6 +30,7 @@ from .session import InMemoryConversationStore, SessionTurn
 
 __all__ = [
     "AnswerMode",
+    "AssistantAnalyticsService",
     "AssistantIntent",
     "AssistantIntentRouter",
     "AssistantMetricsSnapshot",
@@ -33,9 +45,17 @@ __all__ = [
     "GroundingBundle",
     "InMemoryConversationStore",
     "IntentRoute",
+    "JournalAnalyticsSnapshot",
+    "JournalTradeView",
+    "MarketChangePoint",
+    "MarketChangeSnapshot",
     "ModelPrompt",
     "ModelReply",
+    "PositionAnalyticsItem",
+    "PositionAnalyticsSnapshot",
     "ProductionLanguageModel",
     "SessionTurn",
+    "WhatIfPositionImpact",
+    "WhatIfSnapshot",
     "build_production_language_model",
 ]

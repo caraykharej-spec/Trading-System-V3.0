@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from app.copilot.models import CopilotMarketBrief
 
+from .analytics import AssistantAnalyticsService
 from .grounding import GroundingBuilder
 from .model import GroundedLanguageModel, ModelPrompt, ModelReply
 from .models import AnswerMode, AssistantIntent, AssistantResponse, GroundingBundle
@@ -14,9 +15,11 @@ from .session import InMemoryConversationStore, SessionTurn
 SYSTEM_INSTRUCTIONS = """You are a narration layer over deterministic trading evidence.
 Use only the supplied evidence. Every market/trading factual claim must be backed by one or more
 supplied citation IDs and visible in the answer as [citation_id]. If evidence is insufficient,
-say UNKNOWN. Do not invent prices, scores, probabilities, news, risk state, portfolio state, or
-provider state. Do not recommend or instruct order placement, leverage changes, position sizing,
-entries, exits, or live activation. You have no execution authority."""
+say UNKNOWN. Do not invent prices, scores, probabilities, news, position state, journal results,
+market changes, risk state, portfolio state, or provider state. What-if evidence is hypothetical
+analytics only and must never be presented as a prediction or trade instruction. Do not recommend
+or instruct order placement, leverage changes, position sizing, entries, exits, stop changes, or
+live activation. You have no execution authority."""
 
 _FORBIDDEN_EXECUTION_PHRASES = (
     "buy now",
@@ -25,15 +28,38 @@ _FORBIDDEN_EXECUTION_PHRASES = (
     "execute an order",
     "execute the trade",
     "open a position",
+    "close the position",
+    "move the stop",
+    "change the stop",
     "increase leverage",
     "set leverage",
     "go long",
     "go short",
 )
 
+_COPILOT_INTENTS = frozenset(
+    {
+        AssistantIntent.MARKET_BRIEF,
+        AssistantIntent.SYMBOL_EXPLANATION,
+        AssistantIntent.REJECTION_REASON,
+        AssistantIntent.RISK_SUMMARY,
+    }
+)
+
+
+def _empty_brief() -> CopilotMarketBrief:
+    return CopilotMarketBrief(
+        evaluated=0,
+        strategy_qualified=0,
+        context_rejected=0,
+        risk_rejected=0,
+        portfolio_rejected=0,
+        items=(),
+    )
+
 
 class AssistantOrchestrator:
-    """Grounded conversation coordinator above the read-only copilot contract."""
+    """Grounded conversation coordinator above read-only copilot and analytics contracts."""
 
     def __init__(
         self,
@@ -42,6 +68,8 @@ class AssistantOrchestrator:
         model: GroundedLanguageModel | None = None,
         router: AssistantIntentRouter | None = None,
         grounding: GroundingBuilder | None = None,
+        analytics: AssistantAnalyticsService | None = None,
+        symbols_provider: Callable[[], Iterable[str]] | None = None,
         sessions: InMemoryConversationStore | None = None,
         max_query_chars: int = 2000,
     ) -> None:
@@ -50,7 +78,8 @@ class AssistantOrchestrator:
         self._brief_provider = brief_provider
         self._model = model
         self._router = router or AssistantIntentRouter()
-        self._grounding = grounding or GroundingBuilder()
+        self._grounding = grounding or GroundingBuilder(analytics)
+        self._symbols_provider = symbols_provider
         self._sessions = sessions or InMemoryConversationStore()
         self._max_query_chars = max_query_chars
 
@@ -62,10 +91,16 @@ class AssistantOrchestrator:
             raise ValueError(f"assistant query exceeds {self._max_query_chars} characters")
 
         normalized_session = self._sessions.normalize_session_id(session_id)
-        brief = self._brief_provider()
-        symbols = tuple(item.symbol for item in brief.items)
+        brief: CopilotMarketBrief | None = None
+        if self._symbols_provider is None:
+            brief = self._brief_provider()
+            symbols = tuple(item.symbol for item in brief.items)
+        else:
+            symbols = tuple(self._symbols_provider())
         last_symbol = self._sessions.last_symbol(normalized_session)
         route = self._router.route(normalized_query, symbols, last_symbol=last_symbol)
+        if brief is None:
+            brief = self._brief_provider() if route.intent in _COPILOT_INTENTS else _empty_brief()
         bundle = self._grounding.build(route, normalized_query, brief)
         history = tuple(turn.query for turn in self._sessions.history(normalized_session))
 
