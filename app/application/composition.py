@@ -208,6 +208,7 @@ def build_paper_application(
     correlation_matrix: CorrelationMatrix | None = None,
     context_loader: ContextLoader | None = None,
     assistant_config: AssistantRuntimeConfig | None = None,
+    signal_workers: int = 16,
 ) -> PaperApplication:
     """Build the real V3 application boundary without performing network I/O.
 
@@ -306,7 +307,7 @@ def build_paper_application(
             snapshots["15m"],
         )
 
-    strategy_pipeline = StrategyPipeline(snapshot_loader)
+    strategy_pipeline = StrategyPipeline(snapshot_loader, max_workers=signal_workers)
     context_engine = ContextEngine()
     effective_context_loader = context_loader or (
         lambda symbol: context_engine.assess(symbol)
