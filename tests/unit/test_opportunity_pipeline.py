@@ -72,6 +72,24 @@ def test_final_top_n_is_applied_after_risk_portfolio_gates():
     assert len(result.qualified) == 10
     assert all(item.signal.symbol != "S0" for item in result.qualified)
     assert [item.rank for item in result.qualified] == list(range(1, 11))
+    assert len(result.all_evaluations) == 12
+    assert sum(item.is_top_10 for item in result.all_evaluations) == 10
+    outside_top_ten = next(item for item in result.all_evaluations if item.rank == 11)
+    assert outside_top_ten.status == "QUALIFIED"
+    assert outside_top_ten.score is not None and outside_top_ten.score >= Decimal("90")
+    rejected = next(item for item in result.all_evaluations if item.symbol == "S0")
+    assert rejected.gate_stage == "RISK"
+    assert rejected.status == "REJECTED"
+
+
+def test_structural_stop_has_atr_buffer_and_auditable_source():
+    result = OpportunityPipeline(
+        StrategyPipeline(lambda symbol: snapshots(symbol)), lambda symbol: context()
+    ).evaluate(["S"])
+    evaluation = result.all_evaluations[0]
+    assert evaluation.stop_loss == Decimal("97.50")
+    assert evaluation.stop_loss_buffer == Decimal("0.50")
+    assert evaluation.stop_loss_source == "LAST_CONFIRMED_SWING_PLUS_ATR_BUFFER"
 
 
 def test_context_critical_event_blocks_before_risk():
