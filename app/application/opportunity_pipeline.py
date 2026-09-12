@@ -67,6 +67,28 @@ class GatedOpportunity:
 
 
 @dataclass(frozen=True)
+class MarketEvaluation:
+    symbol: str
+    status: str
+    gate_stage: str
+    rank: int | None = None
+    is_top_10: bool = False
+    direction: str | None = None
+    score: Decimal | None = None
+    confidence: Decimal | None = None
+    entry: Decimal | None = None
+    stop_loss: Decimal | None = None
+    target: Decimal | None = None
+    rr: Decimal | None = None
+    stop_loss_source: str | None = None
+    stop_loss_buffer: Decimal | None = None
+    score_components: dict[str, Decimal] | None = None
+    news_impact: str = "UNKNOWN"
+    event_importance: str = "NONE"
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class OpportunityPipelineResult:
     evaluated: int
     strategy_qualified: int
@@ -75,6 +97,7 @@ class OpportunityPipelineResult:
     portfolio_rejected: int
     qualified: tuple[GatedOpportunity, ...]
     rejections: tuple[GateRejection, ...] = ()
+    all_evaluations: tuple[MarketEvaluation, ...] = ()
 
 
 class OpportunityPipeline:
@@ -117,12 +140,23 @@ class OpportunityPipeline:
             )
             for item in strategy_rejections
         ]
+        evaluations: dict[str, MarketEvaluation] = {
+            item.symbol: MarketEvaluation(
+                symbol=item.symbol,
+                status=GateOutcome.NO_TRADE.value,
+                gate_stage=GateStage.STRATEGY.value,
+                reasons=item.reasons,
+            )
+            for item in strategy_rejections
+        }
+        contexts: dict[str, ContextAssessment] = {}
         context_rejected = risk_rejected = portfolio_rejected = 0
 
         for signal in signals:
             context_assessment: ContextAssessment | None = None
             if self.context_loader is not None:
                 context_assessment = self.context_loader(signal.symbol)
+                contexts[signal.symbol] = context_assessment
                 if context_assessment.blocking or context_assessment.delay:
                     context_rejected += 1
                     reasons = context_assessment.reasons or ("context gate active",)
@@ -133,6 +167,13 @@ class OpportunityPipeline:
                             outcome=GateOutcome.HOLD,
                             reasons=reasons,
                         )
+                    )
+                    evaluations[signal.symbol] = self._evaluation(
+                        signal,
+                        GateOutcome.HOLD.value,
+                        GateStage.CONTEXT.value,
+                        reasons,
+                        context=context_assessment,
                     )
                     continue
 
@@ -172,6 +213,13 @@ class OpportunityPipeline:
                         reasons=risk.reasons or ("risk gate rejected candidate",),
                     )
                 )
+                evaluations[signal.symbol] = self._evaluation(
+                    signal,
+                    GateOutcome.REJECTED.value,
+                    GateStage.RISK.value,
+                    risk.reasons,
+                    context=context_assessment,
+                )
                 continue
 
             portfolio = assess_portfolio(
@@ -198,6 +246,13 @@ class OpportunityPipeline:
                         reasons=portfolio.reasons or ("portfolio gate rejected candidate",),
                     )
                 )
+                evaluations[signal.symbol] = self._evaluation(
+                    signal,
+                    GateOutcome.REJECTED.value,
+                    GateStage.PORTFOLIO.value,
+                    portfolio.reasons,
+                    context=context_assessment,
+                )
                 continue
 
             evidence = DecisionEvidence.build(
@@ -216,6 +271,16 @@ class OpportunityPipeline:
             GatedOpportunity(signal, risk, portfolio, rank, evidence)
             for rank, (signal, risk, portfolio, evidence) in enumerate(gated[:top_n], start=1)
         )
+        for rank, (signal, _risk, _portfolio, _evidence) in enumerate(gated, start=1):
+            evaluations[signal.symbol] = self._evaluation(
+                signal,
+                "QUALIFIED",
+                "COMPLETE",
+                (),
+                rank=rank,
+                is_top_10=rank <= top_n,
+                context=contexts.get(signal.symbol),
+            )
         return OpportunityPipelineResult(
             evaluated=evaluated,
             strategy_qualified=len(signals),
@@ -224,4 +289,55 @@ class OpportunityPipeline:
             portfolio_rejected=portfolio_rejected,
             qualified=selected,
             rejections=tuple(rejections),
+            all_evaluations=tuple(
+                sorted(
+                    evaluations.values(),
+                    key=lambda item: (
+                        item.rank is None,
+                        item.rank if item.rank is not None else 10**9,
+                        item.symbol,
+                    ),
+                )
+            ),
+        )
+
+    @staticmethod
+    def _evaluation(
+        signal: StrategySignal,
+        status: str,
+        stage: str,
+        reasons: tuple[str, ...],
+        *,
+        rank: int | None = None,
+        is_top_10: bool = False,
+        context: ContextAssessment | None = None,
+    ) -> MarketEvaluation:
+        breakdown = signal.score_breakdown
+        return MarketEvaluation(
+            symbol=signal.symbol,
+            status=status,
+            gate_stage=stage,
+            rank=rank,
+            is_top_10=is_top_10,
+            direction=signal.direction,
+            score=signal.score,
+            confidence=signal.confidence,
+            entry=signal.entry,
+            stop_loss=signal.stop_loss,
+            target=signal.target,
+            rr=signal.rr,
+            stop_loss_source=signal.stop_loss_source,
+            stop_loss_buffer=signal.stop_loss_buffer,
+            score_components={
+                "htf_trend": breakdown.htf_trend,
+                "structure": breakdown.structure,
+                "setup": breakdown.setup,
+                "confirmation": breakdown.confirmation,
+                "liquidity": breakdown.liquidity,
+                "volatility": breakdown.volatility,
+                "rr_quality": breakdown.rr_quality,
+            },
+            news_impact=context.news.value if context is not None else "UNKNOWN",
+            event_importance=context.event.value if context is not None else "NONE",
+            reasons=reasons,
         )
