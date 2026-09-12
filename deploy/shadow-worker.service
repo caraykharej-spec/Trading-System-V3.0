@@ -1,0 +1,25 @@
+[Unit]
+Description=Trading System V3 Persistent Shadow Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trading-shadow
+Group=trading-shadow
+EnvironmentFile=/etc/trading-system/shadow.env
+ExecStart=/opt/trading-system/bin/trading-shadow-operation worker
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/trading-system-shadow
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target
