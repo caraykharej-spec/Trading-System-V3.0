@@ -1,4 +1,5 @@
 from decimal import Decimal
+from threading import Barrier
 
 from app.application.opportunity_pipeline import OpportunityPipeline, RiskContext
 from app.application.strategy_pipeline import StrategyPipeline
@@ -124,3 +125,18 @@ def test_one_unavailable_market_does_not_abort_full_scan():
     assert unavailable.status == "NO_TRADE"
     assert unavailable.reasons == ("stale candles",)
     assert len(result.qualified) == 1
+
+
+def test_markets_are_evaluated_concurrently_and_output_order_is_stable():
+    started = Barrier(2, timeout=1)
+
+    def loader(symbol: str):
+        started.wait()
+        raise ProviderError(f"unavailable {symbol}")
+
+    result = OpportunityPipeline(
+        StrategyPipeline(loader, max_workers=2), lambda symbol: context()
+    ).evaluate(["FIRST", "SECOND"])
+
+    assert [item.symbol for item in result.all_evaluations] == ["FIRST", "SECOND"]
+    assert all(item.status == "NO_TRADE" for item in result.all_evaluations)
