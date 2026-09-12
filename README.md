@@ -24,7 +24,7 @@ public data produces HOLD, never an assumed PASS.
 See `docs/phases/PHASE_43_READ_ONLY_VENUE_SHADOW_INTEGRATION_VALIDATION.md`
 for the Phase 42 closure evidence, run command, scope and Phase 43 closure gates.
 
-**Phase 44 — Production Infrastructure / Security / SRE: IMPLEMENTATION IN REVIEW**
+**Phase 44 — Production Infrastructure / Security / SRE: MERGED AND MAIN-CI VALIDATED**
 
 Phase 44 packages the PAPER/SHADOW API as a hardened single-instance container,
 adds production preflight and authenticated low-cardinality service metrics, and
@@ -32,6 +32,16 @@ defines SLO, alerting, backup/restore and deployment gates. It does not enable
 live execution or claim that a production environment has been commissioned.
 
 See `docs/phases/PHASE_44_PRODUCTION_INFRASTRUCTURE_SECURITY_SRE.md`.
+
+**Phase 45 — Persistent Shadow Operation & Evidence Accumulation: IMPLEMENTATION IN REVIEW**
+
+Phase 45 adds a fixed-delay read-only shadow worker, an exclusive expiring lease,
+an append-only SQLite evidence ledger with a tamper-evident hash chain, integrity
+verification and longitudinal PASS/HOLD/FAIL summaries. It never invokes runtime
+execution or the trading database. Real-host soak and backup/restore evidence
+remain separate operational gates.
+
+See `docs/phases/PHASE_45_PERSISTENT_SHADOW_OPERATION_EVIDENCE_ACCUMULATION.md`.
 
 Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
 
