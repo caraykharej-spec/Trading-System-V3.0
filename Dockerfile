@@ -17,12 +17,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRADING_DB_PATH=/var/lib/trading-system/trading.db \
     TRADING_UNIVERSE_PATH=/etc/trading-system/universe.json
 
-RUN groupadd --system --gid 10001 trading && \
+RUN apt-get update && \
+    apt-get upgrade --yes && \
+    rm -rf /var/lib/apt/lists/* && \
+    groupadd --system --gid 10001 trading && \
     useradd --system --uid 10001 --gid trading --home-dir /nonexistent --shell /usr/sbin/nologin trading && \
     mkdir -p /var/lib/trading-system /etc/trading-system && \
     chown -R trading:trading /var/lib/trading-system
 COPY --from=builder /wheels /wheels
-RUN python -m pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+RUN python -m pip install --no-cache-dir /wheels/*.whl && \
+    python -m pip uninstall --yes setuptools wheel && \
+    rm -rf /wheels /root/.cache
 COPY --chown=root:root config/universe.json /etc/trading-system/universe.json
 USER 10001:10001
 EXPOSE 8000
