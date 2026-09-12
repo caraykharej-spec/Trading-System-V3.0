@@ -8,6 +8,8 @@ from enum import Enum
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.gateio import GateIOProvider
+from app.data.providers.gateio_futures import GateIOFuturesProvider
+from app.data.providers.gateio_tradfi import GateIOTradFiProvider
 from app.data.providers.http import ProviderError
 from app.data.providers.yahoo import YahooFinanceProvider
 from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
@@ -37,6 +39,8 @@ class AssetDataResolution:
     provider_price: Decimal | None
     price_deviation_percent: Decimal | None
     reason: str
+    market_data_source: str | None = None
+    price_multiplier: Decimal = Decimal("1")
 
 
 @dataclass(frozen=True)
@@ -88,10 +92,8 @@ class UniverseCoverageReport:
                 )
             )
             if item.provider_symbol is not None:
-                provider = (
-                    "gateio"
-                    if item.source is ResolutionSource.GATEIO
-                    else "yahoo"
+                provider = item.market_data_source or (
+                    "gateio" if item.source is ResolutionSource.GATEIO else "yahoo"
                 )
                 mappings.append(
                     SymbolMapping(
@@ -131,6 +133,28 @@ class _PriceMatch:
     provider_symbol: str
     price: Decimal
     deviation_percent: Decimal
+    provider: str = "gateio"
+    price_multiplier: Decimal = Decimal("1")
+
+
+_TRADFI_SYMBOLS: dict[str, str] = {
+    "AAPL": "AAPL", "AMD": "AMD", "AMZN": "AMZN", "AUD": "AUDUSD",
+    "AVGO": "AVGO", "COIN": "COIN", "CRCL": "CRCL", "EUR": "EURUSD",
+    "GBP": "GBPUSD", "GOOG": "GOOG", "HOOD": "HOOD", "META": "META",
+    "MSFT": "MSFT", "MSTR": "MSTR", "MU": "MU", "NFLX": "NFLX",
+    "NVDA": "NVDA", "PLTR": "PLTR", "TSLA": "TSLA", "UKOIL": "XBRUSD",
+    "USDCAD": "USDCAD", "USDCHF": "USDCHF", "XAG": "XAGUSD", "XAU": "XAUUSD",
+}
+
+_FUTURES_SYMBOLS: dict[str, str] = {
+    "1000PEPE": "PEPE_USDT",
+    "TON": "GRAM_USDT",
+}
+
+_PRICE_MULTIPLIERS: dict[str, Decimal] = {
+    "1000PEPE": Decimal("1000"),
+    "NFLX": Decimal("10"),
+}
 
 
 @dataclass(frozen=True)
@@ -146,6 +170,8 @@ class StormDrivenUniverseResolver:
     storm_universe: StormReferenceUniverseProvider = StormReferenceUniverseProvider()
     gate_discovery: GateIOSpotDiscoveryProvider = GateIOSpotDiscoveryProvider()
     gate_provider: GateIOProvider = GateIOProvider()
+    gate_futures_provider: GateIOFuturesProvider = GateIOFuturesProvider()
+    gate_tradfi_provider: GateIOTradFiProvider = GateIOTradFiProvider()
     yahoo_provider: YahooFinanceProvider = YahooFinanceProvider()
     max_price_deviation_percent: Decimal = Decimal("5")
     max_price_age_seconds: int = 300
@@ -194,6 +220,7 @@ class StormDrivenUniverseResolver:
         *,
         timeframe: str,
         limit: int,
+        minimum_history: int | None = None,
     ) -> list[Candle]:
         if resolution.source is ResolutionSource.NO_DATA or resolution.provider_symbol is None:
             raise ProviderError(f"OHLCV unresolved for {resolution.canonical_symbol}")
@@ -203,18 +230,29 @@ class StormDrivenUniverseResolver:
             limit=limit,
         )
         if resolution.source is ResolutionSource.GATEIO:
-            candles = self.gate_provider.get_candles(request)
+            if resolution.market_data_source == self.gate_futures_provider.name:
+                candles = self.gate_futures_provider.get_candles(request)
+            elif resolution.market_data_source == self.gate_tradfi_provider.name:
+                candles = self.gate_tradfi_provider.get_candles(request)
+            else:
+                candles = self.gate_provider.get_candles(request)
         else:
             candles = self.yahoo_provider.get_candles(request)
+        if minimum_history is not None and len(candles) < minimum_history:
+            raise ProviderError(
+                f"insufficient_history:{resolution.canonical_symbol}:"
+                f"{timeframe}:{len(candles)}<{minimum_history}"
+            )
+        multiplier = resolution.price_multiplier
         return [
             Candle(
                 symbol=resolution.canonical_symbol,
                 timeframe=candle.timeframe,
                 timestamp=candle.timestamp,
-                open=candle.open,
-                high=candle.high,
-                low=candle.low,
-                close=candle.close,
+                open=candle.open * multiplier,
+                high=candle.high * multiplier,
+                low=candle.low * multiplier,
+                close=candle.close * multiplier,
                 volume=candle.volume,
             )
             for candle in candles
@@ -226,6 +264,10 @@ class StormDrivenUniverseResolver:
         gate_by_base: dict[str, list[Instrument]],
         gate_prices: dict[str, LivePrice],
     ) -> AssetDataResolution:
+        preferred_match = self._preferred_gate_match(reference)
+        if preferred_match is not None and self._acceptable(preferred_match):
+            return self._resolved(reference, ResolutionSource.GATEIO, preferred_match)
+
         gate_match = self._closest_gate_match(reference, gate_by_base, gate_prices)
         if gate_match is not None and self._acceptable(gate_match):
             return self._resolved(reference, ResolutionSource.GATEIO, gate_match)
@@ -268,6 +310,37 @@ class StormDrivenUniverseResolver:
             provider_price=None,
             price_deviation_percent=None,
             reason=";".join(reasons),
+            market_data_source=None,
+        )
+
+    def _preferred_gate_match(
+        self, reference: StormReferenceAsset
+    ) -> _PriceMatch | None:
+        base = reference.base_asset.upper()
+        provider: GateIOFuturesProvider | GateIOTradFiProvider
+        if base in _FUTURES_SYMBOLS:
+            symbol = _FUTURES_SYMBOLS[base]
+            provider = self.gate_futures_provider
+        elif base in _TRADFI_SYMBOLS:
+            symbol = _TRADFI_SYMBOLS[base]
+            provider = self.gate_tradfi_provider
+        else:
+            return None
+        multiplier = _PRICE_MULTIPLIERS.get(base, Decimal("1"))
+        try:
+            live = provider.get_live_price(symbol)
+        except ProviderError:
+            return None
+        if live.price <= 0 or not self._fresh(live):
+            return None
+        normalized_price = live.price * multiplier
+        match = self._match(reference.reference_price, symbol, normalized_price)
+        return _PriceMatch(
+            provider_symbol=match.provider_symbol,
+            price=match.price,
+            deviation_percent=match.deviation_percent,
+            provider=provider.name,
+            price_multiplier=multiplier,
         )
 
     def _closest_gate_match(
@@ -320,7 +393,13 @@ class StormDrivenUniverseResolver:
                 continue
             if live.price <= 0 or not self._fresh(live):
                 continue
-            matches.append(self._match(reference.reference_price, symbol, live.price))
+            match = self._match(reference.reference_price, symbol, live.price)
+            matches.append(_PriceMatch(
+                provider_symbol=match.provider_symbol,
+                price=match.price,
+                deviation_percent=match.deviation_percent,
+                provider="yahoo",
+            ))
         return matches
 
     def _static_yahoo_candidates(self, base_asset: str) -> tuple[str, ...]:
@@ -390,4 +469,6 @@ class StormDrivenUniverseResolver:
             provider_price=match.price,
             price_deviation_percent=match.deviation_percent,
             reason=reason,
+            market_data_source=match.provider,
+            price_multiplier=match.price_multiplier,
         )

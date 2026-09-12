@@ -24,7 +24,7 @@ def main() -> None:
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
             candles = resolver.get_candles(
-                resolution, timeframe=timeframe, limit=260
+                resolution, timeframe=timeframe, limit=260, minimum_history=220
             )
             snapshots[timeframe] = analyze_market(symbol, timeframe, candles)
         return (
@@ -42,6 +42,12 @@ def main() -> None:
         "mode": "PAPER_READ_ONLY",
         "active_storm_markets": report.reference_storm,
         "gateio": report.gateio,
+        "gateio_sources": {
+            source: sum(
+                item.market_data_source == source for item in report.assets
+            )
+            for source in ("gateio", "gateio_futures", "gateio_tradfi")
+        },
         "yfinance": report.yfinance,
         "no_data": report.no_data,
         "coverage_percent": str(report.coverage_percent),
@@ -77,6 +83,16 @@ def main() -> None:
             item.base_asset
             for item in report.assets
             if item.source.value == "no_data"
+        ],
+        "normalized_mappings": [
+            {
+                "storm": item.base_asset,
+                "source": item.market_data_source,
+                "provider_symbol": item.provider_symbol,
+                "price_multiplier": str(item.price_multiplier),
+            }
+            for item in report.assets
+            if item.price_multiplier != 1
         ],
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
