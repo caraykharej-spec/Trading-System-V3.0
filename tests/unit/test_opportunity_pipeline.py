@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from app.application.opportunity_pipeline import OpportunityPipeline, RiskContext
 from app.application.strategy_pipeline import StrategyPipeline
+from app.data.providers.http import ProviderError
 from app.context.models import ContextAssessment, EventImportance, NewsImpact
 from app.core.enums import PositionSide, PositionStatus
 from app.core.models import Position
@@ -107,3 +108,19 @@ def test_context_high_event_delays_before_risk():
     assert result.context_rejected == 1
     assert result.risk_rejected == 0
     assert result.qualified == ()
+
+
+def test_one_unavailable_market_does_not_abort_full_scan():
+    def loader(symbol: str):
+        if symbol == "BAD":
+            raise ProviderError("stale candles")
+        return snapshots(symbol)
+
+    result = OpportunityPipeline(
+        StrategyPipeline(loader), lambda symbol: context()
+    ).evaluate(["GOOD", "BAD"])
+    assert result.evaluated == 2
+    unavailable = next(item for item in result.all_evaluations if item.symbol == "BAD")
+    assert unavailable.status == "NO_TRADE"
+    assert unavailable.reasons == ("stale candles",)
+    assert len(result.qualified) == 1
