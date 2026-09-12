@@ -8,11 +8,17 @@ version = "3.0.0.dev2"
 description = "Modular rule-based paper and research trading system"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.116,<1",
+    "uvicorn>=0.35,<1",
     "websocket-client>=1.8,<2",
 ]
 
+[project.scripts]
+trading-api = "interfaces.api.runtime:main"
+
 [project.optional-dependencies]
 dev = [
+    "httpx>=0.28,<1",
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "ruff>=0.6",
