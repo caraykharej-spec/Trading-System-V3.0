@@ -4,21 +4,25 @@ A modular, rule-based trading system designed for local development in PyCharm a
 
 ## Current status
 
-**Phase 41 — Production FastAPI Platform: IMPLEMENTED AND FEATURE-BRANCH CI-VALIDATED**
+**Phase 42 — Professional Dashboard & Android Client: MERGED AND MAIN-CI VALIDATED**
 
-The current API-platform milestone adds a versioned FastAPI/ASGI production adapter above the existing transport-independent `TradingApiService`. It provides Pydantic validation, OpenAPI, fail-closed production API-key/host policy, request IDs, bounded request bodies, process-local rate limiting, structured errors, health/readiness probes, deny-by-default CORS, and lifespan-managed application resources.
+Phase 42 closed at `774c0e9186659439e6267dff93a15199094bb519`:
+378 Python tests passed, 79.62% branch-aware coverage, strict mypy clean in 301
+source files, and Android unit tests/debug APK assembly passed on main.
+The dashboard is served at `/dashboard`; the native client is in `clients/android`.
+Both use the existing API and expose no live execution controls. Signed release,
+device qualification and background scheduling remain deferred as documented.
 
-The active SQLite-backed PAPER application is created and invoked on one serialized application worker thread. This preserves SQLite thread affinity while keeping blocking application/provider work off the ASGI event loop. Horizontal multi-process scaling is deliberately deferred until shared persistence/runtime coordination and distributed/ingress rate limiting exist.
+**Phase 43 — Read-only Venue + Shadow Integration Validation: IMPLEMENTATION IN REVIEW**
 
-Verified Phase 41 core feature-head validation:
+A separate public GET-only validation runner captures closed multi-timeframe
+candles and timestamped Storm prices, then compares deterministic pipeline
+results on the same capture. It has no order executor or trading database.
+Offline CI and external venue evidence are separate gates: unavailable or stale
+public data produces HOLD, never an assumed PASS.
 
-- Python compile gate: **PASS**
-- Ruff lint/import-order gate: **PASS**
-- Strict mypy: **PASS — 0 issues in 300 source files**
-- Full pytest suite: **PASS — 375 tests**
-- Branch-aware coverage: **79.54%** (required threshold: 70%)
-
-The final documentation head, PR head, and merged `main` still have to pass the same global `CI / quality` gate before this phase is closed.
+See `docs/phases/PHASE_43_READ_ONLY_VENUE_SHADOW_INTEGRATION_VALIDATION.md`
+for the Phase 42 closure evidence, run command, scope and Phase 43 closure gates.
 
 Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
 

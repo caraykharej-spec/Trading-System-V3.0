@@ -1,0 +1,32 @@
+name: Read-only Venue Shadow Validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["phase-43-read-only-venue-shadow-validation"]
+    paths:
+      - "app/shadow_validation/**"
+      - "scripts/validation/**"
+      - ".github/workflows/read-only-shadow.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  public-shadow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e .
+      - name: Public read-only capture and shadow replay
+        run: python -m scripts.validation.read_only_shadow --output evidence/phase43.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase43-read-only-shadow-evidence
+          path: evidence/phase43.json
+          if-no-files-found: warn
