@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Trading System V3 — Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/assets/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">TS</div>
+        <div>
+          <strong>Trading System V3</strong>
+          <span>Professional Dashboard</span>
+        </div>
+      </div>
+      <nav id="nav" class="nav" aria-label="Dashboard sections">
+        <button class="nav-item active" data-view="dashboard">Dashboard</button>
+        <button class="nav-item" data-view="markets">Markets</button>
+        <button class="nav-item" data-view="ranking">Ranking</button>
+        <button class="nav-item" data-view="positions">Positions</button>
+        <button class="nav-item" data-view="performance">Performance</button>
+        <button class="nav-item" data-view="risk">Risk</button>
+        <button class="nav-item" data-view="news">News Impact</button>
+        <button class="nav-item" data-view="journal">Journal</button>
+        <button class="nav-item" data-view="system">System / Data Health</button>
+      </nav>
+      <div class="safety-note">
+        <strong>PAPER / SHADOW</strong>
+        <span>No live-execution controls are exposed by this dashboard.</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Read-only operations console</p>
+          <h1 id="view-title">Dashboard</h1>
+        </div>
+        <div class="topbar-actions">
+          <span id="connection-badge" class="badge neutral">Not connected</span>
+          <button id="refresh-all" class="button secondary">Refresh</button>
+        </div>
+      </header>
+
+      <div id="notice" class="notice hidden" role="status"></div>
+
+      <section id="view-dashboard" class="view active">
+        <div id="summary-cards" class="metric-grid"></div>
+        <div class="grid two-col">
+          <article class="panel">
+            <div class="panel-heading"><h2>Top Opportunities</h2><span>Ranking snapshot</span></div>
+            <div id="dashboard-opportunities" class="table-wrap"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><h2>Open Positions</h2><span>Authoritative repository</span></div>
+            <div id="dashboard-positions" class="table-wrap"></div>
+          </article>
+        </div>
+        <article class="panel">
+          <div class="panel-heading"><h2>Universe Coverage</h2><span>Storm → Gate.io → Yahoo → No Data</span></div>
+          <div id="dashboard-coverage"></div>
+        </article>
+      </section>
+
+      <section id="view-markets" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>Market Data Coverage</h2><span>Storm reference universe resolution</span></div>
+          <div id="markets-coverage"></div>
+        </article>
+      </section>
+
+      <section id="view-ranking" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>Ranking</h2><span>Backend-qualified opportunities only</span></div>
+          <div id="ranking-table" class="table-wrap"></div>
+        </article>
+      </section>
+
+      <section id="view-positions" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>Positions</h2><span>PAPER / SHADOW state</span></div>
+          <div id="positions-table" class="table-wrap"></div>
+        </article>
+      </section>
+
+      <section id="view-performance" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>Performance</h2><span>Journal-derived analytics</span></div>
+          <pre id="performance-json" class="json-card"></pre>
+        </article>
+      </section>
+
+      <section id="view-risk" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>Risk & Readiness</h2><span>Deterministic backend evidence</span></div>
+          <p class="muted">The dashboard never calculates or overrides position sizing, leverage, portfolio limits, or execution gates.</p>
+          <pre id="risk-json" class="json-card"></pre>
+        </article>
+      </section>
+
+      <section id="view-news" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>News Impact / Copilot Brief</h2><span>Evidence-only assistant surface</span></div>
+          <pre id="news-json" class="json-card"></pre>
+        </article>
+      </section>
+
+      <section id="view-journal" class="view">
+        <article class="panel">
+          <div class="panel-heading"><h2>Journal Analytics</h2><span>Completed-trade performance</span></div>
+          <pre id="journal-json" class="json-card"></pre>
+        </article>
+      </section>
+
+      <section id="view-system" class="view">
+        <div class="grid two-col">
+          <article class="panel">
+            <div class="panel-heading"><h2>System Health</h2><span>Health + readiness</span></div>
+            <pre id="system-json" class="json-card"></pre>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><h2>Assistant Metrics</h2><span>Content-free telemetry</span></div>
+            <pre id="assistant-metrics-json" class="json-card"></pre>
+          </article>
+        </div>
+        <article class="panel settings-panel">
+          <div class="panel-heading"><h2>Connection</h2><span>Credentials remain in this browser session only</span></div>
+          <label for="api-key">API key</label>
+          <div class="inline-form">
+            <input id="api-key" type="password" autocomplete="off" placeholder="X-API-Key (if required)">
+            <button id="save-key" class="button">Use for this session</button>
+            <button id="clear-key" class="button secondary">Clear</button>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="panel-heading"><h2>Grounded Assistant</h2><span>Read-only query endpoint</span></div>
+          <form id="assistant-form" class="assistant-form">
+            <input id="assistant-query" type="text" maxlength="2000" placeholder="Ask about positions, journal, market change, or what-if analytics">
+            <button class="button" type="submit">Ask</button>
+          </form>
+          <pre id="assistant-response" class="json-card"></pre>
+        </article>
+      </section>
+    </main>
+  </div>
+  <script src="/dashboard/assets/app.js" defer></script>
+</body>
+</html>
