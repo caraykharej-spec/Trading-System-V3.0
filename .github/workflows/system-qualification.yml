@@ -1,0 +1,35 @@
+name: Full System Qualification
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "phase-46*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  failure-injection:
+    name: Qualification / failure injection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Run controlled qualification matrix
+        run: trading-system-qualification --output evidence/phase46-qualification.json
+      - name: Verify dedicated qualification tests
+        run: python -m pytest -q tests/system_qualification
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase46-system-qualification
+          path: evidence/phase46-qualification.json
+          if-no-files-found: error
+          retention-days: 30
