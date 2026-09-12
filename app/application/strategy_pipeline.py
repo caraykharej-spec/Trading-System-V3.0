@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
@@ -40,8 +41,11 @@ class StrategyPipeline:
     before the final Top-N list is presented to a user.
     """
 
-    def __init__(self, snapshot_loader: SnapshotLoader) -> None:
+    def __init__(self, snapshot_loader: SnapshotLoader, *, max_workers: int = 16) -> None:
+        if max_workers < 1:
+            raise ValueError("max_workers must be positive")
         self.snapshot_loader = snapshot_loader
+        self.max_workers = max_workers
 
     @staticmethod
     def _rank(signals: list[StrategySignal]) -> list[StrategySignal]:
@@ -55,24 +59,43 @@ class StrategyPipeline:
         self,
         symbols: Iterable[str],
     ) -> tuple[int, tuple[StrategySignal, ...], tuple[StrategyRejection, ...]]:
-        signals: list[StrategySignal] = []
-        rejections: list[StrategyRejection] = []
-        evaluated = 0
-        for symbol in symbols:
-            evaluated += 1
+        symbol_list = list(symbols)
+        if not symbol_list:
+            return 0, (), ()
+
+        def evaluate_symbol(
+            symbol: str,
+        ) -> StrategySignal | StrategyRejection:
             try:
                 daily, four_hour, one_hour, fifteen = self.snapshot_loader(symbol)
                 signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
             except (ValueError, KeyError, ProviderError) as exc:
                 reason = str(exc) or exc.__class__.__name__
-                rejections.append(StrategyRejection(symbol=symbol, reasons=(reason,)))
-                continue
+                return StrategyRejection(symbol=symbol, reasons=(reason,))
             if signal.state.value == "READY_FOR_RISK_REVIEW":
-                signals.append(signal)
-                continue
+                return signal
             reasons = signal.reasons or (f"strategy state is {signal.state.value}",)
-            rejections.append(StrategyRejection(symbol=symbol, reasons=reasons))
-        return evaluated, tuple(self._rank(signals)), tuple(rejections)
+            return StrategyRejection(symbol=symbol, reasons=reasons)
+
+        worker_count = min(self.max_workers, len(symbol_list))
+        results: tuple[StrategySignal | StrategyRejection, ...]
+        if worker_count == 1:
+            results = (evaluate_symbol(symbol_list[0]),)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=worker_count,
+                thread_name_prefix="signal-market",
+            ) as executor:
+                results = tuple(executor.map(evaluate_symbol, symbol_list))
+
+        signals: list[StrategySignal] = []
+        rejections: list[StrategyRejection] = []
+        for result in results:
+            if isinstance(result, StrategyRejection):
+                rejections.append(result)
+            else:
+                signals.append(result)
+        return len(symbol_list), tuple(self._rank(signals)), tuple(rejections)
 
     def evaluate_all(self, symbols: Iterable[str]) -> tuple[int, tuple[StrategySignal, ...]]:
         evaluated, signals, _ = self.evaluate_all_with_rejections(symbols)
