@@ -25,6 +25,7 @@ from app.deployment_runtime.auth_validation_layer import (
     AuthenticationManager,
     RateLimitFoundation,
 )
+from app.operations_sre.metrics import RequestMetrics
 from interfaces.api.config import FastApiSettings
 from interfaces.api.models import ApiResponse
 from interfaces.api.schemas import AssistantQueryRequest, ErrorEnvelope, HealthSchema
@@ -76,10 +77,12 @@ class PlatformMiddleware(BaseHTTPMiddleware):
         *,
         settings: FastApiSettings,
         limiter: RateLimitFoundation,
+        metrics: RequestMetrics,
     ) -> None:
         super().__init__(app)  # type: ignore[arg-type]
         self._settings = settings
         self._limiter = limiter
+        self._metrics = metrics
 
     def _identity(self, request: Request) -> str:
         api_key = request.headers.get(self._settings.api_key_header)
@@ -95,6 +98,9 @@ class PlatformMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if self._settings.environment == "production":
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self' http: https:; "
@@ -109,6 +115,7 @@ class PlatformMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         request_id = _request_id(request.headers.get(self._settings.request_id_header))
         request.state.request_id = request_id
+        metric_started = self._metrics.begin()
         if request.url.path.startswith(self._settings.api_prefix):
             if request.method in {"POST", "PUT", "PATCH"}:
                 raw_length = request.headers.get("content-length")
@@ -121,21 +128,27 @@ class PlatformMiddleware(BaseHTTPMiddleware):
                             "INVALID_CONTENT_LENGTH",
                             "Content-Length must be an integer",
                         )
-                        return self._apply_headers(response, request_id)
+                        secured = self._apply_headers(response, request_id)
+                        self._metrics.finish(request.method, secured.status_code, metric_started)
+                        return secured
                     if length < 0:
                         response = _error_response(
                             400,
                             "INVALID_CONTENT_LENGTH",
                             "Content-Length must not be negative",
                         )
-                        return self._apply_headers(response, request_id)
+                        secured = self._apply_headers(response, request_id)
+                        self._metrics.finish(request.method, secured.status_code, metric_started)
+                        return secured
                     if length > self._settings.max_body_bytes:
                         response = _error_response(
                             413,
                             "PAYLOAD_TOO_LARGE",
                             "request body exceeds the configured API limit",
                         )
-                        return self._apply_headers(response, request_id)
+                        secured = self._apply_headers(response, request_id)
+                        self._metrics.finish(request.method, secured.status_code, metric_started)
+                        return secured
 
             identity = self._identity(request)
             if not self._limiter.check(identity):
@@ -145,10 +158,18 @@ class PlatformMiddleware(BaseHTTPMiddleware):
                     "request rate limit exceeded",
                 )
                 response.headers["Retry-After"] = str(self._limiter.retry_after(identity))
-                return self._apply_headers(response, request_id)
+                secured = self._apply_headers(response, request_id)
+                self._metrics.finish(request.method, secured.status_code, metric_started)
+                return secured
 
-        downstream_response = await call_next(request)
-        return self._apply_headers(downstream_response, request_id)
+        try:
+            downstream_response = await call_next(request)
+        except Exception:
+            self._metrics.finish(request.method, 500, metric_started)
+            raise
+        secured = self._apply_headers(downstream_response, request_id)
+        self._metrics.finish(request.method, secured.status_code, metric_started)
+        return secured
 
 
 _ERROR_RESPONSES: dict[int | str, dict[str, object]] = {
@@ -243,6 +264,7 @@ def create_fastapi_runtime_app(
         max_requests=effective.rate_limit_requests,
         window_seconds=effective.rate_limit_window_seconds,
     )
+    metrics = RequestMetrics()
     authentication = AuthenticationManager()
     if effective.api_key is not None:
         authentication.register_key(
@@ -292,7 +314,9 @@ def create_fastapi_runtime_app(
         PlatformMiddleware,
         settings=effective,
         limiter=limiter,
+        metrics=metrics,
     )
+    app.state.sre_metrics = metrics
 
     if effective.dashboard_enabled:
         static_dir = dashboard_static_dir()
@@ -361,6 +385,11 @@ def create_fastapi_runtime_app(
     @app.get("/readyz", include_in_schema=False)
     async def readiness_probe(request: Request) -> JSONResponse:
         return await _invoke(request, lambda service: service.readiness())
+
+    if effective.metrics_enabled:
+        @app.get("/metrics", include_in_schema=False, dependencies=[Depends(require_access)])
+        async def metrics_endpoint() -> Response:
+            return Response(metrics.render_prometheus(), media_type="text/plain; version=0.0.4")
 
     @public.get("/health", response_model=HealthSchema, tags=["system"])
     async def health(request: Request) -> JSONResponse:

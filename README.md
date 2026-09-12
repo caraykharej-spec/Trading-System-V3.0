@@ -13,7 +13,7 @@ The dashboard is served at `/dashboard`; the native client is in `clients/androi
 Both use the existing API and expose no live execution controls. Signed release,
 device qualification and background scheduling remain deferred as documented.
 
-**Phase 43 — Read-only Venue + Shadow Integration Validation: IMPLEMENTATION IN REVIEW**
+**Phase 43 — Read-only Venue + Shadow Integration Validation: MERGED AND MAIN-CI VALIDATED**
 
 A separate public GET-only validation runner captures closed multi-timeframe
 candles and timestamped Storm prices, then compares deterministic pipeline
@@ -23,6 +23,15 @@ public data produces HOLD, never an assumed PASS.
 
 See `docs/phases/PHASE_43_READ_ONLY_VENUE_SHADOW_INTEGRATION_VALIDATION.md`
 for the Phase 42 closure evidence, run command, scope and Phase 43 closure gates.
+
+**Phase 44 — Production Infrastructure / Security / SRE: IMPLEMENTATION IN REVIEW**
+
+Phase 44 packages the PAPER/SHADOW API as a hardened single-instance container,
+adds production preflight and authenticated low-cardinality service metrics, and
+defines SLO, alerting, backup/restore and deployment gates. It does not enable
+live execution or claim that a production environment has been commissioned.
+
+See `docs/phases/PHASE_44_PRODUCTION_INFRASTRUCTURE_SECURITY_SRE.md`.
 
 Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
 

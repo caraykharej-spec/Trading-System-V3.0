@@ -61,6 +61,7 @@ class FastApiSettings:
     runtime_cycle_enabled: bool = False
     allowed_hosts: tuple[str, ...] = ("*",)
     cors_origins: tuple[str, ...] = ()
+    metrics_enabled: bool = True
 
     def __post_init__(self) -> None:
         environment = self.environment.strip().lower()
@@ -143,5 +144,8 @@ class FastApiSettings:
             ),
             cors_origins=_parse_csv(
                 source.get("TRADING_API_CORS_ORIGINS"), default=()
+            ),
+            metrics_enabled=_parse_bool(
+                source.get("TRADING_API_METRICS_ENABLED"), default=True
             ),
         )
