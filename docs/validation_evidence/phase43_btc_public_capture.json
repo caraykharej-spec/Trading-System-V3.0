@@ -1,0 +1,80 @@
+{
+  "checks": [
+    {
+      "as_of": "2026-09-12T04:11:25.791000+00:00",
+      "kind": "live_price",
+      "provider": "storm",
+      "status": "PASS",
+      "symbol": "BTC/USDT"
+    },
+    {
+      "count": 260,
+      "fallback_reasons": [],
+      "provider": "gateio",
+      "status": "PASS",
+      "symbol": "BTC/USDT",
+      "timeframe": "1d",
+      "warnings": []
+    },
+    {
+      "count": 260,
+      "fallback_reasons": [],
+      "provider": "gateio",
+      "status": "PASS",
+      "symbol": "BTC/USDT",
+      "timeframe": "4h",
+      "warnings": []
+    },
+    {
+      "count": 260,
+      "fallback_reasons": [],
+      "provider": "gateio",
+      "status": "PASS",
+      "symbol": "BTC/USDT",
+      "timeframe": "1h",
+      "warnings": []
+    },
+    {
+      "count": 260,
+      "fallback_reasons": [],
+      "provider": "gateio",
+      "status": "PASS",
+      "symbol": "BTC/USDT",
+      "timeframe": "15m",
+      "warnings": []
+    },
+    {
+      "kind": "deterministic_replay",
+      "status": "PASS"
+    }
+  ],
+  "context_scope": "EMPTY_NEWS_AND_EVENTS_NOT_LIVE_VALIDATED",
+  "data_digest": "b8a941f24a6c15b8698a9b99bed02a444721a52a3f28e2f84574b5b8adfe18c0",
+  "decision_digest": "ffd7238e747d87b91be4ea9b9b329f7ec5fd733ee9db8caf1414666268896c19",
+  "decisions": {
+    "context_rejected": 0,
+    "evaluated": 1,
+    "portfolio_rejected": 0,
+    "qualified": [],
+    "rejections": [
+      {
+        "outcome": "NO_TRADE",
+        "reasons": [
+          "No aligned HTF direction"
+        ],
+        "stage": "STRATEGY",
+        "symbol": "BTC/USDT"
+      }
+    ],
+    "risk_rejected": 0,
+    "strategy_qualified": 0
+  },
+  "execution_enabled": false,
+  "observed_at": "2026-09-12T04:12:13.034651+00:00",
+  "schema_version": 1,
+  "scope": "READ_ONLY_VENUE_SHADOW_INTEGRATION",
+  "status": "PASS",
+  "symbols": [
+    "BTC/USDT"
+  ]
+}
