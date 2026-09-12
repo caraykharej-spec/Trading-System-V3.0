@@ -11,7 +11,9 @@ const endpoints = {
   readiness: "/ready",
   positions: "/positions",
   opportunities: "/opportunities?limit=10",
+  markets: "/markets/evaluations",
   performance: "/analytics/performance",
+  assetStats: "/analytics/assets",
   coverage: "/market-data/universe-coverage",
   brief: "/assistant/brief",
   metrics: "/assistant/metrics",
@@ -170,6 +172,7 @@ function renderSummary() {
   const health = safeObject(state.payloads.health);
   const positions = state.payloads.positions?.positions || [];
   const opportunities = state.payloads.opportunities?.opportunities || [];
+  const markets = state.payloads.markets?.markets || [];
   const coverage = coveragePayload();
   const readiness = safeObject(state.payloads.readiness?.readiness);
   target.append(
@@ -185,13 +188,16 @@ function renderAll() {
   renderSummary();
   const positions = state.payloads.positions?.positions || [];
   const opportunities = state.payloads.opportunities?.opportunities || [];
+  const markets = state.payloads.markets?.markets || [];
   renderTable("dashboard-opportunities", opportunities);
   renderTable("ranking-table", opportunities);
+  renderTable("all-markets-table", markets);
   renderTable("dashboard-positions", positions);
   renderTable("positions-table", positions);
   renderCoverage("dashboard-coverage");
   renderJson("performance-json", state.payloads.performance || null);
   renderJson("journal-json", state.payloads.performance || null);
+  renderTable("asset-statistics-table", state.payloads.assetStats?.asset_statistics || []);
   renderJson("risk-json", state.payloads.readiness || null);
   renderJson("news-json", state.payloads.brief || null);
   renderJson("assistant-metrics-json", state.payloads.metrics || null);
