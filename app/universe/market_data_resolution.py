@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -10,7 +11,9 @@ from app.data.providers.gateio import GateIOProvider
 from app.data.providers.http import ProviderError
 from app.data.providers.yahoo import YahooFinanceProvider
 from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
+from app.universe.contract_specs import ContractSpec
 from app.universe.instrument import Instrument
+from app.universe.symbol_mapping import SymbolMapping
 from app.universe.storm_discovery import (
     StormReferenceAsset,
     StormReferenceUniverseProvider,
@@ -74,6 +77,54 @@ class UniverseCoverageReport:
             assets=assets,
         )
 
+    def symbol_mappings(self) -> tuple[SymbolMapping, ...]:
+        """Build read-only provider mappings for the resolved live universe."""
+
+        mappings: list[SymbolMapping] = []
+        for item in self.assets:
+            mappings.append(
+                SymbolMapping(
+                    item.canonical_symbol, "storm", item.storm_provider_symbol
+                )
+            )
+            if item.provider_symbol is not None:
+                provider = (
+                    "gateio"
+                    if item.source is ResolutionSource.GATEIO
+                    else "yahoo"
+                )
+                mappings.append(
+                    SymbolMapping(
+                        item.canonical_symbol, provider, item.provider_symbol
+                    )
+                )
+        return tuple(mappings)
+
+    def research_contract_specs(self) -> dict[str, ContractSpec]:
+        """Build conservative PAPER-only specs; these never authorize execution."""
+
+        specs: dict[str, ContractSpec] = {}
+        for item in self.assets:
+            price = item.provider_price or item.storm_reference_price
+            if price >= Decimal("100"):
+                price_tick = Decimal("0.01")
+            elif price >= Decimal("1"):
+                price_tick = Decimal("0.0001")
+            else:
+                price_tick = Decimal("0.00000001")
+            quantity_step = Decimal("0.0001")
+            spec = ContractSpec(
+                symbol=item.canonical_symbol,
+                price_tick=price_tick,
+                quantity_step=quantity_step,
+                min_quantity=quantity_step,
+                min_notional=Decimal("5"),
+                max_leverage=Decimal("1"),
+            )
+            spec.validate()
+            specs[item.canonical_symbol.upper()] = spec
+        return specs
+
 
 @dataclass(frozen=True)
 class _PriceMatch:
@@ -100,12 +151,15 @@ class StormDrivenUniverseResolver:
     max_price_age_seconds: int = 300
     comparable_gate_quotes: tuple[str, ...] = ("USDT", "USDC", "USD")
     yahoo_quote_candidates: tuple[str, ...] = ("USD", "USDT", "USDC")
+    max_workers: int = 16
 
     def __post_init__(self) -> None:
         if self.max_price_deviation_percent <= 0:
             raise ValueError("max_price_deviation_percent must be positive")
         if self.max_price_age_seconds < 1:
             raise ValueError("max_price_age_seconds must be positive")
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be positive")
 
     def resolve(self) -> UniverseCoverageReport:
         references = self.storm_universe.discover()
@@ -120,10 +174,18 @@ class StormDrivenUniverseResolver:
                 continue
             by_base.setdefault(instrument.base_asset.upper(), []).append(instrument)
 
-        resolutions = tuple(
-            self._resolve_asset(reference, by_base, gate_prices)
-            for reference in references
-        )
+        with ThreadPoolExecutor(
+            max_workers=min(self.max_workers, max(1, len(references))),
+            thread_name_prefix="universe-resolution",
+        ) as executor:
+            resolutions = tuple(
+                executor.map(
+                    lambda reference: self._resolve_asset(
+                        reference, by_base, gate_prices
+                    ),
+                    references,
+                )
+            )
         return UniverseCoverageReport.from_assets(resolutions)
 
     def get_candles(
@@ -170,7 +232,18 @@ class StormDrivenUniverseResolver:
 
         yahoo_match = self._closest_yahoo_match(reference)
         if yahoo_match is not None and self._acceptable(yahoo_match):
-            return self._resolved(reference, ResolutionSource.YFINANCE, yahoo_match)
+            gate_reason = (
+                "gateio_not_found"
+                if gate_match is None
+                else "gateio_price_mismatch:"
+                f"{gate_match.deviation_percent.quantize(Decimal('0.01'))}%"
+            )
+            return self._resolved(
+                reference,
+                ResolutionSource.YFINANCE,
+                yahoo_match,
+                reason=f"{gate_reason};yfinance_closest_price_within_tolerance",
+            )
 
         reasons: list[str] = []
         if gate_match is None:
@@ -304,6 +377,8 @@ class StormDrivenUniverseResolver:
         reference: StormReferenceAsset,
         source: ResolutionSource,
         match: _PriceMatch,
+        *,
+        reason: str = "closest_price_within_tolerance",
     ) -> AssetDataResolution:
         return AssetDataResolution(
             base_asset=reference.base_asset,
@@ -314,5 +389,5 @@ class StormDrivenUniverseResolver:
             provider_symbol=match.provider_symbol,
             provider_price=match.price,
             price_deviation_percent=match.deviation_percent,
-            reason="closest_price_within_tolerance",
+            reason=reason,
         )
