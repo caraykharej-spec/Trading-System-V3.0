@@ -17,6 +17,7 @@ dependencies = [
 trading-api = "interfaces.api.runtime:main"
 trading-production-preflight = "app.operations_sre.preflight:main"
 trading-shadow-operation = "app.shadow_operation.runtime:main"
+trading-system-qualification = "app.system_qualification.runtime:main"
 
 [project.optional-dependencies]
 dev = [

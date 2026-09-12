@@ -33,7 +33,7 @@ live execution or claim that a production environment has been commissioned.
 
 See `docs/phases/PHASE_44_PRODUCTION_INFRASTRUCTURE_SECURITY_SRE.md`.
 
-**Phase 45 — Persistent Shadow Operation & Evidence Accumulation: IMPLEMENTATION IN REVIEW**
+**Phase 45 — Persistent Shadow Operation & Evidence Accumulation: MERGED AND MAIN-CI VALIDATED**
 
 Phase 45 adds a fixed-delay read-only shadow worker, an exclusive expiring lease,
 an append-only SQLite evidence ledger with a tamper-evident hash chain, integrity
@@ -42,6 +42,16 @@ execution or the trading database. Real-host soak and backup/restore evidence
 remain separate operational gates.
 
 See `docs/phases/PHASE_45_PERSISTENT_SHADOW_OPERATION_EVIDENCE_ACCUMULATION.md`.
+
+**Phase 46 — Full System Qualification & Failure Injection: IMPLEMENTATION IN REVIEW**
+
+Phase 46 adds a controlled nine-case qualification matrix across market-data
+failover/fail-closed behavior, atomic rollback, live activation and circuit
+blocking, evidence tamper detection, backup restore integrity and production
+configuration security. It emits a retained machine-readable CI artifact and
+never calls an execution-capable venue.
+
+See `docs/phases/PHASE_46_FULL_SYSTEM_QUALIFICATION_FAILURE_INJECTION.md`.
 
 Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
 
