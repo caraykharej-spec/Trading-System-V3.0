@@ -28,6 +28,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*", "interfaces*"]
 
+[tool.setuptools.package-data]
+"interfaces.dashboard" = ["static/*.html", "static/*.css", "static/*.js"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

@@ -13,7 +13,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -28,6 +29,7 @@ from interfaces.api.config import FastApiSettings
 from interfaces.api.models import ApiResponse
 from interfaces.api.schemas import AssistantQueryRequest, ErrorEnvelope, HealthSchema
 from interfaces.api.service import TradingApiService
+from interfaces.dashboard import dashboard_static_dir
 
 
 RuntimeFactory = Callable[[], "ApiRuntime"]
@@ -93,6 +95,11 @@ class PlatformMiddleware(BaseHTTPMiddleware):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "img-src 'self' data:; connect-src 'self' http: https:; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        )
         return response
 
     async def dispatch(
@@ -286,6 +293,19 @@ def create_fastapi_runtime_app(
         settings=effective,
         limiter=limiter,
     )
+
+    if effective.dashboard_enabled:
+        static_dir = dashboard_static_dir()
+        app.mount(
+            "/dashboard/assets",
+            StaticFiles(directory=str(static_dir)),
+            name="dashboard-assets",
+        )
+
+        @app.get("/dashboard", include_in_schema=False)
+        @app.get("/dashboard/", include_in_schema=False)
+        async def dashboard() -> FileResponse:
+            return FileResponse(static_dir / "index.html")
 
     def require_access(request: Request) -> None:
         if not effective.require_api_key:

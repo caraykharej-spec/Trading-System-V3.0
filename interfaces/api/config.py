@@ -50,6 +50,7 @@ class FastApiSettings:
     api_version: str = "1.0.0"
     api_prefix: str = "/api/v1"
     docs_enabled: bool = True
+    dashboard_enabled: bool = True
     require_api_key: bool = False
     api_key: str | None = field(default=None, repr=False)
     api_key_header: str = "X-API-Key"
@@ -104,6 +105,9 @@ class FastApiSettings:
         docs_enabled = _parse_bool(
             source.get("TRADING_API_DOCS_ENABLED"), default=not production
         )
+        dashboard_enabled = _parse_bool(
+            source.get("TRADING_API_DASHBOARD_ENABLED"), default=True
+        )
         default_hosts = () if production else ("*",)
         return cls(
             environment=environment,
@@ -111,6 +115,7 @@ class FastApiSettings:
             api_version=source.get("TRADING_API_VERSION", "1.0.0"),
             api_prefix=source.get("TRADING_API_PREFIX", "/api/v1"),
             docs_enabled=docs_enabled,
+            dashboard_enabled=dashboard_enabled,
             require_api_key=require_key,
             api_key=source.get("TRADING_API_KEY"),
             api_key_header=source.get("TRADING_API_KEY_HEADER", "X-API-Key"),
