@@ -46,7 +46,9 @@ kotlin {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    // Compose 1.12 requires compileSdk 37 / AGP 9.x. Phase 42 deliberately
+    // stays on the stable API 36 / AGP 8.13.2 line, so use the June BOM.
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
