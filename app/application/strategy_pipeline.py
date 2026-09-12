@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from app.data.providers.http import ProviderError
 from app.market.analysis import MarketSnapshot
 from app.strategy.strategy_engine import StrategySignal, evaluate_strategy
 
@@ -62,7 +63,7 @@ class StrategyPipeline:
             try:
                 daily, four_hour, one_hour, fifteen = self.snapshot_loader(symbol)
                 signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
-            except (ValueError, KeyError) as exc:
+            except (ValueError, KeyError, ProviderError) as exc:
                 reason = str(exc) or exc.__class__.__name__
                 rejections.append(StrategyRejection(symbol=symbol, reasons=(reason,)))
                 continue
