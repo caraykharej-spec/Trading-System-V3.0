@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from time import monotonic
 from typing import Callable
 
 from app.analytics.service import AnalyticsService
@@ -11,6 +12,7 @@ from app.analytics.asset_history import SQLiteMarketEvaluationRepository
 from app.application.opportunity_pipeline import (
     GatedOpportunity,
     OpportunityPipeline,
+    OpportunityPipelineResult,
     RiskContext,
 )
 from app.application.runtime_cycle import RuntimeCycleOrchestrator
@@ -414,11 +416,21 @@ def build_paper_application(
         pending_repository=pending_repository,
     )
 
+    evaluation_cache: tuple[float, OpportunityPipelineResult] | None = None
+
+    def current_evaluation() -> OpportunityPipelineResult:
+        nonlocal evaluation_cache
+        now = monotonic()
+        if evaluation_cache is None or now - evaluation_cache[0] > 30:
+            result = opportunity_pipeline.evaluate(symbols, top_n=10)
+            evaluation_cache = (monotonic(), result)
+        return evaluation_cache[1]
+
     def opportunities() -> list[GatedOpportunity]:
-        return list(opportunity_pipeline.evaluate(symbols, top_n=10).qualified)
+        return list(current_evaluation().qualified)
 
     def all_market_evaluations() -> list[object]:
-        return list(opportunity_pipeline.evaluate(symbols, top_n=10).all_evaluations)
+        return list(current_evaluation().all_evaluations)
 
     copilot = CopilotExplainer()
 
