@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths: ["Dockerfile", ".dockerignore", "deploy/**", "pyproject.toml", "app/**", "interfaces/**"]
   push:
-    branches: ["phase-44*"]
+    branches: [main, "phase-44*"]
 
 permissions:
   contents: read
