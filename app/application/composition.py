@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.analytics.service import AnalyticsService
+from app.analytics.asset_history import SQLiteMarketEvaluationRepository
 from app.application.opportunity_pipeline import (
     GatedOpportunity,
     OpportunityPipeline,
@@ -274,6 +275,7 @@ def build_paper_application(
     fill_writer = SQLiteFillRepository(connection, auto_commit=False)
     pending_repository = SQLitePendingOrderRepository(connection)
     journal_repository = SQLiteJournalRepository(connection)
+    market_evaluation_repository = SQLiteMarketEvaluationRepository(connection)
     journal_writer = SQLiteJournalRepository(connection, auto_commit=False)
     ledger_writer = SQLiteAccountLedgerRepository(connection, auto_commit=False)
     audit_repository = SQLiteCycleAuditRepository(connection)
@@ -398,6 +400,7 @@ def build_paper_application(
         selected_orders_provider=selection_queue.drain,
         account_repository=account_repository,
         settlement_service=settlement,
+        market_evaluation_repository=market_evaluation_repository,
     )
 
     analytics = AnalyticsService(journal_repository)
@@ -413,6 +416,9 @@ def build_paper_application(
 
     def opportunities() -> list[GatedOpportunity]:
         return list(opportunity_pipeline.evaluate(symbols, top_n=10).qualified)
+
+    def all_market_evaluations() -> list[object]:
+        return list(opportunity_pipeline.evaluate(symbols, top_n=10).all_evaluations)
 
     copilot = CopilotExplainer()
 
@@ -462,6 +468,10 @@ def build_paper_application(
         ),
         assistant_metrics_provider=assistant_telemetry.snapshot,
         universe_coverage_provider=market_data_universe_resolver.resolve,
+        market_evaluations_provider=all_market_evaluations,
+        asset_statistics_provider=lambda: market_evaluation_repository.statistics(
+            journal_repository
+        ),
     )
 
     return PaperApplication(
