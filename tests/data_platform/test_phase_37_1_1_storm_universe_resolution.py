@@ -73,6 +73,27 @@ class StormHttpClient:
                     },
                     "amm": {"indexPrice": "150000000000"},
                 },
+                {
+                    "config": {
+                        "ticker": "CLOSED/USDT",
+                        "baseAsset": "CLOSED",
+                        "type": "base",
+                        "settlementToken": "USDT",
+                    },
+                    "settings": {"status": "active", "isCloseOnly": True},
+                    "amm": {"indexPrice": "1000000000"},
+                },
+                {
+                    "config": {
+                        "ticker": "HIDDEN/USDT",
+                        "baseAsset": "HIDDEN",
+                        "type": "base",
+                        "settlementToken": "USDT",
+                        "isHidden": True,
+                    },
+                    "settings": {"status": "active"},
+                    "amm": {"indexPrice": "1000000000"},
+                },
             ]
         }
 
@@ -236,3 +257,23 @@ def test_api_report_uses_requested_storm_gate_yfinance_no_data_counts() -> None:
     assert coverage["gateio"] == 1
     assert coverage["yfinance"] == 1
     assert coverage["no_data"] == 1
+
+
+def test_live_report_builds_read_only_mappings_and_conservative_specs() -> None:
+    report = _resolver().resolve()
+    mappings = report.symbol_mappings()
+    specs = report.research_contract_specs()
+
+    assert any(
+        item.canonical == "BTC/USDT"
+        and item.provider == "gateio"
+        and item.provider_symbol == "BTC_USDC"
+        for item in mappings
+    )
+    assert any(
+        item.canonical == "ETH/USDT"
+        and item.provider == "yahoo"
+        and item.provider_symbol == "ETH-USD"
+        for item in mappings
+    )
+    assert specs["BTC/USDT"].max_leverage == Decimal("1")
