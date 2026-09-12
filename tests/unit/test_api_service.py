@@ -40,6 +40,27 @@ def test_opportunity_limit_is_validated() -> None:
     assert service.opportunities(2).body == {"opportunities": [1, 2]}
 
 
+def test_all_market_evaluations_are_exposed_separately_from_top_ten() -> None:
+    service = TradingApiService(
+        market_evaluations_provider=lambda: [
+            {"symbol": "BTC/USDT", "rank": 1, "is_top_10": True},
+            {"symbol": "ETH/USDT", "rank": 11, "is_top_10": False},
+        ]
+    )
+    response = service.market_evaluations()
+    assert response.status_code == 200
+    assert len(response.body["markets"]) == 2
+    assert response.body["markets"][1]["symbol"] == "ETH/USDT"
+
+
+def test_asset_statistics_require_explicit_read_only_provider() -> None:
+    assert TradingApiService().asset_statistics().status_code == 409
+    service = TradingApiService(
+        asset_statistics_provider=lambda: [{"symbol": "BTC/USDT", "top_10_count": 4}]
+    )
+    assert service.asset_statistics().body["asset_statistics"][0]["top_10_count"] == 4
+
+
 def test_performance_requires_explicit_provider() -> None:
     response = TradingApiService().performance()
     assert response.status_code == 409
