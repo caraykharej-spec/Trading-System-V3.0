@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 trading-api = "interfaces.api.runtime:main"
+trading-production-preflight = "app.operations_sre.preflight:main"
 
 [project.optional-dependencies]
 dev = [
