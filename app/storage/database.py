@@ -108,6 +108,19 @@ CREATE TABLE IF NOT EXISTS trade_journal (
     decision_snapshot TEXT
 );
 
+CREATE TABLE IF NOT EXISTS market_evaluation_history (
+    cycle_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    evaluated_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    gate_stage TEXT NOT NULL,
+    rank INTEGER,
+    is_top_10 INTEGER NOT NULL,
+    score TEXT,
+    confidence TEXT,
+    PRIMARY KEY (cycle_id, symbol)
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_fills_order_id ON fills(order_id);
 CREATE INDEX IF NOT EXISTS idx_fills_filled_at ON fills(filled_at);
@@ -115,6 +128,8 @@ CREATE INDEX IF NOT EXISTS idx_pending_orders_status ON pending_orders(status);
 CREATE INDEX IF NOT EXISTS idx_account_ledger_created_at ON account_ledger(created_at);
 CREATE INDEX IF NOT EXISTS idx_trade_journal_closed_at ON trade_journal(closed_at);
 CREATE INDEX IF NOT EXISTS idx_trade_journal_symbol ON trade_journal(symbol);
+CREATE INDEX IF NOT EXISTS idx_market_evaluation_symbol
+ON market_evaluation_history(symbol, evaluated_at);
 """
 
 
