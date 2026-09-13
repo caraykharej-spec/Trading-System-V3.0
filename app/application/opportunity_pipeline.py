@@ -278,7 +278,7 @@ class OpportunityPipeline:
                 "COMPLETE",
                 (),
                 rank=rank,
-                is_top_10=rank <= top_n,
+                is_top_10=rank <= 10,
                 context=contexts.get(signal.symbol),
             )
         return OpportunityPipelineResult(
