@@ -69,6 +69,21 @@ def test_incremental_market_state_matches_reference_snapshots() -> None:
             assert actual == expected
 
 
+def test_swing_history_snapshot_is_immutable_after_future_appends() -> None:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    candles = _series("15m", 160, start)
+    state = IncrementalMarketState("BTC/USDT", "15m")
+    saved = None
+
+    for index, candle in enumerate(candles, start=1):
+        current = state.push(candle)
+        if index == 80:
+            saved = current
+
+    assert saved is not None
+    assert saved == analyze_market("BTC/USDT", "15m", candles[:80])
+
+
 def test_incremental_cursor_excludes_incomplete_future_candles() -> None:
     decision_time = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
     base: dict[str, list[Candle]] = {}
