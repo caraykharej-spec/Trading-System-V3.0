@@ -41,13 +41,9 @@ def sample_pnl_path(
     if mode is SamplingMode.WORST_FIRST:
         return tuple(sorted(values))
     if mode is SamplingMode.LOSS_CLUSTER:
-        return tuple(
-            sorted(values, key=lambda value: (value >= 0, value))
-        )
+        return tuple(sorted(values, key=lambda value: (value >= 0, value)))
     if mode is SamplingMode.WIN_CLUSTER:
-        return tuple(
-            sorted(values, key=lambda value: (value < 0, -value))
-        )
+        return tuple(sorted(values, key=lambda value: (value < 0, -value)))
     if mode is SamplingMode.IID_BOOTSTRAP:
         return tuple(values[rng.randrange(len(values))] for _ in values)
 
@@ -64,8 +60,10 @@ def maximum_drawdown_percent(
     *,
     initial_equity: Decimal,
 ) -> Decimal:
-    if initial_equity <= 0 or not initial_equity.is_finite():
+    if not initial_equity.is_finite() or initial_equity <= 0:
         raise ValueError("initial_equity must be finite and positive")
+    if any(not value.is_finite() for value in pnl):
+        raise ValueError("PnL values must be finite")
     equity = initial_equity
     peak = initial_equity
     drawdown = Decimal("0")
