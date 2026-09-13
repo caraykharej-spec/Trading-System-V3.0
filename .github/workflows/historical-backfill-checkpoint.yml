@@ -1,0 +1,49 @@
+name: Historical Backfill Checkpoint
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/data/providers/gateio.py"
+      - "app/data/historical_backfill.py"
+      - "scripts/backtest/backfill_historical_dataset.py"
+      - "tests/data_platform/test_historical_backfill.py"
+      - "docs/backtest/HISTORICAL_BACKFILL.md"
+      - ".github/workflows/historical-backfill-checkpoint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  historical-backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Historical backfill regression tests
+        run: python -m pytest -q tests/data_platform/test_historical_backfill.py
+      - name: Live Gate.io pagination smoke
+        run: |
+          python scripts/backtest/backfill_historical_dataset.py \
+            --symbol BTC/USDT \
+            --start 2026-08-20T00:00:00Z \
+            --end 2026-09-02T00:00:00Z \
+            --dataset-version 1.0.0 \
+            --chunk-points 900 \
+            --max-retries 3 \
+            --retry-backoff-seconds 1 \
+            --git-revision "$GITHUB_SHA" \
+            --output-dir artifacts/backfill/btc-usdt-smoke
+      - name: Upload locked smoke dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-usdt-backfill-smoke-${{ github.sha }}
+          path: artifacts/backfill/btc-usdt-smoke
+          if-no-files-found: error
+          retention-days: 30
