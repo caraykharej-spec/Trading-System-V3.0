@@ -91,7 +91,7 @@ def inject_relative_noise(
     if (
         not maximum_absolute_percent.is_finite()
         or maximum_absolute_percent < 0
-        or maximum_absolute_percent >= 100
+        or maximum_absolute_percent >= Decimal("100")
         or seed < 0
     ):
         raise ValueError("noise parameters are invalid")
