@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Callable, Iterable
 
 from app.data.providers.http import ProviderError
@@ -19,6 +20,9 @@ class Opportunity:
 class StrategyRejection:
     symbol: str
     reasons: tuple[str, ...]
+    score: Decimal | None = None
+    confidence: Decimal | None = None
+    state: str = "DATA_ERROR"
 
 
 @dataclass(frozen=True)
@@ -68,14 +72,28 @@ class StrategyPipeline:
         ) -> StrategySignal | StrategyRejection:
             try:
                 daily, four_hour, one_hour, fifteen = self.snapshot_loader(symbol)
-                signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
             except (ValueError, KeyError, ProviderError) as exc:
                 reason = str(exc) or exc.__class__.__name__
                 return StrategyRejection(symbol=symbol, reasons=(reason,))
+            try:
+                signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
+            except ValueError as exc:
+                reason = str(exc) or exc.__class__.__name__
+                return StrategyRejection(
+                    symbol=symbol,
+                    reasons=(reason,),
+                    state="NO_TRADE",
+                )
             if signal.state.value == "READY_FOR_RISK_REVIEW":
                 return signal
             reasons = signal.reasons or (f"strategy state is {signal.state.value}",)
-            return StrategyRejection(symbol=symbol, reasons=reasons)
+            return StrategyRejection(
+                symbol=symbol,
+                reasons=reasons,
+                score=signal.score,
+                confidence=signal.confidence,
+                state=signal.state.value,
+            )
 
         worker_count = min(self.max_workers, len(symbol_list))
         results: tuple[StrategySignal | StrategyRejection, ...]

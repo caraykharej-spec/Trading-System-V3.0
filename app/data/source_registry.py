@@ -17,7 +17,7 @@ class SourceRoute:
     symbol: str
     price_multiplier: Decimal = Decimal("1")
     requires_volume: bool = True
-    max_latency_seconds: Decimal = Decimal("12")
+    max_latency_seconds: Decimal = Decimal("20")
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ class SourceMappingRegistry:
                     price_multiplier=Decimal(str(route.get("price_multiplier", "1"))),
                     requires_volume=bool(route.get("requires_volume", True)),
                     max_latency_seconds=Decimal(
-                        str(route.get("max_latency_seconds", "12"))
+                        str(route.get("max_latency_seconds", "20"))
                     ),
                 )
                 for route in raw["routes"]
