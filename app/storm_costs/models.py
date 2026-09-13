@@ -47,6 +47,12 @@ class TonFeeEvidence:
         values = (self.estimated_ton, self.reserved_ton, self.refunded_ton, self.settled_ton)
         if any(value is not None and value < 0 for value in values):
             raise ValueError("TON fee values cannot be negative")
+        if (
+            self.reserved_ton is not None
+            and self.refunded_ton is not None
+            and self.refunded_ton > self.reserved_ton
+        ):
+            raise ValueError("refunded TON cannot exceed reserved TON")
 
     @property
     def effective_ton(self) -> Decimal | None:
