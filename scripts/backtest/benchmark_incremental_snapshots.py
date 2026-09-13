@@ -11,6 +11,7 @@ from app.backtest.engine import BacktestEngine
 from app.data.market_data import Candle
 
 _MINUTES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+_MAX_DOUBLING_GROWTH_RATIO = 3.0
 
 
 class ReferenceBacktestEngine(BacktestEngine):
@@ -42,6 +43,13 @@ def _series(timeframe: str, count: int, end: datetime) -> list[Candle]:
             )
         )
     return rows
+
+
+def _dataset(count: int, end: datetime) -> dict[str, list[Candle]]:
+    return {
+        timeframe: _series(timeframe, count, end)
+        for timeframe in _MINUTES
+    }
 
 
 def _signature(result):  # type: ignore[no-untyped-def]
@@ -80,6 +88,13 @@ def _signature(result):  # type: ignore[no-untyped-def]
     )
 
 
+def _time_incremental(count: int, end: datetime) -> tuple[float, object]:
+    candles = _dataset(count, end)
+    started = perf_counter()
+    result = BacktestEngine().run("BTC/USDT", candles)
+    return perf_counter() - started, result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bars", type=int, default=400)
@@ -89,10 +104,7 @@ def main() -> int:
         raise ValueError("bars must be at least 220 so EMA200 is exercised")
 
     end = datetime(2026, 9, 1, tzinfo=timezone.utc)
-    candles = {
-        timeframe: _series(timeframe, args.bars, end)
-        for timeframe in _MINUTES
-    }
+    candles = _dataset(args.bars, end)
 
     reference_started = perf_counter()
     reference = ReferenceBacktestEngine().run("BTC/USDT", candles)
@@ -111,6 +123,26 @@ def main() -> int:
         if incremental_seconds > 0
         else None
     )
+
+    scaling: list[dict[str, float | int]] = [
+        {"bars": args.bars, "seconds": incremental_seconds}
+    ]
+    previous_seconds = incremental_seconds
+    growth_ratios: list[float] = []
+    for multiplier in (2, 4):
+        bars = args.bars * multiplier
+        elapsed, _ = _time_incremental(bars, end)
+        ratio = elapsed / previous_seconds if previous_seconds > 0 else float("inf")
+        scaling.append({"bars": bars, "seconds": elapsed, "growth_from_previous": ratio})
+        growth_ratios.append(ratio)
+        previous_seconds = elapsed
+
+    scaling_ok = all(ratio <= _MAX_DOUBLING_GROWTH_RATIO for ratio in growth_ratios)
+    if not scaling_ok:
+        raise RuntimeError(
+            "incremental runtime growth exceeded the 3x-per-doubling linearity guard"
+        )
+
     report = {
         "symbol": "BTC/USDT",
         "bars_per_timeframe": args.bars,
@@ -118,6 +150,10 @@ def main() -> int:
         "incremental_seconds": incremental_seconds,
         "speedup_ratio": speedup,
         "equivalent": equivalent,
+        "scaling": scaling,
+        "max_doubling_growth_ratio": max(growth_ratios),
+        "scaling_guard": _MAX_DOUBLING_GROWTH_RATIO,
+        "scaling_ok": scaling_ok,
         "trade_count": len(incremental.trades),
         "rejected_signals": incremental.rejected_signals,
     }
@@ -131,6 +167,9 @@ def main() -> int:
     print(f"reference_seconds={reference_seconds:.6f}")
     print(f"incremental_seconds={incremental_seconds:.6f}")
     print(f"speedup_ratio={speedup}")
+    for item in scaling:
+        print(f"scaling={item}")
+    print(f"scaling_ok={scaling_ok}")
     print(f"output={args.output}")
     return 0
 
