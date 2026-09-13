@@ -70,11 +70,10 @@ class StormCostService:
         return tuple(parse_market_cost_snapshot(item) for item in self.provider.list_market_records())
 
     def snapshot_for(self, symbol: str) -> StormMarketCostSnapshot:
-        wanted = StormProvider._normalize_symbol(symbol)
-        for item in self.snapshots():
-            if StormProvider._normalize_symbol(item.symbol) == wanted:
-                return item
-        raise ProviderError(f"Storm cost snapshot not found: {symbol}")
+        record = StormProvider._find_market(self.provider.list_market_records(), symbol)
+        if record is None:
+            raise ProviderError(f"Storm cost snapshot not found: {symbol}")
+        return parse_market_cost_snapshot(record)
 
     @staticmethod
     def protocol_fee(snapshot: StormMarketCostSnapshot, notional: Decimal) -> Decimal:
@@ -108,6 +107,12 @@ class StormCostService:
 
     @staticmethod
     def require_complete(snapshot: StormMarketCostSnapshot, fields: Iterable[str]) -> None:
-        unknown = [name for name in fields if getattr(snapshot, name).value is None]
+        unknown: list[str] = []
+        for name in fields:
+            if not hasattr(snapshot, name):
+                raise ProviderError(f"Unsupported Storm cost field: {name}")
+            value = getattr(snapshot, name)
+            if value is None or (isinstance(value, CostValue) and value.value is None):
+                unknown.append(name)
         if unknown:
             raise ProviderError("UNKNOWN Storm cost fields: " + ", ".join(sorted(unknown)))
