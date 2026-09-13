@@ -8,6 +8,7 @@ from typing import ClassVar
 from app.core.enums import PositionSide
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.provider_router import ProviderRouter
+from app.data.source_policy import build_market_data_routers
 from app.data.providers.http import ProviderError
 from app.execution.atomic_execution import AtomicExecutionService
 from app.execution.models import OrderRequest, OrderResult, OrderStatus, OrderType
@@ -35,11 +36,20 @@ NOW = datetime(2026, 9, 12, 12, tzinfo=timezone.utc)
 class PriceProvider:
     requires_credentials: ClassVar[bool] = False
 
-    def __init__(self, name: str, *, fail: bool = False, stale: bool = False) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        fail: bool = False,
+        stale: bool = False,
+        candle_fail: bool = False,
+    ) -> None:
         self.name = name
         self.fail = fail
         self.stale = stale
+        self.candle_fail = candle_fail
         self.calls = 0
+        self.candle_calls = 0
 
     def get_live_price(self, symbol: str) -> LivePrice:
         self.calls += 1
@@ -49,8 +59,21 @@ class PriceProvider:
         return LivePrice(symbol, Decimal("100"), observed, self.name)
 
     def get_candles(self, request: MarketDataRequest) -> list[Candle]:
-        del request
-        raise NotImplementedError
+        self.candle_calls += 1
+        if self.candle_fail:
+            raise ProviderError("injected provider outage")
+        return [
+            Candle(
+                request.symbol,
+                request.timeframe or "1h",
+                NOW,
+                Decimal("99"),
+                Decimal("101"),
+                Decimal("98"),
+                Decimal("100"),
+                Decimal("10"),
+            )
+        ]
 
 
 class CountingConnector(ExchangeProductionConnector):
@@ -111,32 +134,52 @@ def active_request(*, explicit: bool) -> LiveActivationRequest:
     )
 
 
-def primary_provider_outage_falls_back() -> ScenarioObservation:
-    primary = PriceProvider("primary", fail=True)
-    fallback = PriceProvider("fallback")
-    price = ProviderRouter((primary, fallback), retry_attempts=1).get_live_price(
-        "BTC/USDT", now=NOW
+def primary_ohlcv_provider_outage_falls_back() -> ScenarioObservation:
+    storm = PriceProvider("storm")
+    gateio = PriceProvider("gateio", candle_fail=True)
+    yahoo = PriceProvider("yahoo")
+    _, candle_router = build_market_data_routers((storm, gateio, yahoo))
+    candles = candle_router.get_candles(
+        MarketDataRequest("BTC/USDT", "1h", 1),
+        max_age_seconds=3600,
+        now=NOW,
     )
-    passed = price.provider == "fallback" and primary.calls == fallback.calls == 1
+    passed = (
+        len(candles) == 1
+        and gateio.candle_calls == 2
+        and yahoo.candle_calls == 1
+        and storm.candle_calls == 0
+    )
     return ScenarioObservation(
-        passed, "fallback provides validated price", price.provider,
-        ("provider_order", "retry_bound", "freshness_validation"),
+        passed,
+        "production OHLCV policy falls back from Gate.io to Yahoo",
+        (
+            f"candles={len(candles)},gateio_calls={gateio.candle_calls},"
+            f"yahoo_calls={yahoo.candle_calls},storm_calls={storm.candle_calls}"
+        ),
+        ("source_policy", "provider_order", "retry_bound", "ohlcv_validation"),
     )
 
 
-def all_providers_out_fail_closed() -> ScenarioObservation:
-    router = ProviderRouter(
-        (PriceProvider("one", fail=True), PriceProvider("two", fail=True)),
-        retry_attempts=1,
-    )
+def live_provider_outage_fails_closed() -> ScenarioObservation:
+    storm = PriceProvider("storm", fail=True)
+    gateio = PriceProvider("gateio")
+    yahoo = PriceProvider("yahoo")
+    live_router, _ = build_market_data_routers((storm, gateio, yahoo))
     try:
-        router.get_live_price("BTC/USDT", now=NOW)
+        live_router.get_live_price("BTC/USDT", now=NOW)
     except ProviderError:
+        passed = storm.calls == 2 and gateio.calls == yahoo.calls == 0
         return ScenarioObservation(
-            True, "no synthetic price is returned", "ProviderError",
-            ("fail_closed", "no_default_price"),
+            passed,
+            "Storm outage returns no live price and does not call OHLCV providers",
+            (
+                f"storm_calls={storm.calls},gateio_calls={gateio.calls},"
+                f"yahoo_calls={yahoo.calls}"
+            ),
+            ("source_policy", "fail_closed", "no_cross_role_fallback"),
         )
-    return ScenarioObservation(False, "ProviderError", "unexpected price")
+    return ScenarioObservation(False, "ProviderError", "unexpected live price")
 
 
 def stale_data_is_rejected() -> ScenarioObservation:
@@ -257,8 +300,14 @@ def production_config_fails_closed() -> ScenarioObservation:
 
 def default_cases() -> tuple[QualificationCase, ...]:
     return (
-        QualificationCase("DATA-PRIMARY-OUTAGE", "market_data", True, primary_provider_outage_falls_back),
-        QualificationCase("DATA-TOTAL-OUTAGE", "market_data", True, all_providers_out_fail_closed),
+        QualificationCase(
+            "DATA-OHLCV-PRIMARY-OUTAGE", "market_data", True,
+            primary_ohlcv_provider_outage_falls_back,
+        ),
+        QualificationCase(
+            "DATA-LIVE-OUTAGE", "market_data", True,
+            live_provider_outage_fails_closed,
+        ),
         QualificationCase("DATA-STALE", "market_data", True, stale_data_is_rejected),
         QualificationCase("EXEC-PERSISTENCE-ROLLBACK", "atomicity", True, persistence_failure_rolls_back),
         QualificationCase("LIVE-DISABLED", "live_safety", True, disabled_live_activation_blocks_submission),

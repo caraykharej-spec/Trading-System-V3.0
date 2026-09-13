@@ -18,6 +18,10 @@ def test_complete_default_failure_matrix_passes_without_live_execution() -> None
     assert report.passed == len(default_cases()) == 9
     assert report.failed == report.critical_failed == 0
     assert report.live_execution_attempted is False
+    assert {case.case_id for case in report.cases} >= {
+        "DATA-OHLCV-PRIMARY-OUTAGE",
+        "DATA-LIVE-OUTAGE",
+    }
     assert len(report.evidence_digest) == 64
     categories = {case.category for case in report.cases}
     assert categories == {"market_data", "atomicity", "live_safety", "evidence", "recovery", "security"}
