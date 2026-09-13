@@ -7,6 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
+REQUIRED_QUALIFICATION_RUNS = 1000
+
 
 @dataclass(frozen=True)
 class MatrixDimensions:
@@ -28,7 +30,9 @@ class MatrixDimensions:
         )
         if any(not value for value in values):
             raise ValueError("all matrix dimensions must be non-empty")
-        if len(set(self.seeds)) != len(self.seeds) or any(seed < 0 for seed in self.seeds):
+        if len(set(self.seeds)) != len(self.seeds) or any(
+            seed < 0 for seed in self.seeds
+        ):
             raise ValueError("matrix seeds must be unique and non-negative")
 
 
@@ -73,38 +77,47 @@ def _sha(payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def build_matrix(
-    dimensions: MatrixDimensions,
-    *,
-    expected_runs: int = 1000,
-) -> tuple[MatrixRun, ...]:
-    if expected_runs < 1:
-        raise ValueError("expected_runs must be positive")
-    combinations = tuple(
-        itertools.product(
-            dimensions.dataset_versions,
-            dimensions.splits,
-            dimensions.seeds,
-            dimensions.strategy_fingerprints,
-            dimensions.config_fingerprints,
-            dimensions.cost_scenarios,
-        )
+def _experiment_identity(run: MatrixRun) -> str:
+    return _sha(
+        {
+            "config": run.config_fingerprint,
+            "cost": run.cost_scenario,
+            "dataset": run.dataset_version,
+            "seed": run.seed,
+            "split": run.split,
+            "strategy": run.strategy_fingerprint,
+        }
     )
-    if len(combinations) != expected_runs:
+
+
+def build_matrix(dimensions: MatrixDimensions) -> tuple[MatrixRun, ...]:
+    cardinality = (
+        len(dimensions.dataset_versions)
+        * len(dimensions.splits)
+        * len(dimensions.seeds)
+        * len(dimensions.strategy_fingerprints)
+        * len(dimensions.config_fingerprints)
+        * len(dimensions.cost_scenarios)
+    )
+    if cardinality != REQUIRED_QUALIFICATION_RUNS:
         raise ValueError(
-            f"matrix cardinality mismatch:{len(combinations)}!={expected_runs}"
+            "matrix cardinality mismatch:"
+            f"{cardinality}!={REQUIRED_QUALIFICATION_RUNS}"
         )
+    combinations = itertools.product(
+        dimensions.dataset_versions,
+        dimensions.splits,
+        dimensions.seeds,
+        dimensions.strategy_fingerprints,
+        dimensions.config_fingerprints,
+        dimensions.cost_scenarios,
+    )
     runs = []
     for index, values in enumerate(combinations):
         dataset, split, seed, strategy, config, cost = values
-        identity = {
-            "config": config,
-            "cost": cost,
-            "dataset": dataset,
-            "seed": seed,
-            "split": split,
-            "strategy": strategy,
-        }
+        provisional = MatrixRun(
+            index, dataset, split, seed, strategy, config, cost, ""
+        )
         runs.append(
             MatrixRun(
                 index,
@@ -114,7 +127,7 @@ def build_matrix(
                 strategy,
                 config,
                 cost,
-                _sha(identity),
+                _experiment_identity(provisional),
             )
         )
     identities = {item.experiment_sha256 for item in runs}
@@ -127,15 +140,19 @@ def execute_matrix(
     runs: tuple[MatrixRun, ...],
     executor: RunExecutor,
     *,
-    expected_runs: int = 1000,
     max_workers: int = 8,
 ) -> MatrixExecutionReport:
-    if len(runs) != expected_runs:
-        raise ValueError(f"run count mismatch:{len(runs)}!={expected_runs}")
+    if len(runs) != REQUIRED_QUALIFICATION_RUNS:
+        raise ValueError(
+            f"run count mismatch:{len(runs)}!={REQUIRED_QUALIFICATION_RUNS}"
+        )
     if max_workers < 1:
         raise ValueError("max_workers must be positive")
     if tuple(item.index for item in runs) != tuple(range(len(runs))):
         raise ValueError("matrix indexes must be contiguous and ordered")
+    for item in runs:
+        if item.experiment_sha256 != _experiment_identity(item):
+            raise ValueError("matrix experiment identity is invalid")
     if len({item.experiment_sha256 for item in runs}) != len(runs):
         raise ValueError("matrix experiment identities must be unique")
 
@@ -171,7 +188,7 @@ def execute_matrix(
         ]
     )
     return MatrixExecutionReport(
-        expected_runs,
+        REQUIRED_QUALIFICATION_RUNS,
         len(results),
         successful,
         len(results) - successful,
