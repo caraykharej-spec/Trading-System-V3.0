@@ -68,16 +68,44 @@ def resolution() -> AssetDataResolution:
 def test_cold_load_persists_full_history_and_warm_load_refreshes_tail(tmp_path):
     resolver = Resolver()
     store = SQLiteCandleStore(tmp_path / "candles.db")
-    service = IncrementalCandleService(resolver, store, refresh_tail=2)
+    observed = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    service = IncrementalCandleService(
+        resolver, store, refresh_tail=2, now=lambda: observed
+    )
 
     cold = service.load(resolution(), timeframe="1h", limit=260, minimum_history=220)
     warm = service.load(resolution(), timeframe="1h", limit=260, minimum_history=220)
 
-    assert resolver.limits == [260, 2]
+    assert resolver.limits == [260]
     assert len(cold.candles) == len(warm.candles) == 260
     assert cold.cache_candles == 0
     assert warm.cache_candles == 260
-    assert warm.downloaded_candles == 2
-    assert warm.actual_provider == "yahoo"
-    assert warm.fallback_used
+    assert warm.downloaded_candles == 0
+    assert warm.actual_provider == "cache"
+    assert not warm.fallback_used
     assert len(store.load("BTC/USDT", "1h", limit=300)) == 260
+
+
+
+def test_warm_load_fetches_tail_once_a_new_closed_candle_is_due(tmp_path):
+    resolver = Resolver()
+    store = SQLiteCandleStore(tmp_path / "due.db")
+    cold = IncrementalCandleService(
+        resolver,
+        store,
+        now=lambda: datetime(2026, 9, 13, tzinfo=timezone.utc),
+    )
+    cold.load(resolution(), timeframe="1h", limit=260, minimum_history=220)
+    due = IncrementalCandleService(
+        resolver,
+        store,
+        now=lambda: datetime(2026, 9, 13, 2, tzinfo=timezone.utc),
+    )
+
+    refreshed = due.load(
+        resolution(), timeframe="1h", limit=260, minimum_history=220
+    )
+
+    assert resolver.limits == [260, 2]
+    assert refreshed.downloaded_candles == 2
+    assert refreshed.actual_provider == "yahoo"
