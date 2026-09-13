@@ -68,3 +68,11 @@ def test_walk_forward_requires_strict_chronological_boundaries():
             ((0, 60, 59, 80),),
             total_observations=100,
         )
+
+
+def test_walk_forward_rejects_overlapping_oos_windows():
+    with pytest.raises(ValueError, match="must not overlap"):
+        validate_walk_forward_boundaries(
+            ((0, 60, 60, 90), (10, 70, 70, 100)),
+            total_observations=100,
+        )
