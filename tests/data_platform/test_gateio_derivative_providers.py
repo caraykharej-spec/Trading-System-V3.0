@@ -5,7 +5,12 @@ from decimal import Decimal
 from app.data.market_data import MarketDataRequest
 from app.data.providers.gateio_futures import GateIOFuturesProvider
 from app.data.providers.gateio_tradfi import GateIOTradFiProvider
-from app.universe.market_data_resolution import AssetDataResolution, ResolutionSource, StormDrivenUniverseResolver
+from app.data.source_registry import SourceMappingRegistry, SourceRoute
+from app.universe.market_data_resolution import (
+    AssetDataResolution,
+    ResolutionSource,
+    StormDrivenUniverseResolver,
+)
 
 
 class FuturesClient:
@@ -57,6 +62,9 @@ def test_resolver_routes_tradfi_and_applies_split_multiplier() -> None:
         reason="test",
         market_data_source="gateio_tradfi",
         price_multiplier=Decimal("10"),
+        source_routes=(SourceRoute(
+            "gateio_tradfi", "AAPL", Decimal("10"), requires_volume=False
+        ),),
     )
 
     candles = resolver.get_candles(
@@ -66,3 +74,14 @@ def test_resolver_routes_tradfi_and_applies_split_multiplier() -> None:
     assert candles[0].symbol == "NFLX/USDT"
     assert candles[0].open == Decimal("3300")
     assert candles[0].close == Decimal("3320")
+
+
+def test_persistent_registry_contains_forex_free_failover() -> None:
+    mapping = SourceMappingRegistry.load().get("EUR")
+
+    assert mapping is not None
+    assert [(route.provider, route.symbol) for route in mapping.routes] == [
+        ("yahoo", "EURUSD=X"),
+        ("gateio_tradfi", "EURUSD"),
+    ]
+    assert all(not route.requires_volume for route in mapping.routes)

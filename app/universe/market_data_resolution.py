@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
+from time import perf_counter
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
+from app.data.adaptive_failover import AdaptiveSourceHealth
 from app.data.providers.gateio import GateIOProvider
 from app.data.providers.gateio_futures import GateIOFuturesProvider
 from app.data.providers.gateio_tradfi import GateIOTradFiProvider
 from app.data.providers.http import ProviderError
 from app.data.providers.yahoo import YahooFinanceProvider
+from app.data.source_registry import SourceMappingRegistry, SourceRoute
 from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
 from app.universe.contract_specs import ContractSpec
 from app.universe.instrument import Instrument
@@ -41,6 +44,7 @@ class AssetDataResolution:
     reason: str
     market_data_source: str | None = None
     price_multiplier: Decimal = Decimal("1")
+    source_routes: tuple[SourceRoute, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -137,26 +141,6 @@ class _PriceMatch:
     price_multiplier: Decimal = Decimal("1")
 
 
-_TRADFI_SYMBOLS: dict[str, str] = {
-    "AAPL": "AAPL", "AMD": "AMD", "AMZN": "AMZN", "AUD": "AUDUSD",
-    "AVGO": "AVGO", "COIN": "COIN", "CRCL": "CRCL", "EUR": "EURUSD",
-    "GBP": "GBPUSD", "GOOG": "GOOG", "HOOD": "HOOD", "META": "META",
-    "MSFT": "MSFT", "MSTR": "MSTR", "MU": "MU", "NFLX": "NFLX",
-    "NVDA": "NVDA", "PLTR": "PLTR", "TSLA": "TSLA", "UKOIL": "XBRUSD",
-    "USDCAD": "USDCAD", "USDCHF": "USDCHF", "XAG": "XAGUSD", "XAU": "XAUUSD",
-}
-
-_FUTURES_SYMBOLS: dict[str, str] = {
-    "1000PEPE": "PEPE_USDT",
-    "TON": "GRAM_USDT",
-}
-
-_PRICE_MULTIPLIERS: dict[str, Decimal] = {
-    "1000PEPE": Decimal("1000"),
-    "NFLX": Decimal("10"),
-}
-
-
 @dataclass(frozen=True)
 class StormDrivenUniverseResolver:
     """Resolve Storm-reference assets to Gate.io OHLCV, then Yahoo Finance.
@@ -173,6 +157,10 @@ class StormDrivenUniverseResolver:
     gate_futures_provider: GateIOFuturesProvider = GateIOFuturesProvider()
     gate_tradfi_provider: GateIOTradFiProvider = GateIOTradFiProvider()
     yahoo_provider: YahooFinanceProvider = YahooFinanceProvider()
+    source_registry: SourceMappingRegistry = field(
+        default_factory=SourceMappingRegistry.load
+    )
+    source_health: AdaptiveSourceHealth = field(default_factory=AdaptiveSourceHealth)
     max_price_deviation_percent: Decimal = Decimal("5")
     max_price_age_seconds: int = 300
     comparable_gate_quotes: tuple[str, ...] = ("USDT", "USDC", "USD")
@@ -224,39 +212,54 @@ class StormDrivenUniverseResolver:
     ) -> list[Candle]:
         if resolution.source is ResolutionSource.NO_DATA or resolution.provider_symbol is None:
             raise ProviderError(f"OHLCV unresolved for {resolution.canonical_symbol}")
-        request = MarketDataRequest(
+        routes = resolution.source_routes or (SourceRoute(
+            provider=resolution.market_data_source or (
+                "gateio" if resolution.source is ResolutionSource.GATEIO else "yahoo"
+            ),
             symbol=resolution.provider_symbol,
-            timeframe=timeframe,
-            limit=limit,
+            price_multiplier=resolution.price_multiplier,
+        ),)
+        failures: list[str] = []
+        for route in routes:
+            if not self.source_health.available(route.provider, route.symbol):
+                failures.append(f"{route.provider}:circuit_open")
+                continue
+            try:
+                started = perf_counter()
+                candles = self._provider(route.provider).get_candles(
+                    MarketDataRequest(route.symbol, timeframe, limit)
+                )
+                elapsed = Decimal(str(perf_counter() - started))
+                if elapsed > route.max_latency_seconds:
+                    raise ProviderError(
+                        f"latency_budget_exceeded:{elapsed:.3f}s>"
+                        f"{route.max_latency_seconds}s"
+                    )
+                if minimum_history is not None and len(candles) < minimum_history:
+                    raise ProviderError(
+                        f"insufficient_history:{len(candles)}<{minimum_history}"
+                    )
+                if route.requires_volume and candles and not any(
+                    candle.volume > 0 for candle in candles
+                ):
+                    raise ProviderError("volume_required_but_unavailable")
+                self.source_health.success(route.provider, route.symbol)
+                return [Candle(
+                    symbol=resolution.canonical_symbol,
+                    timeframe=candle.timeframe,
+                    timestamp=candle.timestamp,
+                    open=candle.open * route.price_multiplier,
+                    high=candle.high * route.price_multiplier,
+                    low=candle.low * route.price_multiplier,
+                    close=candle.close * route.price_multiplier,
+                    volume=candle.volume,
+                ) for candle in candles]
+            except ProviderError as exc:
+                self.source_health.failure(route.provider, route.symbol, exc)
+                failures.append(f"{route.provider}:{exc}")
+        raise ProviderError(
+            f"all_sources_failed:{resolution.canonical_symbol}:{'|'.join(failures)}"
         )
-        if resolution.source is ResolutionSource.GATEIO:
-            if resolution.market_data_source == self.gate_futures_provider.name:
-                candles = self.gate_futures_provider.get_candles(request)
-            elif resolution.market_data_source == self.gate_tradfi_provider.name:
-                candles = self.gate_tradfi_provider.get_candles(request)
-            else:
-                candles = self.gate_provider.get_candles(request)
-        else:
-            candles = self.yahoo_provider.get_candles(request)
-        if minimum_history is not None and len(candles) < minimum_history:
-            raise ProviderError(
-                f"insufficient_history:{resolution.canonical_symbol}:"
-                f"{timeframe}:{len(candles)}<{minimum_history}"
-            )
-        multiplier = resolution.price_multiplier
-        return [
-            Candle(
-                symbol=resolution.canonical_symbol,
-                timeframe=candle.timeframe,
-                timestamp=candle.timestamp,
-                open=candle.open * multiplier,
-                high=candle.high * multiplier,
-                low=candle.low * multiplier,
-                close=candle.close * multiplier,
-                volume=candle.volume,
-            )
-            for candle in candles
-        ]
 
     def _resolve_asset(
         self,
@@ -264,9 +267,32 @@ class StormDrivenUniverseResolver:
         gate_by_base: dict[str, list[Instrument]],
         gate_prices: dict[str, LivePrice],
     ) -> AssetDataResolution:
-        preferred_match = self._preferred_gate_match(reference)
+        preferred_match = self._registry_match(reference)
         if preferred_match is not None and self._acceptable(preferred_match):
-            return self._resolved(reference, ResolutionSource.GATEIO, preferred_match)
+            source = (
+                ResolutionSource.YFINANCE
+                if preferred_match.provider == "yahoo"
+                else ResolutionSource.GATEIO
+            )
+            mapping = self.source_registry.get(reference.base_asset)
+            configured_routes = mapping.routes if mapping is not None else ()
+            ordered_routes = tuple(
+                route for route in configured_routes
+                if route.provider == preferred_match.provider
+                and route.symbol == preferred_match.provider_symbol
+            ) + tuple(
+                route for route in configured_routes
+                if not (
+                    route.provider == preferred_match.provider
+                    and route.symbol == preferred_match.provider_symbol
+                )
+            )
+            return self._resolved(
+                reference,
+                source,
+                preferred_match,
+                routes=ordered_routes,
+            )
 
         gate_match = self._closest_gate_match(reference, gate_by_base, gate_prices)
         if gate_match is not None and self._acceptable(gate_match):
@@ -313,35 +339,44 @@ class StormDrivenUniverseResolver:
             market_data_source=None,
         )
 
-    def _preferred_gate_match(
-        self, reference: StormReferenceAsset
-    ) -> _PriceMatch | None:
-        base = reference.base_asset.upper()
-        provider: GateIOFuturesProvider | GateIOTradFiProvider
-        if base in _FUTURES_SYMBOLS:
-            symbol = _FUTURES_SYMBOLS[base]
-            provider = self.gate_futures_provider
-        elif base in _TRADFI_SYMBOLS:
-            symbol = _TRADFI_SYMBOLS[base]
-            provider = self.gate_tradfi_provider
-        else:
+    def _registry_match(self, reference: StormReferenceAsset) -> _PriceMatch | None:
+        mapping = self.source_registry.get(reference.base_asset)
+        if mapping is None:
             return None
-        multiplier = _PRICE_MULTIPLIERS.get(base, Decimal("1"))
+        for route in mapping.routes:
+            if not self.source_health.available(route.provider, route.symbol):
+                continue
+            try:
+                live = self._provider(route.provider).get_live_price(route.symbol)
+            except ProviderError as exc:
+                self.source_health.failure(route.provider, route.symbol, exc)
+                continue
+            normalized = live.price * route.price_multiplier
+            match = self._match(reference.reference_price, route.symbol, normalized)
+            if match.deviation_percent <= mapping.max_price_deviation_percent:
+                self.source_health.success(route.provider, route.symbol)
+                return _PriceMatch(
+                    provider_symbol=route.symbol,
+                    price=normalized,
+                    deviation_percent=match.deviation_percent,
+                    provider=route.provider,
+                    price_multiplier=route.price_multiplier,
+                )
+        return None
+
+    def _provider(
+        self, name: str
+    ) -> GateIOProvider | GateIOFuturesProvider | GateIOTradFiProvider | YahooFinanceProvider:
+        providers = {
+            self.gate_provider.name: self.gate_provider,
+            self.gate_futures_provider.name: self.gate_futures_provider,
+            self.gate_tradfi_provider.name: self.gate_tradfi_provider,
+            self.yahoo_provider.name: self.yahoo_provider,
+        }
         try:
-            live = provider.get_live_price(symbol)
-        except ProviderError:
-            return None
-        if live.price <= 0 or not self._fresh(live):
-            return None
-        normalized_price = live.price * multiplier
-        match = self._match(reference.reference_price, symbol, normalized_price)
-        return _PriceMatch(
-            provider_symbol=match.provider_symbol,
-            price=match.price,
-            deviation_percent=match.deviation_percent,
-            provider=provider.name,
-            price_multiplier=multiplier,
-        )
+            return providers[name]
+        except KeyError as exc:
+            raise ProviderError(f"unknown market-data provider: {name}") from exc
 
     def _closest_gate_match(
         self,
@@ -458,6 +493,7 @@ class StormDrivenUniverseResolver:
         match: _PriceMatch,
         *,
         reason: str = "closest_price_within_tolerance",
+        routes: tuple[SourceRoute, ...] = (),
     ) -> AssetDataResolution:
         return AssetDataResolution(
             base_asset=reference.base_asset,
@@ -471,4 +507,5 @@ class StormDrivenUniverseResolver:
             reason=reason,
             market_data_source=match.provider,
             price_multiplier=match.price_multiplier,
+            source_routes=routes,
         )

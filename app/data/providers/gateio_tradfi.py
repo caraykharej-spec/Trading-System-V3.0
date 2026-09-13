@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import ClassVar
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.base import MarketDataProvider
 from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_now
+from app.data.providers.rate_limit import PublicRateLimiter
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,12 @@ class GateIOTradFiProvider(MarketDataProvider):
     name: str = "gateio_tradfi"
     base_url: str = "https://api.gateio.ws/api/v4"
     client: HttpClient = HttpClient()
+    rate_limiter: PublicRateLimiter = field(
+        default_factory=lambda: PublicRateLimiter(5)
+    )
 
     def get_live_price(self, symbol: str) -> LivePrice:
+        self.rate_limiter.wait()
         market = symbol.upper()
         payload = self.client.get_json(
             f"{self.base_url}/tradfi/symbols/{market}/tickers"
@@ -32,6 +37,7 @@ class GateIOTradFiProvider(MarketDataProvider):
         return LivePrice(symbol=symbol, price=price, as_of=utc_now(), provider=self.name)
 
     def get_candles(self, request: MarketDataRequest) -> list[Candle]:
+        self.rate_limiter.wait()
         timeframe = request.timeframe or "1h"
         market = request.symbol.upper()
         limit = max(1, min(request.limit, 500))
