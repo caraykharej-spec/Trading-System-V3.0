@@ -53,7 +53,7 @@ def test_non_finite_or_destructive_inputs_fail_closed():
             model=SyntheticPathModel.GBM,
             config=SyntheticPathConfig(steps=10, seed=1),
         )
-    with pytest.raises(ValueError, match="non-positive"):
+    with pytest.raises(ValueError, match="invalid"):
         inject_relative_noise(
             (Decimal("1"),),
             maximum_absolute_percent=Decimal("200"),
