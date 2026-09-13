@@ -13,7 +13,7 @@ permissions:
 jobs:
   phase-48:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,8 +21,18 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Dataset and statistical gates
+      - name: Complete Phase 48 qualification suite
         run: |
           python -m pytest -q \
             tests/data_platform/test_phase_48_versioned_dataset.py \
-            tests/backtest/test_phase_48_qualification_batch.py
+            tests/backtest/test_phase_48_qualification_batch.py \
+            tests/backtest/test_phase_48_2_locked_oos.py \
+            tests/backtest/test_phase_48_3_qualification_matrix.py \
+            tests/backtest/test_phase_48_4_robustness_sampling.py \
+            tests/backtest/test_phase_48_5_synthetic_robustness.py \
+            tests/backtest/test_phase_48_6_parameter_stability.py \
+            tests/backtest/test_phase_48_7_regime_time_robustness.py \
+            tests/backtest/test_phase_48_8_cost_robustness.py \
+            tests/backtest/test_phase_48_9_final_qualification.py
+      - name: Storm and backtest cost regression evidence
+        run: python -m pytest -q tests/storm_costs tests/unit/test_backtest_costs.py
