@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import overload
 
 from app.data.market_data import Candle
 from app.market.advanced_structure import (
@@ -19,6 +22,8 @@ from app.market.trend import TrendResult
 
 _TIMEFRAME_MINUTES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440}
 _TIMEFRAME_ORDER = ("1d", "4h", "1h", "15m")
+_MAX_RECENT_CANDLES = 21
+_MAX_RECENT_CLOSES = 50
 
 
 @dataclass
@@ -42,15 +47,57 @@ class _EmaState:
         return self.value
 
 
+class _SwingHistoryView(Sequence[SwingPoint]):
+    """Immutable prefix view over an append-only swing list.
+
+    Creating a historical snapshot is O(1): the view freezes the visible length
+    without copying the accumulated swing history. Later appends to the backing
+    list are not visible through earlier views.
+    """
+
+    __slots__ = ("_items", "_length")
+
+    def __init__(self, items: list[SwingPoint], length: int) -> None:
+        if length < 0 or length > len(items):
+            raise ValueError("invalid swing history prefix length")
+        self._items = items
+        self._length = length
+
+    def __len__(self) -> int:
+        return self._length
+
+    @overload
+    def __getitem__(self, index: int) -> SwingPoint: ...
+
+    @overload
+    def __getitem__(self, index: slice) -> Sequence[SwingPoint]: ...
+
+    def __getitem__(self, index: int | slice) -> SwingPoint | Sequence[SwingPoint]:
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self._length)
+            return tuple(self._items[position] for position in range(start, stop, step))
+        normalized = index + self._length if index < 0 else index
+        if normalized < 0 or normalized >= self._length:
+            raise IndexError("swing history index out of range")
+        return self._items[normalized]
+
+
 class IncrementalMarketState:
-    """Exact incremental equivalent of analyze_market for chronological candles."""
+    """Exact incremental equivalent of analyze_market for chronological candles.
+
+    All indicator work is constant or bounded-window per candle. Only confirmed
+    swing points are retained long-term because they are part of strategy evidence.
+    """
 
     def __init__(self, symbol: str, timeframe: str) -> None:
         if timeframe not in _TIMEFRAME_MINUTES:
             raise ValueError(f"unsupported timeframe: {timeframe}")
         self.symbol = symbol
         self.timeframe = timeframe
-        self.candles: list[Candle] = []
+        self._count = 0
+        self._last_timestamp: datetime | None = None
+        self._recent_candles: deque[Candle] = deque(maxlen=_MAX_RECENT_CANDLES)
+        self._recent_closes: deque[Decimal] = deque(maxlen=_MAX_RECENT_CLOSES)
         self._ema12 = _EmaState(12)
         self._ema20 = _EmaState(20)
         self._ema26 = _EmaState(26)
@@ -65,7 +112,7 @@ class IncrementalMarketState:
 
     @property
     def count(self) -> int:
-        return len(self.candles)
+        return self._count
 
     @property
     def latest(self) -> MarketSnapshot | None:
@@ -74,20 +121,22 @@ class IncrementalMarketState:
     def push(self, candle: Candle) -> MarketSnapshot:
         if candle.symbol != self.symbol or candle.timeframe != self.timeframe:
             raise ValueError("candle identity does not match incremental market state")
-        if self.candles:
-            previous = self.candles[-1].timestamp
-            if candle.timestamp == previous:
+        if self._last_timestamp is not None:
+            if candle.timestamp == self._last_timestamp:
                 raise ValueError("duplicate candle timestamps")
-            if candle.timestamp < previous:
+            if candle.timestamp < self._last_timestamp:
                 raise ValueError("candles must be chronological")
 
-        self.candles.append(candle)
-        close = candle.close
-        fast = self._ema12.push(close)
-        ema20 = self._ema20.push(close)
-        slow = self._ema26.push(close)
-        ema50 = self._ema50.push(close)
-        ema200 = self._ema200.push(close)
+        self._count += 1
+        self._last_timestamp = candle.timestamp
+        self._recent_candles.append(candle)
+        self._recent_closes.append(candle.close)
+
+        fast = self._ema12.push(candle.close)
+        ema20 = self._ema20.push(candle.close)
+        slow = self._ema26.push(candle.close)
+        ema50 = self._ema50.push(candle.close)
+        ema200 = self._ema200.push(candle.close)
 
         if fast is not None and slow is not None:
             current_macd = fast - slow
@@ -100,9 +149,10 @@ class IncrementalMarketState:
         indicators = self._indicator_snapshot(ema20, ema50, ema200)
         trend = self._trend(indicators)
         advanced = self._advanced_structure()
-        structure = analyze_structure(self.candles[-20:])
-        liquidity = analyze_liquidity(self.candles[-21:])
-        regime = classify_regime(self.candles[-20:], trend)
+        recent = list(self._recent_candles)
+        structure = analyze_structure(recent[-20:])
+        liquidity = analyze_liquidity(recent[-21:])
+        regime = classify_regime(recent[-20:], trend)
         self._latest = MarketSnapshot(
             symbol=self.symbol,
             timeframe=self.timeframe,
@@ -122,12 +172,13 @@ class IncrementalMarketState:
         ema50: Decimal | None,
         ema200: Decimal | None,
     ) -> IndicatorSnapshot:
-        closes = [item.close for item in self.candles]
-        last20 = self.candles[-20:]
+        closes = list(self._recent_closes)
+        recent = list(self._recent_candles)
+        last20 = recent[-20:]
         last50 = closes[-50:]
 
-        rsi14 = self._rsi(closes)
-        atr14 = self._atr(self.candles)
+        rsi14 = self._rsi(closes[-15:])
+        atr14 = self._atr(recent)
         volume_sma20 = (
             sum((item.volume for item in last20), Decimal("0")) / Decimal("20")
             if len(last20) == 20
@@ -136,13 +187,13 @@ class IncrementalMarketState:
         sma50 = (
             sum(last50, Decimal("0")) / Decimal("50") if len(last50) == 50 else None
         )
-        adx14 = self._adx(self.candles)
+        adx14 = self._adx(recent)
         vwap20 = self._vwap(last20)
         middle, upper, lower = self._bollinger(last20)
 
         supertrend: str | None = None
         if atr14 is not None and ema20 is not None and ema50 is not None:
-            latest = self.candles[-1]
+            latest = recent[-1]
             midpoint = (latest.high + latest.low) / Decimal("2")
             upper_band = midpoint + Decimal("3") * atr14
             lower_band = midpoint - Decimal("3") * atr14
@@ -276,7 +327,7 @@ class IncrementalMarketState:
         )
 
     def _trend(self, indicators: IndicatorSnapshot) -> TrendResult:
-        last = self.candles[-1].close
+        last = self._recent_candles[-1].close
         if (
             indicators.ema20 is None
             or indicators.ema50 is None
@@ -323,12 +374,13 @@ class IncrementalMarketState:
         return TrendResult(direction, strength, score, indicators)
 
     def _update_swings(self, pivot: int = 2) -> None:
-        if len(self.candles) < pivot * 2 + 1:
+        if self._count < pivot * 2 + 1:
             return
-        index = len(self.candles) - pivot - 1
-        current = self.candles[index]
-        left = self.candles[index - pivot : index]
-        right = self.candles[index + 1 : index + pivot + 1]
+        window = list(self._recent_candles)[-(pivot * 2 + 1) :]
+        current = window[pivot]
+        left = window[:pivot]
+        right = window[pivot + 1 :]
+        index = self._count - pivot - 1
         if current.high > max(item.high for item in left) and current.high >= max(
             item.high for item in right
         ):
@@ -341,8 +393,8 @@ class IncrementalMarketState:
             self._swing_lows.append(SwingPoint("LOW", current.timestamp, current.low, index))
 
     def _advanced_structure(self) -> AdvancedStructureResult:
-        highs = tuple(self._swing_highs)
-        lows = tuple(self._swing_lows)
+        highs = _SwingHistoryView(self._swing_highs, len(self._swing_highs))
+        lows = _SwingHistoryView(self._swing_lows, len(self._swing_lows))
         if len(highs) < 2 or len(lows) < 2:
             trend = "UNKNOWN"
         else:
@@ -369,7 +421,7 @@ class IncrementalMarketState:
                 Decimal("0"),
             )
 
-        last = self.candles[-1]
+        last = self._recent_candles[-1]
         last_high = highs[-1]
         last_low = lows[-1]
         break_event: StructureBreak | None = None
