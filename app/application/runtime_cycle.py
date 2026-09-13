@@ -7,6 +7,7 @@ from typing import Callable, Iterable
 from uuid import uuid4
 
 from app.application.opportunity_pipeline import OpportunityPipeline
+from app.analytics.asset_history import SQLiteMarketEvaluationRepository
 from app.core.enums import CycleStatus
 from app.core.models import CycleResult, Position
 from app.execution.atomic_execution import AtomicExecutionService
@@ -52,6 +53,7 @@ class RuntimeCycleOrchestrator:
     selected_orders_provider: OrderIterableProvider | None = None
     account_repository: AccountRepository | None = None
     journal_service: JournalService | None = None
+    market_evaluation_repository: SQLiteMarketEvaluationRepository | None = None
     settlement_service: PositionSettlementService | None = None
     _recovery_done_for_cycle: set[str] = field(
         default_factory=set, init=False, repr=False
@@ -119,13 +121,17 @@ class RuntimeCycleOrchestrator:
                 f"created={outcome.created} existing={outcome.existing}"
             )
 
-    def _run_opportunity_pipeline(self, notes: list[str]) -> None:
+    def _run_opportunity_pipeline(
+        self, cycle_id: str, started_at: datetime, notes: list[str]
+    ) -> None:
         if self.opportunity_pipeline is None or self.universe_provider is None:
             return
         symbols = self._resolve_strings(self.universe_provider)
         result = self.opportunity_pipeline.evaluate(
             symbols, top_n=self.opportunity_top_n
         )
+        if self.market_evaluation_repository is not None:
+            self.market_evaluation_repository.save_result(cycle_id, started_at, result)
         notes.append(
             f"Opportunities evaluated={result.evaluated} "
             f"strategy_qualified={result.strategy_qualified} "
@@ -247,7 +253,7 @@ class RuntimeCycleOrchestrator:
                         f"Pending order filled: {result.order_id}"
                     )
 
-            self._run_opportunity_pipeline(notes)
+            self._run_opportunity_pipeline(cycle_id, started_at, notes)
             submitted_orders = self._submit_selected_orders(notes)
             if submitted_orders:
                 notes.append(f"Paper orders submitted={submitted_orders}")

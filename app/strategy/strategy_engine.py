@@ -37,6 +37,8 @@ class StrategySignal:
     confidence_result: ConfidenceResult
     reasons: tuple[str, ...]
     evidence: StrategyEvidence | None = None
+    stop_loss_source: str = "STRUCTURAL_SWING"
+    stop_loss_buffer: Decimal = Decimal("0")
 
 
 def _direction(daily: MarketSnapshot, four_hour: MarketSnapshot) -> str | None:
@@ -54,21 +56,38 @@ def _levels(
     direction: str,
 ) -> tuple[Decimal, Decimal, Decimal] | None:
     entry = fifteen.indicators.ema20 or one_hour.indicators.ema20
-    support = four_hour.structure.support
-    resistance = four_hour.structure.resistance
+    advanced = four_hour.advanced_structure
+    support = (
+        advanced.swing_lows[-1].price
+        if advanced is not None and advanced.swing_lows
+        else four_hour.structure.support
+    )
+    resistance = (
+        advanced.swing_highs[-1].price
+        if advanced is not None and advanced.swing_highs
+        else four_hour.structure.resistance
+    )
+    atr = four_hour.indicators.atr14 or Decimal("0")
+    buffer = atr * Decimal("0.25")
     if entry is None:
         return None
     if direction == "LONG":
         if support is None or resistance is None or support >= entry or resistance <= entry:
             return None
-        risk = entry - support
+        stop = support - buffer
+        if stop <= 0:
+            return None
+        risk = entry - stop
         target = entry + risk * Decimal("2.5")
-        return entry, support, target
+        return entry, stop, target
     if support is None or resistance is None or resistance <= entry or support >= entry:
         return None
-    risk = resistance - entry
+    stop = resistance + buffer
+    risk = stop - entry
     target = entry - risk * Decimal("2.5")
-    return entry, resistance, target
+    if target <= 0:
+        return None
+    return entry, stop, target
 
 
 def detect_setup(
@@ -124,6 +143,20 @@ def evaluate_strategy(
         raise ValueError("No valid entry/SL/target levels")
 
     entry, stop_loss, target = levels
+    structural_level = (
+        four_hour.advanced_structure.swing_lows[-1].price
+        if direction == "LONG"
+        and four_hour.advanced_structure is not None
+        and four_hour.advanced_structure.swing_lows
+        else four_hour.advanced_structure.swing_highs[-1].price
+        if direction == "SHORT"
+        and four_hour.advanced_structure is not None
+        and four_hour.advanced_structure.swing_highs
+        else four_hour.structure.support
+        if direction == "LONG"
+        else four_hour.structure.resistance
+    )
+    stop_buffer = abs(stop_loss - structural_level) if structural_level is not None else Decimal("0")
     rr: RiskReward = calculate_risk_reward(entry, stop_loss, target, direction)
     evidence = build_strategy_evidence(
         daily,
@@ -165,4 +198,6 @@ def evaluate_strategy(
         confidence_result=confidence_result,
         reasons=tuple(reasons),
         evidence=evidence,
+        stop_loss_source="LAST_CONFIRMED_SWING_PLUS_ATR_BUFFER",
+        stop_loss_buffer=stop_buffer,
     )

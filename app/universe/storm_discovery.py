@@ -29,6 +29,7 @@ class StormReferenceUniverseProvider:
     provider: StormProvider = StormProvider()
     required_type: str = "base"
     required_settlement: str = "usdt"
+    tradable_only: bool = True
 
     def discover(self) -> tuple[StormReferenceAsset, ...]:
         assets: list[StormReferenceAsset] = []
@@ -47,6 +48,8 @@ class StormReferenceUniverseProvider:
             if market_type != self.required_type.lower():
                 continue
             if settlement != self.required_settlement.lower():
+                continue
+            if self.tradable_only and not self._is_tradable(record):
                 continue
 
             base = self._extract_base_asset(record, settlement)
@@ -70,6 +73,23 @@ class StormReferenceUniverseProvider:
             seen.add(base)
 
         return tuple(sorted(assets, key=lambda item: item.base_asset))
+
+    @classmethod
+    def _is_tradable(cls, record: dict[str, Any]) -> bool:
+        settings = cls._mapping(record, "settings")
+        config = cls._config(record)
+        status = str(settings.get("status") or "active").lower()
+        return (
+            status == "active"
+            and not bool(settings.get("isPaused", False))
+            and not bool(settings.get("isCloseOnly", False))
+            and not bool(config.get("isHidden", False))
+        )
+
+    @staticmethod
+    def _mapping(record: dict[str, Any], key: str) -> dict[str, Any]:
+        value = record.get(key)
+        return value if isinstance(value, dict) else {}
 
     @staticmethod
     def _config(record: dict[str, Any]) -> dict[str, Any]:

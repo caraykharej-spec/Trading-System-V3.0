@@ -4,12 +4,15 @@ import sqlite3
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from time import monotonic
 from typing import Callable
 
 from app.analytics.service import AnalyticsService
+from app.analytics.asset_history import SQLiteMarketEvaluationRepository
 from app.application.opportunity_pipeline import (
     GatedOpportunity,
     OpportunityPipeline,
+    OpportunityPipelineResult,
     RiskContext,
 )
 from app.application.runtime_cycle import RuntimeCycleOrchestrator
@@ -205,6 +208,7 @@ def build_paper_application(
     correlation_matrix: CorrelationMatrix | None = None,
     context_loader: ContextLoader | None = None,
     assistant_config: AssistantRuntimeConfig | None = None,
+    signal_workers: int = 16,
 ) -> PaperApplication:
     """Build the real V3 application boundary without performing network I/O.
 
@@ -274,6 +278,7 @@ def build_paper_application(
     fill_writer = SQLiteFillRepository(connection, auto_commit=False)
     pending_repository = SQLitePendingOrderRepository(connection)
     journal_repository = SQLiteJournalRepository(connection)
+    market_evaluation_repository = SQLiteMarketEvaluationRepository(connection)
     journal_writer = SQLiteJournalRepository(connection, auto_commit=False)
     ledger_writer = SQLiteAccountLedgerRepository(connection, auto_commit=False)
     audit_repository = SQLiteCycleAuditRepository(connection)
@@ -302,7 +307,7 @@ def build_paper_application(
             snapshots["15m"],
         )
 
-    strategy_pipeline = StrategyPipeline(snapshot_loader)
+    strategy_pipeline = StrategyPipeline(snapshot_loader, max_workers=signal_workers)
     context_engine = ContextEngine()
     effective_context_loader = context_loader or (
         lambda symbol: context_engine.assess(symbol)
@@ -398,6 +403,7 @@ def build_paper_application(
         selected_orders_provider=selection_queue.drain,
         account_repository=account_repository,
         settlement_service=settlement,
+        market_evaluation_repository=market_evaluation_repository,
     )
 
     analytics = AnalyticsService(journal_repository)
@@ -411,8 +417,21 @@ def build_paper_application(
         pending_repository=pending_repository,
     )
 
+    evaluation_cache: tuple[float, OpportunityPipelineResult] | None = None
+
+    def current_evaluation() -> OpportunityPipelineResult:
+        nonlocal evaluation_cache
+        now = monotonic()
+        if evaluation_cache is None or now - evaluation_cache[0] > 30:
+            result = opportunity_pipeline.evaluate(symbols, top_n=10)
+            evaluation_cache = (monotonic(), result)
+        return evaluation_cache[1]
+
     def opportunities() -> list[GatedOpportunity]:
-        return list(opportunity_pipeline.evaluate(symbols, top_n=10).qualified)
+        return list(current_evaluation().qualified)
+
+    def all_market_evaluations() -> list[object]:
+        return list(current_evaluation().all_evaluations)
 
     copilot = CopilotExplainer()
 
@@ -462,6 +481,10 @@ def build_paper_application(
         ),
         assistant_metrics_provider=assistant_telemetry.snapshot,
         universe_coverage_provider=market_data_universe_resolver.resolve,
+        market_evaluations_provider=all_market_evaluations,
+        asset_statistics_provider=lambda: market_evaluation_repository.statistics(
+            journal_repository
+        ),
     )
 
     return PaperApplication(

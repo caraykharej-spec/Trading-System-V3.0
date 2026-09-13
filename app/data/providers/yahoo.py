@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 from urllib.parse import quote
@@ -8,6 +8,7 @@ from urllib.parse import quote
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.base import MarketDataProvider
 from app.data.providers.http import HttpClient, ProviderError, to_decimal, utc_now
+from app.data.providers.rate_limit import PublicRateLimiter
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,9 @@ class YahooFinanceProvider(MarketDataProvider):
     name: str = "yahoo"
     base_url: str = "https://query1.finance.yahoo.com"
     client: HttpClient = HttpClient()
+    rate_limiter: PublicRateLimiter = field(
+        default_factory=lambda: PublicRateLimiter(5)
+    )
 
     def search_symbols(self, query: str, *, limit: int = 8) -> tuple[str, ...]:
         """Return public Yahoo quote-search symbols for provider resolution."""
@@ -31,6 +35,7 @@ class YahooFinanceProvider(MarketDataProvider):
             f"&quotesCount={bounded_limit}&newsCount=0&listsCount=0"
             "&enableFuzzyQuery=false&enableCb=false&enableNavLinks=false"
         )
+        self.rate_limiter.wait()
         payload = self.client.get_json(url)
         if not isinstance(payload, dict):
             raise ProviderError(f"Yahoo search response is not an object: {query}")
@@ -167,6 +172,7 @@ class YahooFinanceProvider(MarketDataProvider):
             f"{self.base_url}/v8/finance/chart/{encoded}"
             f"?range={range_value}&interval={interval}"
         )
+        self.rate_limiter.wait()
         payload = self.client.get_json(url)
         if not isinstance(payload, dict):
             raise ProviderError(f"Yahoo response is not an object: {symbol}")

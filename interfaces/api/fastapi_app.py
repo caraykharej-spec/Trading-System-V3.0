@@ -410,9 +410,17 @@ def create_fastapi_runtime_app(
     ) -> JSONResponse:
         return await _invoke(request, lambda service: service.opportunities(limit))
 
+    @protected.get("/markets/evaluations", tags=["opportunities"])
+    async def market_evaluations(request: Request) -> JSONResponse:
+        return await _invoke(request, lambda service: service.market_evaluations())
+
     @protected.get("/analytics/performance", tags=["analytics"])
     async def performance(request: Request) -> JSONResponse:
         return await _invoke(request, lambda service: service.performance())
+
+    @protected.get("/analytics/assets", tags=["analytics"])
+    async def asset_statistics(request: Request) -> JSONResponse:
+        return await _invoke(request, lambda service: service.asset_statistics())
 
     @protected.get("/market-data/universe-coverage", tags=["market-data"])
     async def universe_coverage(request: Request) -> JSONResponse:

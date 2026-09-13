@@ -31,6 +31,8 @@ class TradingApiService:
         assistant_query_provider: Callable[[str, str | None], Any] | None = None,
         assistant_metrics_provider: Callable[[], Any] | None = None,
         universe_coverage_provider: Callable[[], Any] | None = None,
+        market_evaluations_provider: Callable[[], Any] | None = None,
+        asset_statistics_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._mode = mode
         self._version = version
@@ -44,6 +46,8 @@ class TradingApiService:
         self._assistant_query_provider = assistant_query_provider
         self._assistant_metrics_provider = assistant_metrics_provider
         self._universe_coverage_provider = universe_coverage_provider
+        self._market_evaluations_provider = market_evaluations_provider
+        self._asset_statistics_provider = asset_statistics_provider
 
     def health(self) -> ApiResponse:
         response = HealthResponse("ok", self._mode.value, self._version)
@@ -79,6 +83,26 @@ class TradingApiService:
             )
         return ApiResponse.ok(
             {"performance": self._serialize(self._analytics_provider())}
+        )
+
+    def market_evaluations(self) -> ApiResponse:
+        if self._market_evaluations_provider is None:
+            return ApiResponse.conflict(
+                "MARKET_EVALUATIONS_UNAVAILABLE",
+                "full market evaluation is not configured",
+            )
+        return ApiResponse.ok(
+            {"markets": self._serialize(self._market_evaluations_provider())}
+        )
+
+    def asset_statistics(self) -> ApiResponse:
+        if self._asset_statistics_provider is None:
+            return ApiResponse.conflict(
+                "ASSET_STATISTICS_UNAVAILABLE",
+                "asset journal statistics are not configured",
+            )
+        return ApiResponse.ok(
+            {"asset_statistics": self._serialize(self._asset_statistics_provider())}
         )
 
     def universe_coverage(self) -> ApiResponse:
