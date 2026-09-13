@@ -1,4 +1,4 @@
-import pytest
+from dataclasses import replace\n\nimport pytest
 
 from app.backtest.qualification_matrix import (
     MatrixDimensions,
@@ -85,3 +85,20 @@ def test_executor_must_return_canonical_bytes():
     assert report.results[0].error == (
         "TypeError:matrix executor must return canonical bytes"
     )
+
+
+def test_forged_experiment_identity_fails_closed():
+    runs = build_matrix(dimensions())
+    forged = (replace(runs[0], dataset_version="forged"), *runs[1:])
+
+    with pytest.raises(ValueError, match="identity is invalid"):
+        execute_matrix(forged, lambda item: b"result")
+
+
+def test_oversized_cardinality_is_rejected_before_product_materialization():
+    huge = tuple(str(index) for index in range(100))
+
+    with pytest.raises(ValueError, match="1000000000000"):
+        build_matrix(
+            MatrixDimensions(huge, huge, tuple(range(100)), huge, huge, huge)
+        )
