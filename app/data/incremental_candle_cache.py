@@ -56,7 +56,7 @@ class IncrementalCandleService:
         limit: int = 260,
         minimum_history: int = 220,
     ) -> IncrementalCandleBatch:
-        if limit < < minimum_history or minimum_history < 1:
+        if limit < minimum_history or minimum_history < 1:
             raise ValueError("limit must be at least minimum_history")
         with self._lock_for(resolution.canonical_symbol, timeframe):
             cached = self.store.load(
