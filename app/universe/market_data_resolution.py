@@ -49,6 +49,15 @@ class AssetDataResolution:
 
 
 @dataclass(frozen=True)
+class ResolvedCandleBatch:
+    candles: tuple[Candle, ...]
+    configured_provider: str
+    actual_provider: str
+    provider_symbol: str
+    fallback_used: bool
+
+
+@dataclass(frozen=True)
 class UniverseCoverageReport:
     generated_at: datetime
     reference_storm: int
@@ -211,17 +220,37 @@ class StormDrivenUniverseResolver:
         limit: int,
         minimum_history: int | None = None,
     ) -> list[Candle]:
+        return list(
+            self.get_candles_with_provenance(
+                resolution,
+                timeframe=timeframe,
+                limit=limit,
+                minimum_history=minimum_history,
+            ).candles
+        )
+
+    def get_candles_with_provenance(
+        self,
+        resolution: AssetDataResolution,
+        *,
+        timeframe: str,
+        limit: int,
+        minimum_history: int | None = None,
+    ) -> ResolvedCandleBatch:
         if resolution.source is ResolutionSource.NO_DATA or resolution.provider_symbol is None:
             raise ProviderError(f"OHLCV unresolved for {resolution.canonical_symbol}")
-        routes = resolution.source_routes or (SourceRoute(
-            provider=resolution.market_data_source or (
-                "gateio" if resolution.source is ResolutionSource.GATEIO else "yahoo"
+        configured_provider = resolution.market_data_source or (
+            "gateio" if resolution.source is ResolutionSource.GATEIO else "yahoo"
+        )
+        routes = resolution.source_routes or (
+            SourceRoute(
+                provider=configured_provider,
+                symbol=resolution.provider_symbol,
+                price_multiplier=resolution.price_multiplier,
             ),
-            symbol=resolution.provider_symbol,
-            price_multiplier=resolution.price_multiplier,
-        ),)
+        )
         failures: list[str] = []
-        for route in routes:
+        for route_index, route in enumerate(routes):
             if not self.source_health.available(route.provider, route.symbol):
                 failures.append(f"{route.provider}:circuit_open")
                 continue
@@ -245,16 +274,26 @@ class StormDrivenUniverseResolver:
                 ):
                     raise ProviderError("volume_required_but_unavailable")
                 self.source_health.success(route.provider, route.symbol)
-                return [Candle(
-                    symbol=resolution.canonical_symbol,
-                    timeframe=candle.timeframe,
-                    timestamp=candle.timestamp,
-                    open=candle.open * route.price_multiplier,
-                    high=candle.high * route.price_multiplier,
-                    low=candle.low * route.price_multiplier,
-                    close=candle.close * route.price_multiplier,
-                    volume=candle.volume,
-                ) for candle in candles]
+                normalized = tuple(
+                    Candle(
+                        symbol=resolution.canonical_symbol,
+                        timeframe=candle.timeframe,
+                        timestamp=candle.timestamp,
+                        open=candle.open * route.price_multiplier,
+                        high=candle.high * route.price_multiplier,
+                        low=candle.low * route.price_multiplier,
+                        close=candle.close * route.price_multiplier,
+                        volume=candle.volume,
+                    )
+                    for candle in candles
+                )
+                return ResolvedCandleBatch(
+                    candles=normalized,
+                    configured_provider=configured_provider,
+                    actual_provider=route.provider,
+                    provider_symbol=route.symbol,
+                    fallback_used=route_index > 0 or route.provider != configured_provider,
+                )
             except ProviderError as exc:
                 self.source_health.failure(route.provider, route.symbol, exc)
                 failures.append(f"{route.provider}:{exc}")
