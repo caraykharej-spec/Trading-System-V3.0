@@ -142,7 +142,7 @@ def validate_walk_forward_boundaries(
             and train_end == test_start
             and test_start < test_end <= total_observations
         ):
-            raise ValueError("invalid or overlapping walk-forward boundary")
-        if test_end <= previous_test_end:
-            raise ValueError("walk-forward test windows must advance")
+            raise ValueError("invalid walk-forward boundary")
+        if test_start < previous_test_end:
+            raise ValueError("walk-forward test windows must not overlap")
         previous_test_end = test_end
