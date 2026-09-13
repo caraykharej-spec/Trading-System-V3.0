@@ -72,3 +72,47 @@ def test_closing_estimate_can_disable_spread():
 def test_invalid_market_record_is_rejected():
     with pytest.raises(ProviderError, match="symbol or market address"):
         parse_market_cost_snapshot({})
+
+
+
+def test_snapshot_for_prefers_reference_usdt_market_for_duplicate_symbol():
+    non_reference = market()
+    non_reference["address"] = "0:tgusd"
+    non_reference["config"].update(
+        {"type": "base", "settlementToken": "tgUSD"}
+    )
+    reference = market()
+    reference["address"] = "0:usdt"
+    reference["config"].update(
+        {"type": "base", "settlementToken": "USDT"}
+    )
+
+    class Provider:
+        def list_market_records(self):
+            return (non_reference, reference)
+
+    snapshot = StormCostService(provider=Provider()).snapshot_for("TON/USDT")  # type: ignore[arg-type]
+    assert snapshot.market_address == "0:usdt"
+
+
+def test_refund_cannot_exceed_reserved_ton():
+    with pytest.raises(ValueError, match="cannot exceed"):
+        TonFeeEvidence(
+            reserved_ton=Decimal("0.10"),
+            refunded_ton=Decimal("0.15"),
+        )
+
+
+def test_require_complete_supports_scalar_and_cost_fields():
+    complete = parse_market_cost_snapshot(market())
+    StormCostService.require_complete(
+        complete,
+        ("protocol_fee_ratio", "funding_period_seconds"),
+    )
+
+    incomplete = parse_market_cost_snapshot(market(fundingPeriod=None))
+    with pytest.raises(ProviderError, match="funding_period_seconds"):
+        StormCostService.require_complete(incomplete, ("funding_period_seconds",))
+
+    with pytest.raises(ProviderError, match="Unsupported"):
+        StormCostService.require_complete(complete, ("not_a_cost_field",))
