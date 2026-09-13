@@ -53,6 +53,15 @@ class PortfolioBacktestEngine:
     def run(
         self, candles_by_symbol: dict[str, dict[str, list[Candle]]]
     ) -> PortfolioBacktestResult:
+        self._helpers._reset_snapshot_cache()
+        try:
+            return self._run(candles_by_symbol)
+        finally:
+            self._helpers._reset_snapshot_cache()
+
+    def _run(
+        self, candles_by_symbol: dict[str, dict[str, list[Candle]]]
+    ) -> PortfolioBacktestResult:
         if not candles_by_symbol:
             raise ValueError("candles_by_symbol cannot be empty")
         prepared = {
