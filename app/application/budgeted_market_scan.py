@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from time import monotonic
 from typing import Callable, Iterable
 
-from app.application.strategy_pipeline import (
-    SnapshotLoader,
-    StrategyRejection,
-)
+from app.application.strategy_pipeline import SnapshotLoader, StrategyRejection
 from app.data.providers.http import ProviderError
 from app.strategy.strategy_engine import StrategySignal, evaluate_strategy
 
@@ -46,13 +43,14 @@ def _is_retryable(rejection: StrategyRejection) -> bool:
             "rate",
             "circuit_open",
             "insufficient_cached_history",
+            "candle_gap_after_incremental_refresh",
             "latency_budget_exceeded",
         )
     )
 
 
 class BudgetedMarketScanner:
-    """Bounded concurrent scan with progress and end-of-pass retries."""
+    """Concurrent scan that returns at its deadline and fails unfinished work closed."""
 
     def __init__(
         self,
@@ -83,6 +81,7 @@ class BudgetedMarketScanner:
         started = self.clock()
         deadline = started + budget_seconds
         completed = 0
+        budget_exceeded = False
 
         def emit(event: str, symbol: str | None, attempt: int) -> None:
             if progress is not None:
@@ -97,30 +96,23 @@ class BudgetedMarketScanner:
                     )
                 )
 
-        def evaluate(symbol: str, attempt: int) -> StrategySignal | StrategyRejection:
-            nonlocal completed
-            emit("MARKET_STARTED", symbol, attempt)
-            if self.clock() >= deadline:
-                completed += 1
-                emit("MARKET_BUDGET_EXCEEDED", symbol, attempt)
-                return StrategyRejection(
-                    symbol,
-                    ("time_budget_exceeded",),
-                    state="DATA_ERROR",
-                )
+        def evaluate(symbol: str) -> StrategySignal | StrategyRejection:
             try:
                 daily, four_hour, one_hour, fifteen = self.snapshot_loader(symbol)
-                signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
             except (ValueError, KeyError, ProviderError) as exc:
-                completed += 1
-                emit("MARKET_FAILED", symbol, attempt)
                 return StrategyRejection(
                     symbol,
                     (str(exc) or exc.__class__.__name__,),
                     state="DATA_ERROR",
                 )
-            completed += 1
-            emit("MARKET_COMPLETED", symbol, attempt)
+            try:
+                signal = evaluate_strategy(daily, four_hour, one_hour, fifteen)
+            except ValueError as exc:
+                return StrategyRejection(
+                    symbol,
+                    (str(exc) or "strategy_rejected",),
+                    state="NO_TRADE",
+                )
             if signal.state.value == "READY_FOR_RISK_REVIEW":
                 return signal
             return StrategyRejection(
@@ -134,31 +126,68 @@ class BudgetedMarketScanner:
         def evaluate_many(
             selected: tuple[str, ...], attempt: int
         ) -> tuple[StrategySignal | StrategyRejection, ...]:
+            nonlocal completed, budget_exceeded
             if not selected:
                 return ()
-            workers = min(self.max_workers, len(selected))
-            if workers == 1:
-                return (evaluate(selected[0], attempt),)
-            with ThreadPoolExecutor(
-                max_workers=workers,
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                budget_exceeded = True
+                results = []
+                for symbol in selected:
+                    completed += 1
+                    emit("MARKET_BUDGET_EXCEEDED", symbol, attempt)
+                    results.append(
+                        StrategyRejection(
+                            symbol, ("time_budget_exceeded",), state="DATA_ERROR"
+                        )
+                    )
+                return tuple(results)
+
+            executor = ThreadPoolExecutor(
+                max_workers=min(self.max_workers, len(selected)),
                 thread_name_prefix="budgeted-market",
-            ) as executor:
-                return tuple(executor.map(lambda symbol: evaluate(symbol, attempt), selected))
+            )
+            futures: dict[Future[StrategySignal | StrategyRejection], str] = {}
+            for symbol in selected:
+                emit("MARKET_STARTED", symbol, attempt)
+                futures[executor.submit(evaluate, symbol)] = symbol
+            done, pending = wait(futures, timeout=max(0.0, deadline - self.clock()))
+            resolved: dict[str, StrategySignal | StrategyRejection] = {}
+            for future in done:
+                symbol = futures[future]
+                result = future.result()
+                resolved[symbol] = result
+                completed += 1
+                emit(
+                    "MARKET_FAILED"
+                    if isinstance(result, StrategyRejection)
+                    and result.state == "DATA_ERROR"
+                    else "MARKET_COMPLETED",
+                    symbol,
+                    attempt,
+                )
+            if pending:
+                budget_exceeded = True
+            for future in pending:
+                symbol = futures[future]
+                future.cancel()
+                resolved[symbol] = StrategyRejection(
+                    symbol, ("time_budget_exceeded",), state="DATA_ERROR"
+                )
+                completed += 1
+                emit("MARKET_BUDGET_EXCEEDED", symbol, attempt)
+            executor.shutdown(wait=False, cancel_futures=True)
+            return tuple(resolved[symbol] for symbol in selected)
 
         first = evaluate_many(ordered, 1)
         by_symbol = dict(zip(ordered, first, strict=True))
         retried: list[str] = []
         for attempt in range(2, retry_attempts + 2):
-            retry_candidates: list[str] = []
-            for symbol in ordered:
-                result = by_symbol[symbol]
-                if (
-                    isinstance(result, StrategyRejection)
-                    and _is_retryable(result)
-                    and self.clock() < deadline
-                ):
-                    retry_candidates.append(symbol)
-            retry_symbols = tuple(retry_candidates)
+            retry_symbols = tuple(
+                symbol
+                for symbol in ordered
+                if _is_retryable(by_symbol[symbol]) and self.clock() < deadline
+            )
             if not retry_symbols:
                 break
             retried.extend(retry_symbols)
@@ -175,12 +204,11 @@ class BudgetedMarketScanner:
             key=lambda item: (item.score, item.confidence, item.rr),
             reverse=True,
         )
-        rejection_items: list[StrategyRejection] = []
-        for symbol in ordered:
-            result = by_symbol[symbol]
-            if isinstance(result, StrategyRejection):
-                rejection_items.append(result)
-        rejections = tuple(rejection_items)
+        rejections = tuple(
+            result
+            for symbol in ordered
+            if isinstance((result := by_symbol[symbol]), StrategyRejection)
+        )
         elapsed = self.clock() - started
         emit("SCAN_COMPLETED", None, retry_attempts + 1)
         return BudgetedScanResult(
@@ -188,6 +216,6 @@ class BudgetedMarketScanner:
             tuple(signals),
             rejections,
             tuple(retried),
-            elapsed >= budget_seconds,
+            budget_exceeded or elapsed >= budget_seconds,
             elapsed,
         )
