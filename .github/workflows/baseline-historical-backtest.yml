@@ -1,0 +1,45 @@
+name: Baseline Historical Backtest
+
+on:
+  push:
+    branches: ["backtest-baseline-*"]
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/backtest/baseline_runner.py"
+      - "scripts/backtest/run_live_baseline.py"
+      - "tests/backtest/test_live_baseline_runner.py"
+      - ".github/workflows/baseline-historical-backtest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Baseline runner regression tests
+        run: python -m pytest -q tests/backtest/test_live_baseline_runner.py
+      - name: Run BTC/USDT public-data baseline
+        run: |
+          python scripts/backtest/run_live_baseline.py \
+            --symbol BTC/USDT \
+            --limit 1000 \
+            --dataset-version 1.0.0 \
+            --git-revision "$GITHUB_SHA" \
+            --output artifacts/backtest/btc-usdt-baseline.json
+      - name: Upload baseline evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-usdt-baseline-${{ github.sha }}
+          path: artifacts/backtest/btc-usdt-baseline.json
+          if-no-files-found: error
+          retention-days: 30
