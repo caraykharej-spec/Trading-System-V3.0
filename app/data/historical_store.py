@@ -43,6 +43,8 @@ class SQLiteCandleStore:
 
     def __init__(self, path: str | Path) -> None:
         self.path = str(path)
+        if self.path != ":memory:":
+            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
