@@ -6,8 +6,8 @@ from threading import Lock
 from time import perf_counter
 from typing import Callable
 
-from app.data.historical_store import CandleHistoryStore
 from app.data.candle_builder import timeframe_seconds
+from app.data.historical_store import CandleHistoryStore
 from app.data.market_data import Candle
 from app.data.providers.http import ProviderError
 from app.universe.market_data_resolution import (
@@ -67,30 +67,38 @@ class IncrementalCandleService:
             cached = self.store.load(
                 resolution.canonical_symbol, timeframe, limit=limit
             )
-            if cached and len(cached) >= minimum_history:
-                interval = timeframe_seconds(timeframe)
-                next_close = cached[-1].timestamp.timestamp() + (2 * interval)
-                if self.now().timestamp() < next_close:
-                    configured = resolution.market_data_source or (
-                        "gateio"
-                        if resolution.source.value == "gateio"
-                        else "yahoo"
-                    )
-                    return IncrementalCandleBatch(
-                        candles=tuple(cached),
-                        configured_provider=configured,
-                        actual_provider="cache",
-                        provider_symbol=resolution.provider_symbol or "",
-                        fallback_used=False,
-                        cache_candles=len(cached),
-                        downloaded_candles=0,
-                        fetch_seconds=0.0,
-                    )
+            interval = timeframe_seconds(timeframe)
+            elapsed_intervals = 0
+            if cached:
+                elapsed = self.now().timestamp() - cached[-1].timestamp.timestamp()
+                elapsed_intervals = max(0, int(elapsed // interval))
+            if cached and len(cached) >= minimum_history and elapsed_intervals < 2:
+                configured = resolution.market_data_source or (
+                    "gateio" if resolution.source.value == "gateio" else "yahoo"
+                )
+                return IncrementalCandleBatch(
+                    candles=tuple(cached),
+                    configured_provider=configured,
+                    actual_provider="cache",
+                    provider_symbol=resolution.provider_symbol or "",
+                    fallback_used=False,
+                    cache_candles=len(cached),
+                    downloaded_candles=0,
+                    fetch_seconds=0.0,
+                )
+
             missing = max(0, minimum_history - len(cached))
             fetch_limit = (
                 limit
                 if not cached
-                else min(limit, max(self.refresh_tail, missing + self.refresh_tail))
+                else min(
+                    limit,
+                    max(
+                        self.refresh_tail,
+                        missing + self.refresh_tail,
+                        elapsed_intervals,
+                    ),
+                )
             )
             started = perf_counter()
             fetched = self.resolver.get_candles_with_provenance(
@@ -108,6 +116,11 @@ class IncrementalCandleService:
                 raise ProviderError(
                     f"insufficient_cached_history:{len(merged)}<{minimum_history}"
                 )
+            if cached and elapsed_intervals <= limit:
+                first_new = fetched.candles[0].timestamp.timestamp()
+                expected_max = cached[-1].timestamp.timestamp() + interval
+                if first_new > expected_max:
+                    raise ProviderError("candle_gap_after_incremental_refresh")
             return IncrementalCandleBatch(
                 candles=tuple(merged),
                 configured_provider=fetched.configured_provider,
