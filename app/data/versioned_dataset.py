@@ -67,7 +67,7 @@ class VersionedCandleDataset:
         payload["created_at"] = self.created_at.isoformat()
         payload["first_timestamp"] = self.first_timestamp.isoformat()
         payload["last_timestamp"] = self.last_timestamp.isoformat()
-        provenance = dict(payload["provenance"])  # type: ignore[arg-type]
+        provenance = dict(payload["provenance"])
         provenance["retrieved_at"] = self.provenance.retrieved_at.isoformat()
         payload["provenance"] = provenance
         payload["split_events"] = [
