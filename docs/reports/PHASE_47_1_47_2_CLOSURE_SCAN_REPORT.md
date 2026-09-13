@@ -12,6 +12,7 @@ does not add wallet signing, live order submission, or live-trading activation.
 - Validated head: `a19e60f112621932d91b9890ac16631f444a1704`
 - Stacked implementation: PR #39 merged into the integration branch
 - Main integration: PR #38
+- Main merge revision: `84ee2f10eba3c44df5330fd13fd82c2326fd6c6d`
 
 ## Review corrections
 
@@ -58,5 +59,6 @@ CI evidence:
 
 ## Closure rule
 
-Phase 47.1–47.2 may be marked closed only after PR #38 is merged and the same
-mandatory workflows complete successfully on the resulting `main` revision.
+PR #38 is merged. This report and README status are finalized through a small
+closure-only pull request whose mandatory checks validate the merged Phase 47
+state against current `main`; no production code changes are introduced there.

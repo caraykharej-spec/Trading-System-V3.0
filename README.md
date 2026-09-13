@@ -53,7 +53,7 @@ never calls an execution-capable venue.
 
 See `docs/phases/PHASE_46_FULL_SYSTEM_QUALIFICATION_FAILURE_INJECTION.md`.
 
-**Phase 47.1–47.2 — Signal Readiness, Source Registry & Adaptive Failover: PR-CI VALIDATED; MAIN MERGE PENDING**
+**Phase 47.1–47.2 — Signal Readiness, Source Registry & Adaptive Failover: CLOSED, MERGED AND CI VALIDATED**
 
 Phase 47.1 exposes Top-10 and complete market-evaluation evidence, persistent
 per-asset analytics, structural stop evidence and bounded concurrent evaluation.
