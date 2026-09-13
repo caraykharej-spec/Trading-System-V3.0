@@ -12,6 +12,7 @@ from app.strategy.rules import DEFAULT_RULES, StrategyRules
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
 
 from .costs import BacktestCostModel
+from .incremental_snapshots import IncrementalSnapshotCursor
 from .metrics import calculate_metrics
 from .models import BacktestConfig, BacktestResult, TradeRecord
 
@@ -49,6 +50,13 @@ class BacktestEngine:
             slippage_percent=self.config.slippage_percent,
             funding_rate_percent_per_day=self.config.funding_rate_percent_per_day,
         )
+        self._snapshot_cursors: dict[
+            tuple[str, int],
+            IncrementalSnapshotCursor,
+        ] = {}
+
+    def _reset_snapshot_cache(self) -> None:
+        self._snapshot_cursors.clear()
 
     def run(
         self,
@@ -56,6 +64,7 @@ class BacktestEngine:
         candles_by_timeframe: dict[str, list[Candle]],
         evaluation_start: datetime | None = None,
     ) -> BacktestResult:
+        self._reset_snapshot_cache()
         candles = self._prepare(symbol, candles_by_timeframe)
         fifteen = candles["15m"]
         equity = self.config.initial_equity
@@ -201,6 +210,20 @@ class BacktestEngine:
         candles: dict[str, list[Candle]],
         decision_time: datetime,
     ) -> dict[str, MarketSnapshot] | None:
+        key = (symbol, id(candles))
+        cursor = self._snapshot_cursors.get(key)
+        if cursor is None:
+            cursor = IncrementalSnapshotCursor(symbol, candles)
+            self._snapshot_cursors[key] = cursor
+        return cursor.snapshots_at(decision_time)
+
+    def _snapshots_at_reference(
+        self,
+        symbol: str,
+        candles: dict[str, list[Candle]],
+        decision_time: datetime,
+    ) -> dict[str, MarketSnapshot] | None:
+        """Pre-checkpoint reference implementation used by equivalence tests."""
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
             duration = self._duration(timeframe)

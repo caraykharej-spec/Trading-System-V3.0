@@ -3,6 +3,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.backtest.models import BacktestConfig
 from app.backtest.portfolio import PortfolioBacktestEngine
 from app.data.market_data import Candle
@@ -48,3 +50,22 @@ def test_portfolio_uses_shared_equity_and_records_curve() -> None:
     assert result.initial_equity == Decimal("10000")
     assert len(result.equity_curve) >= 2
     assert result.total_trades >= 1
+
+
+def test_portfolio_releases_snapshot_cache_even_when_run_fails() -> None:
+    engine = PortfolioBacktestEngine()
+    original_reset = engine._helpers._reset_snapshot_cache
+
+    with (
+        patch.object(
+            engine._helpers,
+            "_reset_snapshot_cache",
+            wraps=original_reset,
+        ) as reset,
+        patch.object(engine, "_run", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        engine.run({"A": source("A")})
+
+    assert reset.call_count == 2
+    assert engine._helpers._snapshot_cursors == {}

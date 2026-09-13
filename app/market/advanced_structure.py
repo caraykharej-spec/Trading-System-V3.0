@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -23,16 +24,44 @@ class StructureBreak:
     timestamp: datetime
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class AdvancedStructureResult:
-    swing_highs: tuple[SwingPoint, ...]
-    swing_lows: tuple[SwingPoint, ...]
+    swing_highs: Sequence[SwingPoint]
+    swing_lows: Sequence[SwingPoint]
     trend: str
     structure: str
     last_break: StructureBreak | None
     support: Decimal | None
     resistance: Decimal | None
     score: Decimal
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, AdvancedStructureResult):
+            return False
+        return (
+            tuple(self.swing_highs) == tuple(other.swing_highs)
+            and tuple(self.swing_lows) == tuple(other.swing_lows)
+            and self.trend == other.trend
+            and self.structure == other.structure
+            and self.last_break == other.last_break
+            and self.support == other.support
+            and self.resistance == other.resistance
+            and self.score == other.score
+        )
+
+    def __hash__(self) -> int:
+        return hash(
+            (
+                tuple(self.swing_highs),
+                tuple(self.swing_lows),
+                self.trend,
+                self.structure,
+                self.last_break,
+                self.support,
+                self.resistance,
+                self.score,
+            )
+        )
 
 
 def _validate(candles: list[Candle], pivot: int) -> list[Candle]:
@@ -44,7 +73,9 @@ def _validate(candles: list[Candle], pivot: int) -> list[Candle]:
     return ordered
 
 
-def detect_swings(candles: list[Candle], pivot: int = 2) -> tuple[tuple[SwingPoint, ...], tuple[SwingPoint, ...]]:
+def detect_swings(
+    candles: list[Candle], pivot: int = 2
+) -> tuple[tuple[SwingPoint, ...], tuple[SwingPoint, ...]]:
     ordered = _validate(candles, pivot)
     highs: list[SwingPoint] = []
     lows: list[SwingPoint] = []
@@ -52,14 +83,20 @@ def detect_swings(candles: list[Candle], pivot: int = 2) -> tuple[tuple[SwingPoi
         current = ordered[i]
         left = ordered[i - pivot:i]
         right = ordered[i + 1:i + pivot + 1]
-        if current.high > max(c.high for c in left) and current.high >= max(c.high for c in right):
+        if current.high > max(c.high for c in left) and current.high >= max(
+            c.high for c in right
+        ):
             highs.append(SwingPoint("HIGH", current.timestamp, current.high, i))
-        if current.low < min(c.low for c in left) and current.low <= min(c.low for c in right):
+        if current.low < min(c.low for c in left) and current.low <= min(
+            c.low for c in right
+        ):
             lows.append(SwingPoint("LOW", current.timestamp, current.low, i))
     return tuple(highs), tuple(lows)
 
 
-def _sequence_trend(highs: tuple[SwingPoint, ...], lows: tuple[SwingPoint, ...]) -> str:
+def _sequence_trend(
+    highs: Sequence[SwingPoint], lows: Sequence[SwingPoint]
+) -> str:
     if len(highs) < 2 or len(lows) < 2:
         return "UNKNOWN"
     hh = highs[-1].price > highs[-2].price
@@ -73,12 +110,23 @@ def _sequence_trend(highs: tuple[SwingPoint, ...], lows: tuple[SwingPoint, ...])
     return "TRANSITION"
 
 
-def analyze_advanced_structure(candles: list[Candle], pivot: int = 2) -> AdvancedStructureResult:
+def analyze_advanced_structure(
+    candles: list[Candle], pivot: int = 2
+) -> AdvancedStructureResult:
     ordered = _validate(candles, pivot)
     highs, lows = detect_swings(ordered, pivot)
     trend = _sequence_trend(highs, lows)
     if not highs or not lows:
-        return AdvancedStructureResult(highs, lows, trend, "UNKNOWN", None, lows[-1].price if lows else None, highs[-1].price if highs else None, Decimal("0"))
+        return AdvancedStructureResult(
+            highs,
+            lows,
+            trend,
+            "UNKNOWN",
+            None,
+            lows[-1].price if lows else None,
+            highs[-1].price if highs else None,
+            Decimal("0"),
+        )
     last_close = ordered[-1].close
     last_high = highs[-1]
     last_low = lows[-1]
@@ -98,5 +146,22 @@ def analyze_advanced_structure(candles: list[Candle], pivot: int = 2) -> Advance
         structure = "LOWER_HIGH_LOWER_LOW"
     else:
         structure = "TRANSITION"
-    score = Decimal("90") if structure == "BOS" else Decimal("85") if structure == "CHOCH" else Decimal("70") if trend in {"BULLISH", "BEARISH"} else Decimal("50")
-    return AdvancedStructureResult(highs, lows, trend, structure, break_event, last_low.price, last_high.price, score)
+    score = (
+        Decimal("90")
+        if structure == "BOS"
+        else Decimal("85")
+        if structure == "CHOCH"
+        else Decimal("70")
+        if trend in {"BULLISH", "BEARISH"}
+        else Decimal("50")
+    )
+    return AdvancedStructureResult(
+        highs,
+        lows,
+        trend,
+        structure,
+        break_event,
+        last_low.price,
+        last_high.price,
+        score,
+    )
