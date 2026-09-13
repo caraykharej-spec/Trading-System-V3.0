@@ -1,3 +1,4 @@
+from dataclasses import replace
 from decimal import Decimal
 from threading import Barrier
 
@@ -15,6 +16,7 @@ from app.market.structure import StructureResult
 from app.market.trend import TrendResult
 from app.portfolio.account import Account
 from app.portfolio.portfolio_engine import PortfolioPolicy
+from app.strategy.strategy_engine import _levels
 from app.universe.contract_specs import ContractSpec
 from app.universe.instrument import AssetClass, Instrument
 
@@ -140,3 +142,32 @@ def test_markets_are_evaluated_concurrently_and_output_order_is_stable():
 
     assert [item.symbol for item in result.all_evaluations] == ["FIRST", "SECOND"]
     assert all(item.status == "NO_TRADE" for item in result.all_evaluations)
+
+
+def test_top_ten_history_is_independent_of_configured_selection_limit():
+    symbols = [f"S{i}" for i in range(12)]
+    result = OpportunityPipeline(
+        StrategyPipeline(lambda symbol: snapshots(symbol)), lambda symbol: context()
+    ).evaluate(symbols, top_n=3)
+
+    assert len(result.qualified) == 3
+    assert sum(item.is_top_10 for item in result.all_evaluations) == 10
+    assert next(item for item in result.all_evaluations if item.rank == 10).is_top_10
+    assert not next(item for item in result.all_evaluations if item.rank == 11).is_top_10
+
+
+def test_wide_short_stop_with_nonpositive_target_is_rejected():
+    four_hour = snapshot("S", "4H")
+    four_hour = replace(
+        four_hour,
+        structure=StructureResult(
+            "BREAKOUT_DOWN", Decimal("90"), Decimal("140"), Decimal("100")
+        ),
+    )
+
+    assert _levels(
+        four_hour,
+        snapshot("S", "1H"),
+        snapshot("S", "15M"),
+        "SHORT",
+    ) is None
