@@ -85,6 +85,8 @@ def _levels(
     stop = resistance + buffer
     risk = stop - entry
     target = entry - risk * Decimal("2.5")
+    if target <= 0:
+        return None
     return entry, stop, target
 
 
