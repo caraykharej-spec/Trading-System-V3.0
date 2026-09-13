@@ -12,8 +12,8 @@ venue, production account, network, database or host.
 
 | Case | Injected condition | Required invariant |
 |---|---|---|
-| DATA-PRIMARY-OUTAGE | Primary price provider raises | Valid fallback is used once |
-| DATA-TOTAL-OUTAGE | Every provider raises | No price is manufactured |
+| DATA-OHLCV-PRIMARY-OUTAGE | Gate.io candle provider raises | Production OHLCV router uses Yahoo fallback only |
+| DATA-LIVE-OUTAGE | Storm live-price provider raises | Production live router fails closed; OHLCV providers are not called |
 | DATA-STALE | Provider returns stale price | Freshness gate rejects it |
 | EXEC-PERSISTENCE-ROLLBACK | Fill persistence raises | Rollback; no commit or position write |
 | LIVE-DISABLED | Explicit live enable is false | Connector receives zero submissions |
@@ -22,8 +22,8 @@ venue, production account, network, database or host.
 | EVIDENCE-RESTORE | SQLite online backup is restored | Record count and chain remain valid |
 | CONFIG-MISSING-SECRET | Production API key is absent | Configuration fails closed |
 
-All cases are critical and use the production classes, bounded fakes and
-in-memory SQLite. Fake connectors count calls but never perform network I/O.
+All cases are critical and use the production classes, production market-data
+source-policy composition, bounded fakes and in-memory SQLite. Fake connectors count calls but never perform network I/O.
 No scenario contains credentials or an execution-capable venue adapter.
 
 ## Evidence contract
@@ -63,7 +63,8 @@ environment with explicit authorization, bounded blast radius and rollback.
 
 ## Closure gates
 
-Repository implementation is complete only when:
+Repository implementation is complete only when the post-review market-data
+topology correction is included and:
 
 1. all nine critical cases pass on feature and PR heads;
 2. global Python CI passes;
