@@ -186,7 +186,7 @@ class BudgetedMarketScanner:
             retry_symbols = tuple(
                 symbol
                 for symbol in ordered
-                if _is_retryable(by_symbol[symbol]) and self.clock() < deadline
+                if isinstance(by_symbol[symbol], StrategyRejection)\n                and _is_retryable(by_symbol[symbol])\n                and self.clock() < deadline
             )
             if not retry_symbols:
                 break
