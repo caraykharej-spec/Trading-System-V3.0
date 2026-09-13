@@ -149,13 +149,16 @@ class BudgetedMarketScanner:
         by_symbol = dict(zip(ordered, first, strict=True))
         retried: list[str] = []
         for attempt in range(2, retry_attempts + 2):
-            retry_symbols = tuple(
-                symbol
-                for symbol in ordered
-                if isinstance(by_symbol[symbol], StrategyRejection)
-                and _is_retryable(by_symbol[symbol])
-                and self.clock() < deadline
-            )
+            retry_candidates: list[str] = []
+            for symbol in ordered:
+                result = by_symbol[symbol]
+                if (
+                    isinstance(result, StrategyRejection)
+                    and _is_retryable(result)
+                    and self.clock() < deadline
+                ):
+                    retry_candidates.append(symbol)
+            retry_symbols = tuple(retry_candidates)
             if not retry_symbols:
                 break
             retried.extend(retry_symbols)
@@ -172,11 +175,12 @@ class BudgetedMarketScanner:
             key=lambda item: (item.score, item.confidence, item.rr),
             reverse=True,
         )
-        rejections = tuple(
-            by_symbol[symbol]
-            for symbol in ordered
-            if isinstance(by_symbol[symbol], StrategyRejection)
-        )
+        rejection_items: list[StrategyRejection] = []
+        for symbol in ordered:
+            result = by_symbol[symbol]
+            if isinstance(result, StrategyRejection):
+                rejection_items.append(result)
+        rejections = tuple(rejection_items)
         elapsed = self.clock() - started
         emit("SCAN_COMPLETED", None, retry_attempts + 1)
         return BudgetedScanResult(
