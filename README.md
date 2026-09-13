@@ -53,6 +53,26 @@ never calls an execution-capable venue.
 
 See `docs/phases/PHASE_46_FULL_SYSTEM_QUALIFICATION_FAILURE_INJECTION.md`.
 
+**Phase 47.1–47.2 — Signal Readiness, Source Registry & Adaptive Failover: PR-CI VALIDATED; MAIN MERGE PENDING**
+
+Phase 47.1 exposes Top-10 and complete market-evaluation evidence, persistent
+per-asset analytics, structural stop evidence and bounded concurrent evaluation.
+Phase 47.2 adds Storm-driven universe discovery, explicit source mappings,
+price-proximity validation, adaptive failover and repeatable source benchmarks.
+Storm costs, funding and TON-fee evidence remain read-only and fail closed when
+required values are unknown.
+
+The integration revision passed 444 tests, strict mypy across 325 source files,
+80.39% branch-aware coverage, Full System Qualification, Storm Cost Validation,
+and the container security gate with zero HIGH/CRITICAL findings.
+
+See:
+
+- `docs/phases/PHASE_47_1_SIGNAL_ENGINE_OUTPUT_READINESS.md`
+- `docs/phases/PHASE_47_2_SOURCE_BENCHMARKING_MAPPING_FAILOVER.md`
+- `docs/phases/PHASE_47_STORM_COST_FUNDING_TON_FEE_INTEGRATION.md`
+- `docs/reports/PHASE_47_1_47_2_CLOSURE_SCAN_REPORT.md`
+
 Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
 
 Repository history also contains `PHASE_41_GROUNDED_LLM_CONVERSATION_ORCHESTRATION.md` and `PHASE_42_PRODUCTION_LLM_PROVIDER_ASSISTANT_OBSERVABILITY.md` from an earlier roadmap numbering sequence. Those assistant capabilities remain implemented; `PHASE_41_PRODUCTION_FASTAPI_PLATFORM.md` is the current API-roadmap milestone requested after Phase 40.1.
