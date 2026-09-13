@@ -1,0 +1,52 @@
+name: Phase 47.3 Live Benchmark
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/application/budgeted_market_scan.py"
+      - "app/data/incremental_candle_cache.py"
+      - "app/universe/market_data_resolution.py"
+      - "scripts/market_data/full_storm_signal_smoke.py"
+      - "scripts/market_data/compare_incremental_scans.py"
+      - ".github/workflows/phase-47-3-live-benchmark.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cold-warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Cold full-universe cycle
+        run: |
+          python scripts/market_data/full_storm_signal_smoke.py \
+            --cache-db evidence/phase47-3-cache.db \
+            --cycle-budget-seconds 600 \
+            --output evidence/cold.json
+      - name: Warm full-universe cycle
+        run: |
+          python scripts/market_data/full_storm_signal_smoke.py \
+            --cache-db evidence/phase47-3-cache.db \
+            --cycle-budget-seconds 600 \
+            --output evidence/warm.json
+      - name: Compare cold and warm cycles
+        run: |
+          python scripts/market_data/compare_incremental_scans.py \
+            evidence/cold.json evidence/warm.json \
+            --output evidence/benchmark.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-47-3-live-benchmark
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 30
