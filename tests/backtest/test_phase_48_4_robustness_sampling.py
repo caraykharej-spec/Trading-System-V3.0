@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from app.backtest.robustness_sampling import (
     SamplingMode,
     maximum_drawdown_percent,
@@ -47,3 +49,13 @@ def test_adverse_ordering_exposes_larger_drawdown():
     ) > maximum_drawdown_percent(
         favorable, initial_equity=Decimal("100")
     )
+
+
+@pytest.mark.parametrize("invalid", ("NaN", "Infinity", "-Infinity"))
+def test_drawdown_rejects_non_finite_equity_and_pnl(invalid):
+    with pytest.raises(ValueError, match="initial_equity"):
+        maximum_drawdown_percent(PNL, initial_equity=Decimal(invalid))
+    with pytest.raises(ValueError, match="PnL"):
+        maximum_drawdown_percent(
+            (Decimal(invalid),), initial_equity=Decimal("100")
+        )
