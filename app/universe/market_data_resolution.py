@@ -9,6 +9,7 @@ from time import perf_counter
 
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.adaptive_failover import AdaptiveSourceHealth
+from app.data.providers.base import MarketDataProvider
 from app.data.providers.gateio import GateIOProvider
 from app.data.providers.gateio_futures import GateIOFuturesProvider
 from app.data.providers.gateio_tradfi import GateIOTradFiProvider
@@ -364,9 +365,7 @@ class StormDrivenUniverseResolver:
                 )
         return None
 
-    def _provider(
-        self, name: str
-    ) -> GateIOProvider | GateIOFuturesProvider | GateIOTradFiProvider | YahooFinanceProvider:
+    def _provider(self, name: str) -> MarketDataProvider:
         providers = {
             self.gate_provider.name: self.gate_provider,
             self.gate_futures_provider.name: self.gate_futures_provider,
