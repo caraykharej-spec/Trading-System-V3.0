@@ -109,3 +109,27 @@ def test_warm_load_fetches_tail_once_a_new_closed_candle_is_due(tmp_path):
     assert resolver.limits == [260, 2]
     assert refreshed.downloaded_candles == 2
     assert refreshed.actual_provider == "yahoo"
+
+
+def test_warm_load_fetches_enough_candles_to_bridge_elapsed_intervals(tmp_path):
+    resolver = Resolver()
+    store = SQLiteCandleStore(tmp_path / "nested" / "candles.db")
+    clock = [datetime(2026, 9, 13, tzinfo=timezone.utc)]
+    service = IncrementalCandleService(
+        resolver, store, refresh_tail=2, now=lambda: clock[0]
+    )
+
+    service.load(resolution(), timeframe="1h", limit=260, minimum_history=220)
+    clock[0] += timedelta(hours=4)
+    resolver.end = clock[0]
+    warm = service.load(
+        resolution(), timeframe="1h", limit=260, minimum_history=220
+    )
+
+    assert resolver.limits == [260, 4]
+    assert warm.downloaded_candles == 4
+    timestamps = [item.timestamp for item in warm.candles]
+    assert all(
+        later - earlier == timedelta(hours=1)
+        for earlier, later in zip(timestamps, timestamps[1:])
+    )
