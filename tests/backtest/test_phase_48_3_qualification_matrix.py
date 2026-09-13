@@ -1,4 +1,6 @@
-from dataclasses import replace\n\nimport pytest
+from dataclasses import replace
+
+import pytest
 
 from app.backtest.qualification_matrix import (
     MatrixDimensions,
