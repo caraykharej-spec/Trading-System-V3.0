@@ -183,13 +183,16 @@ class BudgetedMarketScanner:
         by_symbol = dict(zip(ordered, first, strict=True))
         retried: list[str] = []
         for attempt in range(2, retry_attempts + 2):
-            retry_symbols = tuple(
-                symbol
-                for symbol in ordered
-                if isinstance(by_symbol[symbol], StrategyRejection)
-                and _is_retryable(by_symbol[symbol])
-                and self.clock() < deadline
-            )
+            retry_candidates: list[str] = []
+            for symbol in ordered:
+                candidate = by_symbol[symbol]
+                if (
+                    isinstance(candidate, StrategyRejection)
+                    and _is_retryable(candidate)
+                    and self.clock() < deadline
+                ):
+                    retry_candidates.append(symbol)
+            retry_symbols = tuple(retry_candidates)
             if not retry_symbols:
                 break
             retried.extend(retry_symbols)
