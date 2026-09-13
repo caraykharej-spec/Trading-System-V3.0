@@ -1,0 +1,33 @@
+{
+  "phase": "47.3",
+  "captured_at_utc": "2026-09-13T10:23:45Z",
+  "workflow_run_id": 34751671303,
+  "head_sha": "85e6737469df1130db685f5950d7b996254c2581",
+  "historical_baseline_seconds": 338.0,
+  "cold": {
+    "downloaded_candles": 83200,
+    "coverage_percent": "96.47",
+    "resolution_seconds": 15.876,
+    "signal_scan_seconds": 26.355,
+    "total_seconds": 42.23
+  },
+  "warm": {
+    "downloaded_candles": 162,
+    "coverage_percent": "96.47",
+    "resolution_seconds": 14.072,
+    "signal_scan_seconds": 17.386,
+    "total_seconds": 31.458
+  },
+  "improvement": {
+    "download_reduction_percent": 99.81,
+    "cold_to_warm_signal_scan_reduction_percent": 34.03,
+    "cold_to_warm_total_cycle_reduction_percent": 25.51,
+    "historical_baseline_to_warm_reduction_percent": 90.7,
+    "coverage_preserved": true
+  },
+  "targets": {
+    "download_reduction_at_least_90_percent": true,
+    "warm_cycle_at_least_60_percent_below_338_second_baseline": true,
+    "coverage_preserved": true
+  }
+}

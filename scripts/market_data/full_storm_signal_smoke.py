@@ -7,7 +7,9 @@ from pathlib import Path
 from threading import Lock
 from time import perf_counter
 
-from app.application.strategy_pipeline import StrategyPipeline
+from app.application.budgeted_market_scan import BudgetedMarketScanner, ScanProgressEvent
+from app.data.historical_store import SQLiteCandleStore
+from app.data.incremental_candle_cache import IncrementalCandleService
 from app.market.analysis import MarketSnapshot, analyze_market
 from app.universe.market_data_resolution import StormDrivenUniverseResolver
 
@@ -17,15 +19,23 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run the full Storm signal smoke scan")
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--cache-db", type=Path, default=Path("data/market_data_cache.db"))
+    parser.add_argument("--cycle-budget-seconds", type=float, default=300.0)
+    parser.add_argument("--retry-failed", type=int, default=1)
+    parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
 
     started = perf_counter()
-    resolver = StormDrivenUniverseResolver(max_workers=16)
+    resolver = StormDrivenUniverseResolver(max_workers=args.workers)
     report = resolver.resolve()
     resolved_at = perf_counter()
     by_symbol = {item.canonical_symbol: item for item in report.assets}
     market_scores: dict[str, str] = {}
+    candle_provenance: dict[str, list[dict[str, object]]] = {}
     score_lock = Lock()
+    candle_service = IncrementalCandleService(
+        resolver, SQLiteCandleStore(args.cache_db), refresh_tail=2
+    )
 
     def load(
         symbol: str,
@@ -33,10 +43,23 @@ def main() -> None:
         resolution = by_symbol[symbol]
         snapshots: dict[str, MarketSnapshot] = {}
         for timeframe in ("1d", "4h", "1h", "15m"):
-            candles = resolver.get_candles(
+            batch = candle_service.load(
                 resolution, timeframe=timeframe, limit=260, minimum_history=220
             )
-            snapshots[timeframe] = analyze_market(symbol, timeframe, candles)
+            snapshots[timeframe] = analyze_market(
+                symbol, timeframe, list(batch.candles)
+            )
+            with score_lock:
+                candle_provenance.setdefault(symbol, []).append({
+                    "timeframe": timeframe,
+                    "configured_provider": batch.configured_provider,
+                    "actual_provider": batch.actual_provider,
+                    "provider_symbol": batch.provider_symbol,
+                    "fallback_used": batch.fallback_used,
+                    "cache_candles": batch.cache_candles,
+                    "downloaded_candles": batch.downloaded_candles,
+                    "fetch_seconds": round(batch.fetch_seconds, 3),
+                })
         market_score = sum(
             (snapshot.score for snapshot in snapshots.values()),
             start=0,
@@ -50,9 +73,23 @@ def main() -> None:
             snapshots["15m"],
         )
 
-    evaluated, signals, rejections = StrategyPipeline(
-        load, max_workers=16
-    ).evaluate_all_with_rejections(by_symbol)
+    def report_progress(event: ScanProgressEvent) -> None:
+        print(json.dumps({
+            "event": event.event,
+            "symbol": event.symbol,
+            "completed": event.completed,
+            "total": event.total,
+            "attempt": event.attempt,
+            "elapsed_seconds": round(event.elapsed_seconds, 3),
+        }), flush=True)
+
+    scan = BudgetedMarketScanner(load, max_workers=args.workers).run(
+        by_symbol,
+        budget_seconds=args.cycle_budget_seconds,
+        retry_attempts=args.retry_failed,
+        progress=report_progress,
+    )
+    evaluated, signals, rejections = scan.evaluated, scan.signals, scan.rejections
     finished = perf_counter()
     qualified_by_symbol = {signal.symbol: signal for signal in signals}
     rejected_by_symbol = {item.symbol: item for item in rejections}
@@ -76,6 +113,7 @@ def main() -> None:
             "configured_source": resolution.market_data_source,
             "provider_symbol": resolution.provider_symbol,
             "reasons": list(rejection.reasons) if rejection is not None else [],
+            "candle_provenance": candle_provenance.get(symbol, []),
         })
     all_evaluated.sort(
         key=lambda item: (
@@ -86,6 +124,10 @@ def main() -> None:
     )
     payload = {
         "mode": "PAPER_READ_ONLY",
+        "cache_db": str(args.cache_db),
+        "cycle_budget_seconds": args.cycle_budget_seconds,
+        "budget_exceeded": scan.budget_exceeded,
+        "retried_markets": list(scan.retried),
         "active_storm_markets": report.reference_storm,
         "gateio": report.gateio,
         "gateio_sources": {
@@ -130,6 +172,38 @@ def main() -> None:
             item.base_asset
             for item in report.assets
             if item.source.value == "no_data"
+        ],
+        "symbol_decisions": {
+            base: {
+                "status": (
+                    "NOT_IN_ACTIVE_STORM_UNIVERSE"
+                    if not any(item.base_asset.upper() == base for item in report.assets)
+                    else "RESOLVED"
+                    if any(
+                        item.base_asset.upper() == base
+                        and item.provider_symbol is not None
+                        for item in report.assets
+                    )
+                    else "UNRESOLVED"
+                )
+            }
+            for base in ("AMD", "COIN", "CRCL", "SPX", "SPCX", "SPXC", "SUI")
+        },
+        "degen_markets": [
+            {
+                "symbol": item.canonical_symbol,
+                "base_asset": item.base_asset,
+                "status": (
+                    "RESEARCH_ONLY_RESOLVED"
+                    if item.provider_symbol is not None
+                    else "RESEARCH_ONLY_UNRESOLVED"
+                ),
+                "source": item.market_data_source,
+                "provider_symbol": item.provider_symbol,
+                "reason": item.reason,
+            }
+            for item in report.assets
+            if "DEGEN" in item.base_asset.upper()
         ],
         "normalized_mappings": [
             {

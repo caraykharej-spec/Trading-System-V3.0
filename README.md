@@ -73,6 +73,15 @@ See:
 - `docs/phases/PHASE_47_STORM_COST_FUNDING_TON_FEE_INTEGRATION.md`
 - `docs/reports/PHASE_47_1_47_2_CLOSURE_SCAN_REPORT.md`
 
+**Phase 47.3 — Persistent Candle Cache & Incremental Market Scan: IMPLEMENTATION IN REVIEW**
+
+Phase 47.3 reuses the Phase 37 SQLite candle store, refreshes only the mutable
+series tail on warm scans, preserves the actual provider used after fallback,
+and adds a total cycle budget, structured progress, bounded retry and separate
+Degen/target-symbol reporting.
+
+See `docs/phases/PHASE_47_3_PERSISTENT_CANDLE_CACHE_INCREMENTAL_SCAN.md`.
+
 Production API policy is fail-closed: production requires API-key authentication and an explicit trusted-host allowlist. `POST /api/v1/runtime/cycle` is disabled by default and can only be enabled when API-key auth is required. No live-order endpoint is exposed.
 
 Repository history also contains `PHASE_41_GROUNDED_LLM_CONVERSATION_ORCHESTRATION.md` and `PHASE_42_PRODUCTION_LLM_PROVIDER_ASSISTANT_OBSERVABILITY.md` from an earlier roadmap numbering sequence. Those assistant capabilities remain implemented; `PHASE_41_PRODUCTION_FASTAPI_PLATFORM.md` is the current API-roadmap milestone requested after Phase 40.1.
