@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -18,21 +19,27 @@ from app.strategy.rules import DEFAULT_RULES
 
 _REQUIRED_TIMEFRAMES = ("15m", "1h", "4h", "1d")
 _TIMEFRAME_MINUTES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+_MINIMUM_STRATEGY_HISTORY = 200
+BaselineProvenanceBuilder = Callable[[str, str, int, datetime], DatasetProvenance]
 
 
 @dataclass(frozen=True)
 class BaselineRunPolicy:
     candle_limit: int = 1000
     dataset_version: str = "1.0.0"
-    minimum_candles_per_timeframe: int = 50
+    minimum_candles_per_timeframe: int = _MINIMUM_STRATEGY_HISTORY
 
     def __post_init__(self) -> None:
         if not 1 <= self.candle_limit <= 1000:
             raise ValueError("candle_limit must be in [1, 1000]")
-        if self.minimum_candles_per_timeframe < 2:
-            raise ValueError("minimum_candles_per_timeframe must be at least 2")
-        if self.minimum_candles_per_timeframe > self.candle_limit:
-            raise ValueError("minimum_candles_per_timeframe cannot exceed candle_limit")
+        if self.minimum_candles_per_timeframe < _MINIMUM_STRATEGY_HISTORY:
+            raise ValueError(
+                "minimum_candles_per_timeframe must be at least 200 for EMA200-based trend analysis"
+            )
+        if self.candle_limit <= self.minimum_candles_per_timeframe:
+            raise ValueError(
+                "candle_limit must exceed minimum_candles_per_timeframe so an in-progress candle can be removed"
+            )
 
 
 def _json_ready(value: Any) -> Any:
@@ -65,7 +72,30 @@ def _drop_incomplete(
     ]
 
 
-def _cost_config(service: StormCostService, symbol: str) -> tuple[BacktestConfig, dict[str, object]]:
+def _gateio_provenance(
+    provider: GateIOProvider,
+    symbol: str,
+    timeframe: str,
+    limit: int,
+    retrieved_at: datetime,
+) -> DatasetProvenance:
+    pair = symbol.replace("/", "_").upper()
+    base_url = provider.base_url.rstrip("/")
+    return DatasetProvenance(
+        provider=provider.name,
+        provider_symbol=pair,
+        retrieved_at=retrieved_at,
+        source_uri=(
+            f"{base_url}/spot/candlesticks"
+            f"?currency_pair={pair}&interval={timeframe}&limit={limit}"
+        ),
+        license_id="gateio-public-api-v4",
+    )
+
+
+def _cost_config(
+    service: StormCostService, symbol: str
+) -> tuple[BacktestConfig, dict[str, object]]:
     snapshot = service.snapshot_for(symbol)
     service.require_complete(snapshot, ("protocol_fee_ratio", "spread_ratio"))
     protocol_ratio = snapshot.protocol_fee_ratio.value
@@ -139,6 +169,7 @@ def run_live_baseline(
     symbol: str = "BTC/USDT",
     policy: BaselineRunPolicy | None = None,
     candle_provider: MarketDataProvider | None = None,
+    provenance_builder: BaselineProvenanceBuilder | None = None,
     cost_service: StormCostService | None = None,
     observed_at: datetime | None = None,
     code_revision: str = "UNKNOWN",
@@ -157,6 +188,22 @@ def run_live_baseline(
         raise ValueError("observed_at must be timezone-aware")
     retrieved_at = retrieved_at.astimezone(timezone.utc)
 
+    if provenance_builder is None:
+        if not isinstance(provider, GateIOProvider):
+            raise ValueError(
+                "non-Gate candle providers require an explicit provenance_builder"
+            )
+
+        def provenance_builder(
+            requested_symbol: str,
+            timeframe: str,
+            limit: int,
+            timestamp: datetime,
+        ) -> DatasetProvenance:
+            return _gateio_provenance(
+                provider, requested_symbol, timeframe, limit, timestamp
+            )
+
     candles_by_timeframe: dict[str, list[Candle]] = {}
     manifests: dict[str, dict[str, object]] = {}
     for timeframe in _REQUIRED_TIMEFRAMES:
@@ -173,24 +220,18 @@ def run_live_baseline(
                 f"{len(completed)} < {applied.minimum_candles_per_timeframe}"
             )
         candles_by_timeframe[timeframe] = completed
-        pair = symbol.replace("/", "_").upper()
-        source_uri = (
-            "https://api.gateio.ws/api/v4/spot/candlesticks"
-            f"?currency_pair={pair}&interval={timeframe}&limit={applied.candle_limit}"
+        provenance = provenance_builder(
+            symbol, timeframe, applied.candle_limit, retrieved_at
         )
         dataset = build_versioned_dataset(
-            dataset_id=f"{symbol.replace('/', '-').lower()}-{timeframe}-gateio-baseline",
+            dataset_id=(
+                f"{symbol.replace('/', '-').lower()}-{timeframe}-baseline"
+            ),
             version=applied.dataset_version,
             symbol=symbol,
             timeframe=timeframe,
             candles=completed,
-            provenance=DatasetProvenance(
-                provider=getattr(provider, "name", provider.__class__.__name__),
-                provider_symbol=pair,
-                retrieved_at=retrieved_at,
-                source_uri=source_uri,
-                license_id="gateio-public-api-v4",
-            ),
+            provenance=provenance,
             split_adjusted=False,
             created_at=retrieved_at,
         )
@@ -201,18 +242,11 @@ def run_live_baseline(
     result_payload = _result_payload(result)
     strategy_payload = asdict(DEFAULT_RULES)
     config_payload = asdict(config)
-
-    identity_payload = {
-        "symbol": symbol,
-        "dataset_content_sha256": {
-            timeframe: manifest["content_sha256"]
-            for timeframe, manifest in sorted(manifests.items())
-        },
-        "strategy": strategy_payload,
-        "config": config_payload,
-        "cost_evidence": cost_evidence,
-        "result": result_payload,
+    content_hashes = {
+        timeframe: manifest["content_sha256"]
+        for timeframe, manifest in sorted(manifests.items())
     }
+
     report: dict[str, object] = {
         "run_type": "LIVE_PUBLIC_DATA_BASELINE",
         "mode": "RESEARCH_PAPER_ONLY",
@@ -221,9 +255,7 @@ def run_live_baseline(
         "code_revision": code_revision,
         "data_provider": getattr(provider, "name", provider.__class__.__name__),
         "dataset_manifests": manifests,
-        "dataset_bundle_fingerprint": _fingerprint(
-            identity_payload["dataset_content_sha256"]
-        ),
+        "dataset_bundle_fingerprint": _fingerprint(content_hashes),
         "strategy_rules": strategy_payload,
         "strategy_fingerprint": _fingerprint(strategy_payload),
         "backtest_config": config_payload,
@@ -231,11 +263,12 @@ def run_live_baseline(
         "cost_evidence": cost_evidence,
         "result": result_payload,
         "limitations": (
-            "Gate.io candles are a public OHLCV proxy selected for research; Storm is the execution venue.",
+            "Provider candles are research OHLCV evidence; Storm is the execution venue.",
             "This baseline uses current Storm protocol fee and VPI spread, not historical fee/spread series.",
             "Historical funding, calibrated slippage and market impact are not claimed by this baseline; Phase 48.8 stress qualification remains mandatory.",
             "A successful baseline run is not a live-trading authorization or a guarantee of future profitability.",
         ),
     }
-    report["evidence_fingerprint"] = _fingerprint(identity_payload)
+    # Seal every audit-relevant report field, including code revision and complete provenance.
+    report["evidence_fingerprint"] = _fingerprint(report)
     return _json_ready(report)

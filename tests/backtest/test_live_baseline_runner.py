@@ -3,9 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+import pytest
+
 from app.backtest.baseline_runner import BaselineRunPolicy, run_live_baseline
 from app.data.market_data import Candle, LivePrice, MarketDataRequest
 from app.data.providers.base import MarketDataProvider
+from app.data.versioned_dataset import DatasetProvenance
 from app.storm_costs import StormCostService, parse_market_cost_snapshot
 
 NOW = datetime(2026, 9, 13, 12, 0, tzinfo=timezone.utc)
@@ -21,9 +24,9 @@ class FakeProvider(MarketDataProvider):
     def get_candles(self, request: MarketDataRequest) -> list[Candle]:
         assert request.timeframe is not None
         step = timedelta(minutes=MINUTES[request.timeframe])
-        start = NOW - step * 60
+        start = NOW - step * 201
         rows = []
-        for index in range(61):
+        for index in range(202):
             timestamp = start + step * index
             price = Decimal("100") + Decimal(index) / Decimal("10")
             rows.append(
@@ -70,20 +73,51 @@ class FakeCostService(StormCostService):
         )
 
 
+def provenance_builder(source_variant: str = "a"):
+    def build(
+        symbol: str,
+        timeframe: str,
+        limit: int,
+        retrieved_at: datetime,
+    ) -> DatasetProvenance:
+        return DatasetProvenance(
+            provider="gateio-test",
+            provider_symbol=symbol.replace("/", "_").upper(),
+            retrieved_at=retrieved_at,
+            source_uri=(
+                f"https://data.example.test/{source_variant}/{timeframe}?limit={limit}"
+            ),
+            license_id="test-public-data-license-v1",
+        )
+
+    return build
+
+
+def baseline_kwargs() -> dict[str, object]:
+    return {
+        "symbol": "BTC/USDT",
+        "policy": BaselineRunPolicy(
+            candle_limit=202, minimum_candles_per_timeframe=200
+        ),
+        "candle_provider": FakeProvider(),
+        "provenance_builder": provenance_builder(),
+        "cost_service": FakeCostService(),
+        "observed_at": NOW,
+        "code_revision": "b" * 40,
+    }
+
+
 def test_live_baseline_seals_realistic_dataset_and_cost_evidence():
-    report = run_live_baseline(
-        symbol="BTC/USDT",
-        policy=BaselineRunPolicy(candle_limit=61, minimum_candles_per_timeframe=50),
-        candle_provider=FakeProvider(),
-        cost_service=FakeCostService(),
-        observed_at=NOW,
-        code_revision="a" * 40,
-    )
+    report = run_live_baseline(**baseline_kwargs())
 
     manifests = report["dataset_manifests"]
     assert isinstance(manifests, dict)
     assert set(manifests) == {"15m", "1h", "4h", "1d"}
-    assert all(item["candle_count"] == 60 for item in manifests.values())
+    assert all(item["candle_count"] == 201 for item in manifests.values())
+    assert all(
+        item["provenance"]["provider"] == "gateio-test"
+        for item in manifests.values()
+    )
     assert len(str(report["dataset_bundle_fingerprint"])) == 64
     assert len(str(report["evidence_fingerprint"])) == 64
 
@@ -100,15 +134,23 @@ def test_live_baseline_seals_realistic_dataset_and_cost_evidence():
     assert "NO_HISTORICAL_FUNDING_BACKFILL" in str(costs["funding_status"])
 
 
-def test_same_dataset_strategy_and_costs_have_same_evidence_fingerprint():
-    kwargs = {
-        "symbol": "BTC/USDT",
-        "policy": BaselineRunPolicy(candle_limit=61, minimum_candles_per_timeframe=50),
-        "candle_provider": FakeProvider(),
-        "cost_service": FakeCostService(),
-        "observed_at": NOW,
-        "code_revision": "b" * 40,
-    }
+def test_baseline_policy_requires_enough_history_for_ema200():
+    with pytest.raises(ValueError, match="at least 200"):
+        BaselineRunPolicy(candle_limit=1000, minimum_candles_per_timeframe=199)
+
+    with pytest.raises(ValueError, match="must exceed"):
+        BaselineRunPolicy(candle_limit=200, minimum_candles_per_timeframe=200)
+
+
+def test_non_gate_provider_requires_explicit_provenance():
+    kwargs = baseline_kwargs()
+    kwargs.pop("provenance_builder")
+    with pytest.raises(ValueError, match="explicit provenance_builder"):
+        run_live_baseline(**kwargs)
+
+
+def test_same_inputs_have_same_evidence_fingerprint():
+    kwargs = baseline_kwargs()
     first = run_live_baseline(**kwargs)
     second = run_live_baseline(**kwargs)
 
@@ -116,3 +158,20 @@ def test_same_dataset_strategy_and_costs_have_same_evidence_fingerprint():
     assert first["strategy_fingerprint"] == second["strategy_fingerprint"]
     assert first["config_fingerprint"] == second["config_fingerprint"]
     assert first["evidence_fingerprint"] == second["evidence_fingerprint"]
+
+
+def test_audit_metadata_is_sealed_by_evidence_fingerprint():
+    base = baseline_kwargs()
+    first = run_live_baseline(**base)
+
+    changed_revision = dict(base)
+    changed_revision["code_revision"] = "c" * 40
+    second = run_live_baseline(**changed_revision)
+
+    changed_provenance = dict(base)
+    changed_provenance["provenance_builder"] = provenance_builder("b")
+    third = run_live_baseline(**changed_provenance)
+
+    assert first["dataset_bundle_fingerprint"] == third["dataset_bundle_fingerprint"]
+    assert first["evidence_fingerprint"] != second["evidence_fingerprint"]
+    assert first["evidence_fingerprint"] != third["evidence_fingerprint"]
