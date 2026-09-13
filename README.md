@@ -43,7 +43,7 @@ remain separate operational gates.
 
 See `docs/phases/PHASE_45_PERSISTENT_SHADOW_OPERATION_EVIDENCE_ACCUMULATION.md`.
 
-**Phase 46 — Full System Qualification & Failure Injection: IMPLEMENTATION IN REVIEW**
+**Phase 46 — Full System Qualification & Failure Injection: CLOSED, MERGED AND CI VALIDATED**
 
 Phase 46 adds a controlled nine-case qualification matrix across market-data
 failover/fail-closed behavior, atomic rollback, live activation and circuit
