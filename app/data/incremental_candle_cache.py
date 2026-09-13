@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from threading import Lock
 from time import perf_counter
+from typing import Callable
 
 from app.data.historical_store import CandleHistoryStore
+from app.data.candle_builder import timeframe_seconds
 from app.data.market_data import Candle
 from app.data.providers.http import ProviderError
 from app.universe.market_data_resolution import (
@@ -34,12 +37,14 @@ class IncrementalCandleService:
         store: CandleHistoryStore,
         *,
         refresh_tail: int = 2,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         if refresh_tail < 1:
             raise ValueError("refresh_tail must be positive")
         self.resolver = resolver
         self.store = store
         self.refresh_tail = refresh_tail
+        self.now = now or (lambda: datetime.now(timezone.utc))
         self._locks: dict[tuple[str, str], Lock] = {}
         self._locks_guard = Lock()
 
@@ -62,6 +67,25 @@ class IncrementalCandleService:
             cached = self.store.load(
                 resolution.canonical_symbol, timeframe, limit=limit
             )
+            if cached and len(cached) >= minimum_history:
+                interval = timeframe_seconds(timeframe)
+                next_close = cached[-1].timestamp.timestamp() + (2 * interval)
+                if self.now().timestamp() < next_close:
+                    configured = resolution.market_data_source or (
+                        "gateio"
+                        if resolution.source.value == "gateio"
+                        else "yahoo"
+                    )
+                    return IncrementalCandleBatch(
+                        candles=tuple(cached),
+                        configured_provider=configured,
+                        actual_provider="cache",
+                        provider_symbol=resolution.provider_symbol or "",
+                        fallback_used=False,
+                        cache_candles=len(cached),
+                        downloaded_candles=0,
+                        fetch_seconds=0.0,
+                    )
             missing = max(0, minimum_history - len(cached))
             fetch_limit = (
                 limit
