@@ -271,4 +271,4 @@ def run_live_baseline(
     }
     # Seal every audit-relevant report field, including code revision and complete provenance.
     report["evidence_fingerprint"] = _fingerprint(report)
-    return _json_ready(report)
+    return {str(key): _json_ready(value) for key, value in report.items()}
