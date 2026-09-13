@@ -1,0 +1,168 @@
+name: One-Year Locked Baseline
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/data/historical_backfill.py"
+      - "app/data/locked_dataset_merge.py"
+      - "app/backtest/engine.py"
+      - "app/backtest/incremental_snapshots.py"
+      - "app/backtest/locked_baseline_runner.py"
+      - "scripts/backtest/backfill_historical_dataset.py"
+      - "scripts/backtest/merge_locked_dataset_shards.py"
+      - "scripts/backtest/run_locked_historical_baseline.py"
+      - "tests/data_platform/test_locked_dataset_merge.py"
+      - "tests/backtest/test_locked_historical_baseline.py"
+      - ".github/workflows/one-year-locked-baseline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Locked assembly and baseline regression tests
+        run: |
+          python -m pytest -q \
+            tests/data_platform/test_locked_dataset_merge.py \
+            tests/backtest/test_locked_historical_baseline.py
+
+  backfill-shard:
+    needs: unit-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - shard: shard-1
+            start: 2025-09-13T00:00:00Z
+            end: 2025-12-13T00:00:00Z
+          - shard: shard-2
+            start: 2025-12-13T00:00:00Z
+            end: 2026-03-13T00:00:00Z
+          - shard: shard-3
+            start: 2026-03-13T00:00:00Z
+            end: 2026-06-13T00:00:00Z
+          - shard: shard-4
+            start: 2026-06-13T00:00:00Z
+            end: 2026-09-13T00:00:00Z
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Backfill and seal ${{ matrix.shard }}
+        run: |
+          python scripts/backtest/backfill_historical_dataset.py \
+            --symbol BTC/USDT \
+            --start "${{ matrix.start }}" \
+            --end "${{ matrix.end }}" \
+            --dataset-version 1.0.0 \
+            --chunk-points 900 \
+            --max-retries 4 \
+            --retry-backoff-seconds 2 \
+            --git-revision "$GITHUB_SHA" \
+            --output-dir "artifacts/backfill/${{ matrix.shard }}"
+      - name: Upload verified shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-usdt-1y-${{ matrix.shard }}-${{ github.sha }}
+          path: artifacts/backfill/${{ matrix.shard }}
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble-annual-lock:
+    needs: backfill-shard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Download all verified shards
+        uses: actions/download-artifact@v4
+        with:
+          pattern: btc-usdt-1y-shard-*-${{ github.sha }}
+          path: artifacts/shards
+          merge-multiple: false
+      - name: Assemble and re-verify annual lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          shard_args=()
+          for shard_dir in artifacts/shards/btc-usdt-1y-shard-*-${GITHUB_SHA}; do
+            shard_args+=(--shard-dir "$shard_dir")
+          done
+          if [ "${#shard_args[@]}" -ne 8 ]; then
+            echo "Expected four shard directories; got ${#shard_args[@]} CLI elements" >&2
+            exit 1
+          fi
+          python scripts/backtest/merge_locked_dataset_shards.py \
+            "${shard_args[@]}" \
+            --dataset-version 1.0.0 \
+            --git-revision "$GITHUB_SHA" \
+            --output-dir artifacts/annual-lock
+      - name: Upload annual locked dataset
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-usdt-1y-locked-${{ github.sha }}
+          path: artifacts/annual-lock
+          if-no-files-found: error
+          retention-days: 30
+
+  controlled-baseline:
+    needs: assemble-annual-lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Download annual locked dataset
+        uses: actions/download-artifact@v4
+        with:
+          name: btc-usdt-1y-locked-${{ github.sha }}
+          path: artifacts/annual-lock
+      - name: Run controlled locked baseline with bounded retries
+        shell: bash
+        run: |
+          set -u
+          for attempt in 1 2 3; do
+            if python scripts/backtest/run_locked_historical_baseline.py \
+              --dataset-dir artifacts/annual-lock \
+              --git-revision "$GITHUB_SHA" \
+              --output artifacts/baseline/btc-usdt-1y-baseline.json; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+      - name: Upload baseline evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: btc-usdt-1y-baseline-${{ github.sha }}
+          path: artifacts/baseline/btc-usdt-1y-baseline.json
+          if-no-files-found: error
+          retention-days: 30
