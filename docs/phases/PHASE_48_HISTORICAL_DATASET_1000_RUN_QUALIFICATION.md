@@ -1,6 +1,6 @@
-# Phase 48 — Historical Dataset & 1000-Run Backtest Qualification
+# Phase 48.1 — Dataset Versioning & Qualification Foundation
 
-Status: IMPLEMENTATION IN REVIEW
+Status: IMPLEMENTATION IN REVIEW\n\nPhase 48 is split into independently reviewed increments: 48.1 dataset versioning and statistical contracts; 48.2 locked OOS and walk-forward; 48.3 reproducible 1,000-run matrix; 48.4 shuffling/bootstrap/Monte Carlo; 48.5 synthetic paths/noise/data robustness; 48.6 parameter sensitivity/stability; 48.7 regime/time robustness; 48.8 execution-cost and market-impact stress; 48.9 final statistical report and qualification.
 
 ## Objective
 
