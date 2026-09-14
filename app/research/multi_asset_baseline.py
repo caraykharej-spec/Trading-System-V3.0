@@ -53,6 +53,13 @@ def _decimal_or_none(value: object, field: str) -> Decimal | None:
         raise ValueError(f"baseline result {field} invalid") from exc
 
 
+def _asset_int(asset: Mapping[str, object], key: str) -> int:
+    value = asset.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"canonical asset {key} invalid")
+    return value
+
+
 def _canonical_asset(report: Mapping[str, Any]) -> dict[str, object]:
     if report.get("run_type") != _REQUIRED_RUN_TYPE:
         raise ValueError("unexpected baseline run_type")
@@ -151,8 +158,8 @@ def aggregate_multi_asset_baselines(
     if len(set(evidence_fingerprints)) != len(evidence_fingerprints):
         raise ValueError("duplicate evidence fingerprint across different assets")
 
-    total_trade_count = sum(int(item["trade_count"]) for item in assets)
-    total_rejected_signals = sum(int(item["rejected_signals"]) for item in assets)
+    total_trade_count = sum(_asset_int(item, "trade_count") for item in assets)
+    total_rejected_signals = sum(_asset_int(item, "rejected_signals") for item in assets)
     profitable_asset_count = sum(1 for item in assets if bool(item["profitable"]))
 
     aggregate: dict[str, object] = {
