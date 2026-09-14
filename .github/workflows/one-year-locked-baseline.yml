@@ -23,6 +23,11 @@ concurrency:
   group: one-year-locked-baseline-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+env:
+  LOCKED_SYMBOL: BTC/USDT
+  LOCKED_FINGERPRINT: 9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f
+  LOCKED_CACHE_KEY: research-lock-btc-usdt-9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f
+
 jobs:
   unit-validation:
     runs-on: ubuntu-latest
@@ -42,8 +47,47 @@ jobs:
             tests/data_platform/test_locked_dataset_merge.py \
             tests/backtest/test_locked_historical_baseline.py
 
-  archive-availability:
+  research-cache:
     needs: unit-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      cache_hit: ${{ steps.cache.outputs.cache-hit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Restore exact default-branch research cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: artifacts/research-lock
+          key: ${{ env.LOCKED_CACHE_KEY }}
+      - name: Verify restored cache with canonical locked-dataset loader
+        if: steps.cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from app.data.historical_backfill import load_locked_dataset
+          bundle = load_locked_dataset("artifacts/research-lock")
+          if bundle.manifest.get("symbol") != os.environ["LOCKED_SYMBOL"]:
+              raise SystemExit("research cache symbol mismatch")
+          if bundle.manifest.get("dataset_bundle_fingerprint") != os.environ["LOCKED_FINGERPRINT"]:
+              raise SystemExit("research cache fingerprint mismatch")
+          print("ONE_YEAR_RESEARCH_CACHE_VERIFIED")
+          PY
+      - name: Record cache miss fallback
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: echo "Exact research cache unavailable; enabling official Gate reconstruction fallback."
+
+  archive-availability:
+    needs: [unit-validation, research-cache]
+    if: needs.research-cache.outputs.cache_hit != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -181,7 +225,8 @@ jobs:
           retention-days: 30
 
   recent-rest-shard:
-    needs: unit-validation
+    needs: [unit-validation, research-cache]
+    if: needs.research-cache.outputs.cache_hit != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -212,7 +257,8 @@ jobs:
           retention-days: 30
 
   assemble-research-lock:
-    needs: [archive-shard, recent-rest-shard]
+    needs: [research-cache, archive-shard, recent-rest-shard]
+    if: ${{ always() && needs.research-cache.result == 'success' && needs.research-cache.outputs.cache_hit != 'true' && needs.archive-shard.result == 'success' && needs.recent-rest-shard.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -254,7 +300,8 @@ jobs:
           retention-days: 30
 
   controlled-baseline:
-    needs: assemble-research-lock
+    needs: [research-cache, assemble-research-lock]
+    if: ${{ always() && needs.research-cache.result == 'success' && (needs.research-cache.outputs.cache_hit == 'true' || needs.assemble-research-lock.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -264,11 +311,34 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Download verified research lock
+      - name: Restore verified research lock from immutable Actions cache
+        if: needs.research-cache.outputs.cache_hit == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: artifacts/research-lock
+          key: ${{ env.LOCKED_CACHE_KEY }}
+          fail-on-cache-miss: true
+      - name: Download freshly reconstructed verified research lock
+        if: needs.research-cache.outputs.cache_hit != 'true'
         uses: actions/download-artifact@v4
         with:
           name: btc-usdt-warmup-plus-1y-locked-${{ github.sha }}
           path: artifacts/research-lock
+      - name: Re-verify exact cached research lock before evaluation
+        if: needs.research-cache.outputs.cache_hit == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from app.data.historical_backfill import load_locked_dataset
+          bundle = load_locked_dataset("artifacts/research-lock")
+          if bundle.manifest.get("symbol") != os.environ["LOCKED_SYMBOL"]:
+              raise SystemExit("controlled baseline cache symbol mismatch")
+          if bundle.manifest.get("dataset_bundle_fingerprint") != os.environ["LOCKED_FINGERPRINT"]:
+              raise SystemExit("controlled baseline cache fingerprint mismatch")
+          print("CONTROLLED_BASELINE_CACHE_VERIFIED")
+          PY
       - name: Run controlled one-year evaluation with bounded retries
         shell: bash
         run: |
