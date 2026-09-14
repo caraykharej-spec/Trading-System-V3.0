@@ -1,0 +1,333 @@
+name: Multi-Asset Locked Baseline
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "app/backtest/**"
+      - "app/data/**"
+      - "app/market/**"
+      - "app/research/**"
+      - "app/risk/**"
+      - "app/storm_costs/**"
+      - "app/strategy/**"
+      - "scripts/backtest/**"
+      - "scripts/research/**"
+      - "tests/backtest/**"
+      - "tests/data_platform/**"
+      - "tests/research/**"
+      - ".github/workflows/multi-asset-locked-baseline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: multi-asset-locked-baseline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Validate multi-asset aggregate contract
+        run: python -m pytest -q tests/research/test_multi_asset_baseline.py
+
+  asset-eligibility:
+    needs: unit-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      matrix:
+        asset:
+          - symbol: ETH/USDT
+            slug: eth-usdt
+          - symbol: SOL/USDT
+            slug: sol-usdt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Require all Gate archive months for ${{ matrix.asset.symbol }}
+        run: |
+          python scripts/backtest/check_gate_deals_archive_availability.py \
+            --symbol "${{ matrix.asset.symbol }}" \
+            --month 202502 \
+            --month 202503 \
+            --month 202504 \
+            --month 202505 \
+            --month 202506 \
+            --month 202507 \
+            --month 202508 \
+            --month 202509 \
+            --month 202510 \
+            --month 202511 \
+            --month 202512 \
+            --month 202601 \
+            --month 202602 \
+            --month 202603 \
+            --month 202604 \
+            --month 202605 \
+            --month 202606
+      - name: Require current Storm fee and spread evidence for ${{ matrix.asset.symbol }}
+        shell: bash
+        run: |
+          set -u
+          for attempt in 1 2 3; do
+            if python scripts/research/validate_asset_eligibility.py \
+              --symbol "${{ matrix.asset.symbol }}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  archive-shard:
+    needs: asset-eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        asset:
+          - symbol: ETH/USDT
+            slug: eth-usdt
+          - symbol: SOL/USDT
+            slug: sol-usdt
+        shard:
+          - {name: archive-202502, month: "202502", start: 2025-02-25T00:00:00Z, end: 2025-03-01T00:00:00Z}
+          - {name: archive-202503, month: "202503", start: 2025-03-01T00:00:00Z, end: 2025-04-01T00:00:00Z}
+          - {name: archive-202504, month: "202504", start: 2025-04-01T00:00:00Z, end: 2025-05-01T00:00:00Z}
+          - {name: archive-202505, month: "202505", start: 2025-05-01T00:00:00Z, end: 2025-06-01T00:00:00Z}
+          - {name: archive-202506, month: "202506", start: 2025-06-01T00:00:00Z, end: 2025-07-01T00:00:00Z}
+          - {name: archive-202507, month: "202507", start: 2025-07-01T00:00:00Z, end: 2025-08-01T00:00:00Z}
+          - {name: archive-202508, month: "202508", start: 2025-08-01T00:00:00Z, end: 2025-09-01T00:00:00Z}
+          - {name: archive-202509, month: "202509", start: 2025-09-01T00:00:00Z, end: 2025-10-01T00:00:00Z}
+          - {name: archive-202510, month: "202510", start: 2025-10-01T00:00:00Z, end: 2025-11-01T00:00:00Z}
+          - {name: archive-202511, month: "202511", start: 2025-11-01T00:00:00Z, end: 2025-12-01T00:00:00Z}
+          - {name: archive-202512, month: "202512", start: 2025-12-01T00:00:00Z, end: 2026-01-01T00:00:00Z}
+          - {name: archive-202601, month: "202601", start: 2026-01-01T00:00:00Z, end: 2026-02-01T00:00:00Z}
+          - {name: archive-202602, month: "202602", start: 2026-02-01T00:00:00Z, end: 2026-03-01T00:00:00Z}
+          - {name: archive-202603, month: "202603", start: 2026-03-01T00:00:00Z, end: 2026-04-01T00:00:00Z}
+          - {name: archive-202604, month: "202604", start: 2026-04-01T00:00:00Z, end: 2026-05-01T00:00:00Z}
+          - {name: archive-202605, month: "202605", start: 2026-05-01T00:00:00Z, end: 2026-06-01T00:00:00Z}
+          - {name: archive-202606, month: "202606", start: 2026-06-01T00:00:00Z, end: 2026-06-13T00:00:00Z}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Reconstruct ${{ matrix.asset.symbol }} ${{ matrix.shard.name }}
+        run: |
+          python scripts/backtest/backfill_gate_deals_archive.py \
+            --symbol "${{ matrix.asset.symbol }}" \
+            --archive-month "${{ matrix.shard.month }}" \
+            --start "${{ matrix.shard.start }}" \
+            --end "${{ matrix.shard.end }}" \
+            --dataset-version 1.0.0 \
+            --max-retries 3 \
+            --retry-backoff-seconds 2 \
+            --timeout-seconds 180 \
+            --git-revision "$GITHUB_SHA" \
+            --output-dir "artifacts/backfill/${{ matrix.asset.slug }}/${{ matrix.shard.name }}"
+      - name: Upload verified archive shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-asset-${{ matrix.asset.slug }}-${{ matrix.shard.name }}-${{ github.sha }}
+          path: artifacts/backfill/${{ matrix.asset.slug }}/${{ matrix.shard.name }}
+          if-no-files-found: error
+          retention-days: 30
+
+  recent-rest-shard:
+    needs: asset-eligibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        asset:
+          - symbol: ETH/USDT
+            slug: eth-usdt
+          - symbol: SOL/USDT
+            slug: sol-usdt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Backfill recent Gate REST shard for ${{ matrix.asset.symbol }}
+        run: |
+          python scripts/backtest/backfill_historical_dataset.py \
+            --symbol "${{ matrix.asset.symbol }}" \
+            --start 2026-06-13T00:00:00Z \
+            --end 2026-09-13T00:00:00Z \
+            --dataset-version 1.0.0 \
+            --chunk-points 900 \
+            --max-retries 4 \
+            --retry-backoff-seconds 2 \
+            --git-revision "$GITHUB_SHA" \
+            --output-dir "artifacts/backfill/${{ matrix.asset.slug }}/rest-20260613-20260913"
+      - name: Upload verified REST shard
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-asset-${{ matrix.asset.slug }}-rest-20260613-20260913-${{ github.sha }}
+          path: artifacts/backfill/${{ matrix.asset.slug }}/rest-20260613-20260913
+          if-no-files-found: error
+          retention-days: 30
+
+  assemble-research-lock:
+    needs: [archive-shard, recent-rest-shard]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        asset:
+          - symbol: ETH/USDT
+            slug: eth-usdt
+          - symbol: SOL/USDT
+            slug: sol-usdt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Download verified shards for ${{ matrix.asset.symbol }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: multi-asset-${{ matrix.asset.slug }}-*-${{ github.sha }}
+          path: artifacts/shards
+          merge-multiple: false
+      - name: Assemble and re-verify ${{ matrix.asset.symbol }} research lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          shard_args=()
+          for shard_dir in artifacts/shards/multi-asset-${{ matrix.asset.slug }}-*-${GITHUB_SHA}; do
+            shard_args+=(--shard-dir "$shard_dir")
+          done
+          if [ "${#shard_args[@]}" -ne 36 ]; then
+            echo "Expected eighteen shard directories; got ${#shard_args[@]} CLI elements" >&2
+            exit 1
+          fi
+          python scripts/backtest/merge_locked_dataset_shards.py \
+            "${shard_args[@]}" \
+            --dataset-version 1.0.0 \
+            --git-revision "$GITHUB_SHA" \
+            --output-dir "artifacts/research-lock/${{ matrix.asset.slug }}"
+      - name: Upload verified research lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-asset-${{ matrix.asset.slug }}-locked-${{ github.sha }}
+          path: artifacts/research-lock/${{ matrix.asset.slug }}
+          if-no-files-found: error
+          retention-days: 30
+
+  controlled-baseline:
+    needs: assemble-research-lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        asset:
+          - symbol: ETH/USDT
+            slug: eth-usdt
+          - symbol: SOL/USDT
+            slug: sol-usdt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Download verified ${{ matrix.asset.symbol }} research lock
+        uses: actions/download-artifact@v4
+        with:
+          name: multi-asset-${{ matrix.asset.slug }}-locked-${{ github.sha }}
+          path: artifacts/research-lock/${{ matrix.asset.slug }}
+      - name: Run controlled one-year evaluation for ${{ matrix.asset.symbol }}
+        shell: bash
+        run: |
+          set -u
+          for attempt in 1 2 3; do
+            if python scripts/backtest/run_locked_historical_baseline.py \
+              --dataset-dir "artifacts/research-lock/${{ matrix.asset.slug }}" \
+              --evaluation-start 2025-09-13T00:00:00Z \
+              --git-revision "$GITHUB_SHA" \
+              --output "artifacts/baseline/${{ matrix.asset.slug }}-1y-evaluation-baseline.json"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+      - name: Upload baseline evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-asset-1y-baseline-${{ matrix.asset.slug }}-${{ github.sha }}
+          path: artifacts/baseline/${{ matrix.asset.slug }}-1y-evaluation-baseline.json
+          if-no-files-found: error
+          retention-days: 30
+
+  aggregate-evidence:
+    needs: controlled-baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - name: Download all multi-asset baseline evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: multi-asset-1y-baseline-*-${{ github.sha }}
+          path: artifacts/baselines
+          merge-multiple: false
+      - name: Validate comparability and build aggregate evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline_args=()
+          while IFS= read -r baseline; do
+            baseline_args+=(--baseline "$baseline")
+          done < <(find artifacts/baselines -type f -name '*-1y-evaluation-baseline.json' | sort)
+          if [ "${#baseline_args[@]}" -ne 4 ]; then
+            echo "Expected two baseline files; got ${#baseline_args[@]} CLI elements" >&2
+            exit 1
+          fi
+          python scripts/research/aggregate_multi_asset_baselines.py \
+            "${baseline_args[@]}" \
+            --output artifacts/aggregate/eth-sol-1y-baseline-aggregate.json
+      - name: Upload aggregate research evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: multi-asset-eth-sol-1y-aggregate-${{ github.sha }}
+          path: artifacts/aggregate/eth-sol-1y-baseline-aggregate.json
+          if-no-files-found: error
+          retention-days: 30

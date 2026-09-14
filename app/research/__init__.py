@@ -20,6 +20,7 @@ from .models import (
     SearchMethod,
     TrialResult,
 )
+from .multi_asset_baseline import aggregate_multi_asset_baselines
 from .parameter_space import (
     ResearchSpaceTooLargeError,
     StrategyRuleParameterPolicy,
@@ -64,6 +65,7 @@ __all__ = [
     "StrategyRuleParameterPolicy",
     "TrialResult",
     "WalkForwardResearchEvaluator",
+    "aggregate_multi_asset_baselines",
     "analyze_parameter_sensitivity",
     "enumerate_parameter_sets",
     "fingerprint_candles",
