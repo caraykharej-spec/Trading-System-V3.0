@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "mode": "RESEARCH_PAPER_ONLY",
+  "datasets": {
+    "btc-usdt-one-year-v1": {
+      "symbol": "BTC/USDT",
+      "dataset_bundle_fingerprint": "9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f",
+      "manifest_fingerprint": "f3b1d60625a6116f10ee3606eb5680bdb938f1e7ebb362c6becfc134c186dcec",
+      "object_prefix": "gold/locked-source-snapshots/v1/btc-usdt/9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f",
+      "actions_cache_key": "research-lock-btc-usdt-9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f",
+      "research_start": "2025-02-25T00:00:00Z",
+      "evaluation_start": "2025-09-13T00:00:00Z",
+      "evaluation_end_exclusive": "2026-09-13T00:00:00Z",
+      "timeframes": ["15m", "1h", "4h", "1d"],
+      "source": "GATE_OFFICIAL_ARCHIVE_PLUS_REST",
+      "storage_class": "GOLD_LOCKED_SOURCE_SNAPSHOT",
+      "status": "ACTIVE_LOCKED"
+    }
+  }
+}
