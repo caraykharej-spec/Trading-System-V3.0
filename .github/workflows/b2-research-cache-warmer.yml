@@ -40,6 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p artifacts
           python scripts/backtest/restore_locked_source_snapshot_from_b2.py \
             --symbol "$LOCKED_SYMBOL" \
             --dataset-fingerprint "$LOCKED_FINGERPRINT" \
