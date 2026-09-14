@@ -3,15 +3,22 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import sys
 import tempfile
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-import scripts.backtest.sync_gate_universe_history_to_b2 as core
-from app.data.market_data import Candle
-from app.data.providers.http import ProviderError
+# `python scripts/backtest/<file>.py` puts scripts/backtest, not the repository
+# root, on sys.path.  Keep the documented direct entrypoint reliable while the
+# same module remains importable by tests and `python -m`.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import scripts.backtest.sync_gate_universe_history_to_b2 as core  # noqa: E402
+from app.data.market_data import Candle  # noqa: E402
+from app.data.providers.http import ProviderError  # noqa: E402
 
 
 _CORE_SYNC_ROUTE = core.sync_route
@@ -164,9 +171,7 @@ def route_missing_5m_inside_observed_span(
 
     if first is None or last is None or total_rows <= 0:
         return 0
-    expected = (
-        int((last - first).total_seconds()) // core._SECONDS["5m"] + 1
-    )
+    expected = int((last - first).total_seconds()) // core._SECONDS["5m"] + 1
     return max(0, expected - total_rows)
 
 
