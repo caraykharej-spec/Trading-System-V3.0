@@ -1,0 +1,90 @@
+name: B2 Publish Locked Dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "GitHub Actions run ID containing the verified locked dataset artifact"
+        required: true
+        type: string
+      source_artifact_name:
+        description: "Exact locked dataset artifact name"
+        required: true
+        type: string
+      source_revision:
+        description: "Source dataset Git revision recorded in the B2 research fingerprint"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: b2-gold-publish-${{ inputs.source_artifact_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      AWS_DEFAULT_REGION: eu-central-003
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate trusted inputs and environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.source_run_id }}" =~ ^[0-9]+$ ]]
+          [[ "${{ inputs.source_revision }}" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "${{ inputs.source_artifact_name }}" =~ ^[A-Za-z0-9._-]+$ ]]
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME AWS_DEFAULT_REGION; do
+            if [ -z "${!name:-}" ]; then
+              echo "Required environment variable missing: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install research-data dependencies
+        run: python -m pip install -e ".[research-data]"
+
+      - name: Download exact verified locked dataset artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-lock
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+
+      - name: Build, verify, publish, and read-back GOLD bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/backtest/publish_locked_dataset_to_b2.py \
+            --dataset-dir artifacts/source-lock \
+            --bundle-dir artifacts/b2-gold-bundle \
+            --git-revision "${{ inputs.source_revision }}" \
+            | tee artifacts/b2-publish-result.json
+
+      - name: Upload non-secret publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2-gold-publication-evidence-${{ github.run_id }}
+          path: |
+            artifacts/b2-publish-result.json
+            artifacts/b2-gold-bundle/manifest.json
+            artifacts/b2-gold-bundle/checksums.json
+          if-no-files-found: warn
+          retention-days: 30
