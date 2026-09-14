@@ -12,6 +12,10 @@ from app.data.historical_backfill import load_locked_dataset
 from app.storm_costs import StormCostService
 from app.strategy.rules import DEFAULT_RULES
 
+from .counterfactual_attribution import (
+    build_counterfactual_gate_attribution,
+    validate_counterfactual_gate_attribution,
+)
 from .diagnostics import BacktestDiagnosticEvent, SignalAttritionDiagnostics
 from .engine import BacktestEngine
 from .models import BacktestConfig, BacktestResult
@@ -231,6 +235,18 @@ def run_locked_historical_baseline(
         trades=result.trades,
     )
 
+    counterfactual_payload = build_counterfactual_gate_attribution(
+        diagnostic_events,
+        result.trades,
+    )
+    validate_counterfactual_gate_attribution(
+        counterfactual_payload,
+        expected_ready=int(diagnostic_payload["ready_for_risk_review"]),
+        expected_entry_rejections=int(diagnostic_payload["entry_rejections"]),
+        expected_trades=len(result.trades),
+        trades=result.trades,
+    )
+
     result_payload = _result_payload(result)
     strategy_payload = asdict(DEFAULT_RULES)
     config_payload = asdict(config)
@@ -261,6 +277,7 @@ def run_locked_historical_baseline(
         "cost_evidence": cost_evidence,
         "signal_attrition": diagnostic_payload,
         "regime_attribution": regime_payload,
+        "counterfactual_gate_attribution": counterfactual_payload,
         "result": result_payload,
         "limitations": (
             "Gate.io candles are research OHLCV evidence; Storm is the execution venue.",
@@ -268,6 +285,8 @@ def run_locked_historical_baseline(
             "Signal attrition is observational evidence from the unchanged baseline execution path; it does not alter strategy thresholds or risk rules.",
             "Regime attribution uses only the latest fully completed 1D candle at each event/trade entry time and does not use future candles.",
             "Regime performance is descriptive attribution over the observed sample; it is not a strategy optimization or qualification result.",
+            "Counterfactual gate attribution distinguishes exact one-gate release counts from candidate-only sensitivity and does not invent PnL for unexecuted paths.",
+            "Direction performance uses only actually executed frozen-baseline trades and is attribution, not a causal simulation of disabling LONG or SHORT.",
             "This baseline uses current Storm protocol fee and VPI spread, not historical fee/spread series.",
             "Historical funding, calibrated slippage and market impact are not claimed by this baseline; Phase 48.8 stress qualification remains mandatory.",
             "A successful baseline run is not a live-trading authorization or a guarantee of future profitability.",
