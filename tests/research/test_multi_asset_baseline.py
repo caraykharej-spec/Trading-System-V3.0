@@ -121,6 +121,15 @@ def test_rejects_insufficient_warmup() -> None:
         aggregate_multi_asset_baselines(reports)
 
 
+def test_rejects_missing_total_return() -> None:
+    reports = _reports()
+    result = reports[0]["result"]
+    assert isinstance(result, dict)
+    result["total_return_percent"] = None
+    with pytest.raises(ValueError, match="total_return_percent missing or invalid"):
+        aggregate_multi_asset_baselines(reports)
+
+
 def test_does_not_require_equal_cost_config_fingerprints() -> None:
     reports = deepcopy(_reports())
     reports[0]["config_fingerprint"] = "eth-cost-config"
