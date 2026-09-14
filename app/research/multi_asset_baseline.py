@@ -86,6 +86,8 @@ def _canonical_asset(report: Mapping[str, Any]) -> dict[str, object]:
         raise ValueError("baseline result rejected_signals invalid")
 
     total_return = _decimal_or_none(result.get("total_return_percent"), "total_return_percent")
+    if total_return is None:
+        raise ValueError("baseline result total_return_percent missing or invalid")
     max_drawdown = _decimal_or_none(
         result.get("max_drawdown_percent"), "max_drawdown_percent"
     )
@@ -115,11 +117,11 @@ def _canonical_asset(report: Mapping[str, Any]) -> dict[str, object]:
         "warmup_completed_daily_candles": warmup,
         "trade_count": trade_count,
         "rejected_signals": rejected_signals,
-        "total_return_percent": None if total_return is None else str(total_return),
+        "total_return_percent": str(total_return),
         "max_drawdown_percent": None if max_drawdown is None else str(max_drawdown),
         "win_rate_percent": None if win_rate is None else str(win_rate),
         "profit_factor": None if profit_factor is None else str(profit_factor),
-        "profitable": bool(total_return is not None and total_return > 0),
+        "profitable": total_return > 0,
     }
 
 
