@@ -5,6 +5,8 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.backtest.diagnostics import SignalAttritionDiagnostics
 from app.backtest.engine import BacktestEngine
 from app.backtest.models import BacktestConfig
@@ -136,3 +138,23 @@ def test_entry_risk_rejection_is_visible_without_changing_legacy_rejected_count(
     assert payload["legacy_rejected_signals_equivalent"] == 0
     assert result.rejected_signals == 0
     assert len(result.trades) == 0
+
+
+def test_observer_failure_is_not_reclassified_as_strategy_rejection() -> None:
+    engine = BacktestEngine()
+    ready = _signal(StrategyState.READY_FOR_RISK_REVIEW)
+
+    def failing_observer(event: object) -> None:
+        del event
+        raise ValueError("observer failed")
+
+    with (
+        patch.object(engine, "_snapshots_at", return_value=_snapshots()),
+        patch("app.backtest.engine.evaluate_strategy", return_value=ready),
+    ):
+        with pytest.raises(ValueError, match="observer failed"):
+            engine.run(
+                "TEST",
+                _source(2),
+                diagnostic_observer=failing_observer,
+            )
