@@ -1,0 +1,24 @@
+name: Gate Historical Archive Probe
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "scripts/backtest/probe_gate_historical_archive.py"
+      - ".github/workflows/gate-historical-archive-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Download and inspect official monthly archive
+        run: python scripts/backtest/probe_gate_historical_archive.py

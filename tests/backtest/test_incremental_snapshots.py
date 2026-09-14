@@ -125,6 +125,21 @@ class _ReferenceBacktestEngine(BacktestEngine):
         return self._snapshots_at_reference(symbol, candles, decision_time)
 
 
+class _CountingWarmupEngine(BacktestEngine):
+    def __init__(self) -> None:
+        super().__init__()
+        self.snapshot_calls = 0
+
+    def _snapshots_at(
+        self,
+        symbol: str,
+        candles: dict[str, list[Candle]],
+        decision_time: datetime,
+    ):  # type: ignore[no-untyped-def]
+        self.snapshot_calls += 1
+        return None
+
+
 def _trade_signature(result):  # type: ignore[no-untyped-def]
     return [
         (
@@ -169,6 +184,27 @@ def test_backtest_result_matches_reference_snapshot_path() -> None:
     assert fast.total_return_percent == reference.total_return_percent
     assert fast.max_concurrent_positions == reference.max_concurrent_positions
     assert _trade_signature(fast) == _trade_signature(reference)
+
+
+def test_evaluation_start_advances_warmup_snapshots_without_measured_rejections() -> None:
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    candles = {
+        timeframe: _series(timeframe, 220, start)
+        for timeframe in _MINUTES
+    }
+    evaluation_start = candles["15m"][100].timestamp
+    engine = _CountingWarmupEngine()
+
+    result = engine.run(
+        "BTC/USDT",
+        candles,
+        evaluation_start=evaluation_start,
+    )
+
+    assert engine.snapshot_calls == len(candles["15m"])
+    assert result.rejected_signals == 0
+    assert result.trades == ()
+    assert result.final_equity == result.initial_equity
 
 
 def test_cursor_can_rewind_without_reusing_future_state() -> None:

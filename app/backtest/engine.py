@@ -122,11 +122,15 @@ class BacktestEngine:
             open_trades = remaining
             equity_curve.append(equity)
 
+            decision_time = bar.timestamp + self._duration("15m")
+            snapshots = self._snapshots_at(symbol, candles, decision_time)
+
+            # Pre-evaluation candles are indicator warm-up only. Advancing the
+            # snapshot cursor here is required for EMA200 and other stateful
+            # indicators, but no strategy decision/rejection is measured yet.
             if not in_test:
                 continue
 
-            decision_time = bar.timestamp + self._duration("15m")
-            snapshots = self._snapshots_at(symbol, candles, decision_time)
             if snapshots is not None:
                 try:
                     signal = evaluate_strategy(
