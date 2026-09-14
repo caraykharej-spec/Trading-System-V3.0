@@ -4,20 +4,15 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "app/data/historical_backfill.py"
-      - "app/data/gateio_deals_archive.py"
-      - "app/data/locked_dataset_merge.py"
-      - "app/backtest/engine.py"
-      - "app/backtest/incremental_snapshots.py"
-      - "app/backtest/locked_baseline_runner.py"
-      - "scripts/backtest/backfill_historical_dataset.py"
-      - "scripts/backtest/backfill_gate_deals_archive.py"
-      - "scripts/backtest/check_gate_deals_archive_availability.py"
-      - "scripts/backtest/merge_locked_dataset_shards.py"
-      - "scripts/backtest/run_locked_historical_baseline.py"
-      - "tests/data_platform/test_gateio_deals_archive.py"
-      - "tests/data_platform/test_locked_dataset_merge.py"
-      - "tests/backtest/test_locked_historical_baseline.py"
+      - "app/backtest/**"
+      - "app/data/**"
+      - "app/market/**"
+      - "app/risk/**"
+      - "app/strategy/**"
+      - "app/storm_costs/**"
+      - "scripts/backtest/**"
+      - "tests/backtest/**"
+      - "tests/data_platform/**"
       - ".github/workflows/one-year-locked-baseline.yml"
   workflow_dispatch:
 
@@ -39,9 +34,10 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Archive reconstruction, locked assembly and baseline tests
+      - name: Warm-up, archive reconstruction, locked assembly and baseline tests
         run: |
           python -m pytest -q \
+            tests/backtest/test_incremental_snapshots.py \
             tests/data_platform/test_gateio_deals_archive.py \
             tests/data_platform/test_locked_dataset_merge.py \
             tests/backtest/test_locked_historical_baseline.py
@@ -57,10 +53,17 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Require every old-history monthly archive before heavy downloads
+      - name: Require every warm-up and evaluation archive before heavy downloads
         run: |
           python scripts/backtest/check_gate_deals_archive_availability.py \
             --symbol BTC/USDT \
+            --month 202502 \
+            --month 202503 \
+            --month 202504 \
+            --month 202505 \
+            --month 202506 \
+            --month 202507 \
+            --month 202508 \
             --month 202509 \
             --month 202510 \
             --month 202511 \
@@ -81,9 +84,37 @@ jobs:
       max-parallel: 2
       matrix:
         include:
+          - shard: archive-202502
+            month: "202502"
+            start: 2025-02-25T00:00:00Z
+            end: 2025-03-01T00:00:00Z
+          - shard: archive-202503
+            month: "202503"
+            start: 2025-03-01T00:00:00Z
+            end: 2025-04-01T00:00:00Z
+          - shard: archive-202504
+            month: "202504"
+            start: 2025-04-01T00:00:00Z
+            end: 2025-05-01T00:00:00Z
+          - shard: archive-202505
+            month: "202505"
+            start: 2025-05-01T00:00:00Z
+            end: 2025-06-01T00:00:00Z
+          - shard: archive-202506
+            month: "202506"
+            start: 2025-06-01T00:00:00Z
+            end: 2025-07-01T00:00:00Z
+          - shard: archive-202507
+            month: "202507"
+            start: 2025-07-01T00:00:00Z
+            end: 2025-08-01T00:00:00Z
+          - shard: archive-202508
+            month: "202508"
+            start: 2025-08-01T00:00:00Z
+            end: 2025-09-01T00:00:00Z
           - shard: archive-202509
             month: "202509"
-            start: 2025-09-13T00:00:00Z
+            start: 2025-09-01T00:00:00Z
             end: 2025-10-01T00:00:00Z
           - shard: archive-202510
             month: "202510"
@@ -144,7 +175,7 @@ jobs:
       - name: Upload verified archive shard
         uses: actions/upload-artifact@v4
         with:
-          name: btc-usdt-1y-${{ matrix.shard }}-${{ github.sha }}
+          name: btc-usdt-warmup-plus-1y-${{ matrix.shard }}-${{ github.sha }}
           path: artifacts/backfill/${{ matrix.shard }}
           if-no-files-found: error
           retention-days: 30
@@ -175,12 +206,12 @@ jobs:
       - name: Upload verified REST shard
         uses: actions/upload-artifact@v4
         with:
-          name: btc-usdt-1y-rest-20260613-20260913-${{ github.sha }}
+          name: btc-usdt-warmup-plus-1y-rest-20260613-20260913-${{ github.sha }}
           path: artifacts/backfill/rest-20260613-20260913
           if-no-files-found: error
           retention-days: 30
 
-  assemble-annual-lock:
+  assemble-research-lock:
     needs: [archive-shard, recent-rest-shard]
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -194,36 +225,36 @@ jobs:
       - name: Download all verified shards
         uses: actions/download-artifact@v4
         with:
-          pattern: btc-usdt-1y-*-${{ github.sha }}
+          pattern: btc-usdt-warmup-plus-1y-*-${{ github.sha }}
           path: artifacts/shards
           merge-multiple: false
-      - name: Assemble and re-verify annual lock
+      - name: Assemble and re-verify warm-up plus one-year research lock
         shell: bash
         run: |
           set -euo pipefail
           shard_args=()
-          for shard_dir in artifacts/shards/btc-usdt-1y-*-${GITHUB_SHA}; do
+          for shard_dir in artifacts/shards/btc-usdt-warmup-plus-1y-*-${GITHUB_SHA}; do
             shard_args+=(--shard-dir "$shard_dir")
           done
-          if [ "${#shard_args[@]}" -ne 22 ]; then
-            echo "Expected eleven shard directories; got ${#shard_args[@]} CLI elements" >&2
+          if [ "${#shard_args[@]}" -ne 36 ]; then
+            echo "Expected eighteen shard directories; got ${#shard_args[@]} CLI elements" >&2
             exit 1
           fi
           python scripts/backtest/merge_locked_dataset_shards.py \
             "${shard_args[@]}" \
             --dataset-version 1.0.0 \
             --git-revision "$GITHUB_SHA" \
-            --output-dir artifacts/annual-lock
-      - name: Upload annual locked dataset
+            --output-dir artifacts/research-lock
+      - name: Upload verified research lock
         uses: actions/upload-artifact@v4
         with:
-          name: btc-usdt-1y-locked-${{ github.sha }}
-          path: artifacts/annual-lock
+          name: btc-usdt-warmup-plus-1y-locked-${{ github.sha }}
+          path: artifacts/research-lock
           if-no-files-found: error
           retention-days: 30
 
   controlled-baseline:
-    needs: assemble-annual-lock
+    needs: assemble-research-lock
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -233,20 +264,21 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Download annual locked dataset
+      - name: Download verified research lock
         uses: actions/download-artifact@v4
         with:
-          name: btc-usdt-1y-locked-${{ github.sha }}
-          path: artifacts/annual-lock
-      - name: Run controlled locked baseline with bounded retries
+          name: btc-usdt-warmup-plus-1y-locked-${{ github.sha }}
+          path: artifacts/research-lock
+      - name: Run controlled one-year evaluation with bounded retries
         shell: bash
         run: |
           set -u
           for attempt in 1 2 3; do
             if python scripts/backtest/run_locked_historical_baseline.py \
-              --dataset-dir artifacts/annual-lock \
+              --dataset-dir artifacts/research-lock \
+              --evaluation-start 2025-09-13T00:00:00Z \
               --git-revision "$GITHUB_SHA" \
-              --output artifacts/baseline/btc-usdt-1y-baseline.json; then
+              --output artifacts/baseline/btc-usdt-1y-evaluation-baseline.json; then
               exit 0
             fi
             if [ "$attempt" -eq 3 ]; then
@@ -257,7 +289,7 @@ jobs:
       - name: Upload baseline evidence
         uses: actions/upload-artifact@v4
         with:
-          name: btc-usdt-1y-baseline-${{ github.sha }}
-          path: artifacts/baseline/btc-usdt-1y-baseline.json
+          name: btc-usdt-1y-evaluation-baseline-${{ github.sha }}
+          path: artifacts/baseline/btc-usdt-1y-evaluation-baseline.json
           if-no-files-found: error
           retention-days: 30

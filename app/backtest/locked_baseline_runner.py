@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -14,6 +14,8 @@ from app.strategy.rules import DEFAULT_RULES
 
 from .engine import BacktestEngine
 from .models import BacktestConfig, BacktestResult
+
+_REQUIRED_DAILY_WARMUP = 200
 
 
 def _json_ready(value: Any) -> Any:
@@ -37,6 +39,15 @@ def _fingerprint(payload: object) -> str:
             ensure_ascii=True,
         ).encode("utf-8")
     ).hexdigest()
+
+
+def _manifest_timestamp(value: object, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"locked dataset {field} missing")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError(f"locked dataset {field} must be timezone-aware")
+    return parsed.astimezone(timezone.utc)
 
 
 def _result_payload(result: BacktestResult) -> dict[str, object]:
@@ -116,10 +127,11 @@ def _cost_config(
 def run_locked_historical_baseline(
     dataset_dir: str | Path,
     *,
+    evaluation_start: datetime,
     cost_service: StormCostService | None = None,
     code_revision: str = "UNKNOWN",
 ) -> dict[str, object]:
-    """Run a research-only baseline from a previously sealed historical dataset."""
+    """Run a research-only baseline from a sealed dataset with explicit warm-up."""
 
     bundle = load_locked_dataset(dataset_dir)
     symbol = bundle.manifest.get("symbol")
@@ -134,10 +146,42 @@ def run_locked_historical_baseline(
         raise ValueError("locked dataset manifest fingerprint missing")
     if not isinstance(dataset_code_revision, str):
         raise ValueError("locked dataset code revision invalid")
+    if evaluation_start.tzinfo is None:
+        raise ValueError("evaluation_start must be timezone-aware")
+
+    evaluation_start_utc = evaluation_start.astimezone(timezone.utc)
+    dataset_start = _manifest_timestamp(
+        bundle.manifest.get("requested_start"), "requested_start"
+    )
+    dataset_end = _manifest_timestamp(
+        bundle.manifest.get("requested_end"), "requested_end"
+    )
+    if not dataset_start < evaluation_start_utc < dataset_end:
+        raise ValueError(
+            "evaluation_start must be strictly inside the locked dataset interval"
+        )
+
+    daily = bundle.candles_by_timeframe.get("1d")
+    if daily is None:
+        raise ValueError("locked dataset missing 1d candles")
+    warmup_daily_candles = sum(
+        1
+        for candle in daily
+        if candle.timestamp + timedelta(days=1) <= evaluation_start_utc
+    )
+    if warmup_daily_candles < _REQUIRED_DAILY_WARMUP:
+        raise ValueError(
+            "locked dataset has insufficient completed daily warm-up candles: "
+            f"{warmup_daily_candles} < {_REQUIRED_DAILY_WARMUP}"
+        )
 
     storm_costs = cost_service or StormCostService()
     config, cost_evidence = _cost_config(storm_costs, symbol)
-    result = BacktestEngine(config).run(symbol, bundle.candles_by_timeframe)
+    result = BacktestEngine(config).run(
+        symbol,
+        bundle.candles_by_timeframe,
+        evaluation_start=evaluation_start_utc,
+    )
     result_payload = _result_payload(result)
     strategy_payload = asdict(DEFAULT_RULES)
     config_payload = asdict(config)
@@ -148,8 +192,12 @@ def run_locked_historical_baseline(
         "symbol": symbol,
         "dataset_provider": bundle.manifest.get("provider"),
         "dataset_version": bundle.manifest.get("dataset_version"),
-        "dataset_requested_start": bundle.manifest.get("requested_start"),
-        "dataset_requested_end": bundle.manifest.get("requested_end"),
+        "dataset_requested_start": dataset_start,
+        "dataset_requested_end": dataset_end,
+        "evaluation_start": evaluation_start_utc,
+        "evaluation_end": dataset_end,
+        "warmup_required_daily_candles": _REQUIRED_DAILY_WARMUP,
+        "warmup_completed_daily_candles": warmup_daily_candles,
         "dataset_bundle_fingerprint": dataset_fingerprint,
         "dataset_manifest_fingerprint": manifest_fingerprint,
         "dataset_source_shards_fingerprint": bundle.manifest.get(
@@ -165,6 +213,7 @@ def run_locked_historical_baseline(
         "result": result_payload,
         "limitations": (
             "Gate.io candles are research OHLCV evidence; Storm is the execution venue.",
+            "Pre-evaluation candles are warm-up only and are excluded from measured strategy decisions, rejections and entries.",
             "This baseline uses current Storm protocol fee and VPI spread, not historical fee/spread series.",
             "Historical funding, calibrated slippage and market impact are not claimed by this baseline; Phase 48.8 stress qualification remains mandatory.",
             "A successful baseline run is not a live-trading authorization or a guarantee of future profitability.",
