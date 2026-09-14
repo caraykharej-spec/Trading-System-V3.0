@@ -1,0 +1,77 @@
+name: B2 Research Cache Warmer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/b2-research-cache-warmer.yml"
+
+permissions:
+  contents: read
+
+env:
+  LOCKED_SYMBOL: BTC/USDT
+  LOCKED_FINGERPRINT: 9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f
+  LOCKED_CACHE_KEY: research-lock-btc-usdt-9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f
+
+jobs:
+  warm-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      AWS_DEFAULT_REGION: eu-central-003
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Restore exact locked research source from B2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/backtest/restore_locked_source_snapshot_from_b2.py \
+            --symbol "$LOCKED_SYMBOL" \
+            --dataset-fingerprint "$LOCKED_FINGERPRINT" \
+            --output-dir artifacts/research-lock \
+            | tee artifacts/b2-cache-warmer-result.json
+          grep -q 'LOCKED_SOURCE_RESTORED_AND_VERIFIED' artifacts/b2-cache-warmer-result.json
+
+      - name: Re-verify cache payload with canonical loader
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from app.data.historical_backfill import load_locked_dataset
+          bundle = load_locked_dataset("artifacts/research-lock")
+          if bundle.manifest.get("dataset_bundle_fingerprint") != os.environ["LOCKED_FINGERPRINT"]:
+              raise SystemExit("cache payload fingerprint mismatch")
+          print("RESEARCH_CACHE_PAYLOAD_VERIFIED")
+          PY
+
+      - name: Save immutable research lock to GitHub Actions cache
+        uses: actions/cache/save@v4
+        with:
+          path: artifacts/research-lock
+          key: ${{ env.LOCKED_CACHE_KEY }}
+
+      - name: Upload non-secret cache-warmer evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2-research-cache-warmer-evidence-${{ github.run_id }}
+          path: |
+            artifacts/b2-cache-warmer-result.json
+            artifacts/research-lock/manifest.json
+          if-no-files-found: error
+          retention-days: 30
