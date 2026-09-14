@@ -1,0 +1,108 @@
+name: B2 Restore Locked Dataset
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Research symbol, for example BTC/USDT"
+        required: true
+        type: string
+      dataset_fingerprint:
+        description: "Exact 64-character GOLD dataset fingerprint"
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/b2-restore-locked-dataset.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: b2-gold-restore-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      AWS_DEFAULT_REGION: eu-central-003
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Resolve trusted restore request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            symbol='${{ inputs.symbol }}'
+            fingerprint='${{ inputs.dataset_fingerprint }}'
+          else
+            symbol='BTC/USDT'
+            fingerprint='fed540e5153ea0788bcbe4d028fa693237292b3122bd5f666cc6f66cdc93b40d'
+          fi
+          [[ "$symbol" =~ ^[A-Za-z0-9_/-]+$ ]]
+          [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
+          echo "symbol=$symbol" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Validate B2 environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME AWS_DEFAULT_REGION; do
+            if [ -z "${!name:-}" ]; then
+              echo "Required environment variable missing: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Install research-data dependencies
+        run: python -m pip install -e ".[research-data]"
+
+      - name: Restore and verify GOLD bundle from B2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python scripts/backtest/restore_research_bundle_from_b2.py \
+            --symbol "${{ steps.request.outputs.symbol }}" \
+            --dataset-fingerprint "${{ steps.request.outputs.fingerprint }}" \
+            --output-dir artifacts/research-cache \
+            | tee artifacts/b2-restore-result.json
+
+      - name: Verify local cache hit without another restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/backtest/restore_research_bundle_from_b2.py \
+            --symbol "${{ steps.request.outputs.symbol }}" \
+            --dataset-fingerprint "${{ steps.request.outputs.fingerprint }}" \
+            --output-dir artifacts/research-cache \
+            | tee artifacts/b2-cache-hit-result.json
+          grep -q 'CACHE_HIT_VERIFIED' artifacts/b2-cache-hit-result.json
+
+      - name: Upload non-secret restore evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2-gold-restore-evidence-${{ github.run_id }}
+          path: |
+            artifacts/b2-restore-result.json
+            artifacts/b2-cache-hit-result.json
+            artifacts/research-cache/manifest.json
+            artifacts/research-cache/checksums.json
+          if-no-files-found: warn
+          retention-days: 30
