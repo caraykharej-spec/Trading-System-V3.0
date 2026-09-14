@@ -4,51 +4,59 @@ Status: **RESEARCH / PAPER ONLY**
 
 ## Objective
 
-Maintain a durable, resumable and auditable historical OHLC research store for every current project-universe route that is available on Gate.io and for which Gate exposes a verified public range API.
+Maintain a durable, resumable and auditable OHLC research store in Backblaze B2 for every current project-universe route that is available on Gate.io and has a verified complete historical source.
 
-The pipeline is intentionally separate from runtime state and execution. It does not authorize live trading, alter risk limits or change Storm's role as the reference-universe and reference-price authority.
+The pipeline is isolated from execution. It does not authorize live trading, change risk limits, or change Storm's role as the reference-universe and reference-price authority.
 
 ## Universe authority
 
-The discovery job builds the Gate-backed research universe from three sources:
+Discovery combines:
 
-1. the live Storm reference universe (`StormReferenceUniverseProvider`), which remains authoritative for current dynamic membership;
-2. `config/universe.json`, retained as the static compatibility floor;
-3. `config/market_data/source_registry.json`, which contains qualified explicit Gate spot, Gate futures and Gate TradFi routes, including price multipliers such as `1000PEPE -> PEPE_USDT * 1000` and `TON -> GRAM_USDT`.
+1. the live Storm reference universe (`StormReferenceUniverseProvider`);
+2. `config/universe.json` as the static compatibility floor;
+3. `config/market_data/source_registry.json` for explicitly qualified Gate spot, Gate futures and Gate TradFi routes, including price multipliers such as `1000PEPE -> PEPE_USDT * 1000` and mappings such as `TON -> GRAM_USDT`.
 
-For assets without an explicit Gate spot route, discovery chooses a tradable Gate spot market with quote priority `USDT`, then `USDC`, then `USD`.
+When no explicit Gate spot route exists, discovery selects a currently tradable Gate spot market using quote priority `USDT`, then `USDC`, then `USD`.
 
-Every discovered route is recorded independently. A canonical project symbol can therefore have more than one Gate research route when the source registry explicitly qualifies multiple Gate market types.
+Every Gate route is represented independently, so one canonical project symbol can retain more than one qualified Gate market route.
 
 ## Historical source policy
 
-### Gate spot
+### Gate Historical Quotation archive — authoritative backfill source
 
-Source: Gate public Spot v4 candlesticks.
+The backfill uses Gate's public Historical Quotation download service at `download.gatedata.org`.
 
-- no API credential is required;
-- the collector uses `from` / `to` time bounds;
-- each request remains within Gate's 1,000-candle bound;
-- collection is partitioned by calendar month and internally paginated;
-- the canonical source grain is `15m`.
+Current Gate documentation states that downloadable K-line history is supported from **January 2023**. The pipeline therefore uses `2023-01-01T00:00:00Z` as the default and minimum authoritative archive start for v2.
 
-### Gate USDT perpetual futures
+For both Spot and USDT-M Futures, Gate publishes daily K-line files using the documented pattern:
 
-Source: Gate public Futures v4 candlesticks.
+```text
+https://download.gatedata.org/<biz>/candlesticks_<interval>/YYYYMM/<market>-YYYYMMDD.csv.gz
+```
 
-- no API credential is required;
-- the collector uses `from` / `to` time bounds;
-- each request remains within Gate's 2,000-candle bound;
-- collection is partitioned by calendar month and internally paginated;
-- the canonical source grain is `15m`.
+where `biz` is:
+
+- `spot` for Gate Spot;
+- `futures_usdt` for USDT-M Futures.
+
+The archive offers `1m`, `5m`, `1h`, `4h`, `1d` and `7d` K-line granularities. The project ingests **5m** as the canonical source grain and deterministically derives the project's required `15m`, `1h`, `4h` and `1d` bars.
+
+### REST tail fallback
+
+The Gate REST candlestick APIs are not used as the long-range archive source. They are used only as a bounded fallback for an archive day missing inside the most recent 30-day window. This covers publication lag without pretending REST is an unlimited historical store.
+
+The fallback remains subject to Gate's public endpoint limits:
+
+- Spot: maximum 1,000 candlesticks per request;
+- Futures: maximum 2,000 candlesticks per request.
 
 ### Gate TradFi
 
-Gate TradFi routes are still discovered and represented in the transfer manifest, but the current verified project provider exposes only a bounded latest-window kline call. The historical sync therefore fails closed for those routes with:
+Gate TradFi routes remain part of discovery and run evidence, but this project does not currently have a verified complete historical-quotation contract for those routes. They are therefore recorded as:
 
 `BLOCKED_FULL_HISTORY_UNAVAILABLE`
 
-No bounded latest window is mislabeled as complete history. This limitation must be removed only after a historical `from/to` or equivalent archive contract has been verified and implemented.
+A bounded latest-window response is never labeled as complete history.
 
 ## Timeframes
 
@@ -59,24 +67,20 @@ The project research timeframes are:
 - `4h`
 - `1d`
 
-Only `15m` is fetched from Gate for this data-lake pipeline. Higher timeframes are deterministically derived from complete, contiguous 15-minute child bars. An incomplete parent interval is dropped rather than synthesized.
+All four are derived from complete, contiguous 5-minute source bars. An incomplete parent interval is dropped rather than synthesized. This produces internally consistent multi-timeframe data and avoids conflicting independent downloads.
 
-This reduces provider calls and makes multi-timeframe data internally consistent.
+## Default interval
 
-## Default historical interval
+Default requested interval:
 
-The workflow defaults to:
-
-- start: `2013-01-01T00:00:00Z`
+- start: `2023-01-01T00:00:00Z`
 - end: start of the current UTC day, exclusive
 
-The deliberately early default allows each Gate market to return all history it actually retains. Months with no returned candles are not fabricated.
-
-Manual workflow dispatch can override both bounds.
+Manual workflow dispatch can narrow the requested interval. A requested start before 2023 is clipped to the verified archive start and recorded as `effective_archive_start` in the route manifest.
 
 ## Storage format
 
-Monthly partitions are stored as Parquet with ZSTD compression.
+Monthly normalized partitions are Parquet with ZSTD compression.
 
 Logical columns:
 
@@ -90,17 +94,21 @@ Logical columns:
 - `low`
 - `close`
 - `volume`
+- `volume_semantics`
 - `price_multiplier`
 - `source_timeframe`
+- `source_kind`
 
-OHLCV decimal values are serialized losslessly as decimal strings in the Parquet table so that ingestion does not introduce binary floating-point drift.
+OHLCV numeric values are serialized as decimal strings before Parquet encoding so ingestion does not introduce binary floating-point drift.
 
-## Object layout
+`source_timeframe` is `5m` and `source_kind` is `gate_historical_quotation`.
+
+## Object layout — v2
 
 Completed calendar months:
 
 ```text
-bronze/gate-history/v1/
+bronze/gate-history/v2/
   provider=<gateio|gateio_futures>/
     canonical=<canonical-symbol-slug>/
       market=<gate-market-slug>/
@@ -110,7 +118,7 @@ bronze/gate-history/v1/
               part-000.parquet
 ```
 
-A partial current month is immutable by date rather than overwriting a completed partition:
+A partial month is stored as a dated snapshot instead of overwriting a completed partition:
 
 ```text
 .../year=YYYY/month=MM/snapshot=YYYY-MM-DD/part-000.parquet
@@ -119,82 +127,96 @@ A partial current month is immutable by date rather than overwriting a completed
 Per-route manifests:
 
 ```text
-manifests/gate-history/v1/routes/
+manifests/gate-history/v2/routes/
   provider=<provider>/
     canonical=<canonical-symbol-slug>/
       market=<gate-market-slug>/
         manifest.json
 ```
 
-Per-run consolidated transfer evidence:
+Per-run consolidated evidence:
 
 ```text
-manifests/gate-history/v1/runs/<github-run-id>.json
+manifests/gate-history/v2/runs/<github-run-id>.json
 ```
+
+The earlier experimental `v1` namespace is not qualification evidence and must not be consumed by Phase 48 backtests.
 
 ## Integrity and provenance
 
-Each newly uploaded partition records:
+Each partition/route record carries or derives:
 
-- object key;
-- SHA-256 of the local Parquet bytes;
-- route identity;
-- canonical symbol;
-- provider symbol;
+- canonical and provider market identity;
+- provider type;
 - price multiplier;
 - timeframe;
 - row count;
-- first/last timestamp;
-- run generation timestamp.
+- first and last timestamps;
+- SHA-256 of newly uploaded Parquet bytes;
+- archive days found/missing;
+- REST fallback-day count;
+- missing 5-minute timestamps inside the observed data span;
+- generation timestamp.
 
-Existing completed monthly objects are reused unless the workflow is manually dispatched with `force=true`.
+Existing completed monthly objects are reused unless a manual run explicitly sets `force=true`.
 
-The collector never fills a missing candle synthetically. Missing 15-minute points are counted and recorded. For a market's first or last calendar month, the count can include time before listing or after delisting; therefore it is evidence of absent timestamps, not by itself proof of a provider outage.
+The pipeline never creates synthetic fill candles. Missing timestamps are evidence and remain visible in the manifest.
+
+## Gap semantics
+
+`missing_5m_inside_observed_span` counts missing 5-minute points only between the first and last returned source candle for a month. This avoids falsely classifying pre-listing and post-delisting time as an internal data gap.
+
+`archive_days_missing` is a separate source-availability metric. A missing historical daily archive file can be legitimate before a market existed. Inside the most recent 30 days, REST may provide a bounded fallback; the manifest records such use explicitly.
 
 ## Workflow
 
-Workflow file:
+Workflow:
 
 `.github/workflows/gate-universe-full-history-to-b2.yml`
 
 Stages:
 
-1. **Discover** — resolve current project universe and Gate routes.
-2. **Sync** — fan out one matrix job per Gate route; fetch, normalize, resample, compress and upload.
-3. **Summarize** — collect every route manifest, build run-level evidence and upload the consolidated manifest to B2.
+1. **Discover** — resolve the live project universe and every Gate route.
+2. **Sync** — fan out one independent matrix job per Gate route; download daily 5m archives, normalize, resample, compress and upload monthly Parquet partitions.
+3. **Summarize** — collect every route summary, build consolidated run evidence and publish the run manifest to B2.
 
-The matrix fails independently per route (`fail-fast: false`) so one market cannot prevent evidence from being produced for other markets.
+The matrix uses `fail-fast: false`: one failing route cannot erase evidence from routes that completed successfully.
 
 ## Backblaze credentials
 
-The workflow reuses the repository's established private B2 S3-compatible configuration:
+The workflow reuses the repository's established B2 S3-compatible secrets:
 
 - `B2_KEY_ID`
 - `B2_APPLICATION_KEY`
 - `B2_S3_ENDPOINT`
 - `B2_BUCKET_NAME`
 
-Credentials are read only from GitHub Actions secrets and are never written to artifacts or manifests.
+They are exposed only to GitHub Actions jobs. Credentials are never serialized into artifacts, manifests, Parquet files or repository content.
 
 ## Completion semantics
 
-Supported spot/futures route status:
+Supported Spot/Futures route statuses:
 
-- `COMPLETE` — historical data was returned with no missing 15-minute timestamps inside fetched months;
-- `COMPLETE_WITH_RECORDED_GAPS` — data was transferred but absent 15-minute timestamps were observed and recorded;
-- `NO_HISTORY_RETURNED` — Gate returned no data for the requested interval; run-level qualification fails.
+- `COMPLETE` — archive data transferred with no missing 5m timestamps inside observed spans;
+- `COMPLETE_WITH_RECORDED_GAPS` — data transferred, with missing timestamps explicitly recorded;
+- `NO_HISTORY_RETURNED` — no historical data was found for the supported route; run qualification fails;
+- `ERROR` — collection, normalization or upload failed; run qualification fails.
 
-TradFi route status:
+TradFi status:
 
-- `BLOCKED_FULL_HISTORY_UNAVAILABLE` — current verified Gate/project interface cannot prove complete history; the run records the route but transfers no misleading partial dataset.
+- `BLOCKED_FULL_HISTORY_UNAVAILABLE` — route is known, but complete historical transfer is deliberately blocked until its historical contract is verified.
 
-The consolidated workflow fails if a supported route is missing its summary or reports no historical data. A documented TradFi limitation is not silently converted into success for that route.
+The consolidated workflow fails if a supported route is missing a summary, reports `NO_HISTORY_RETURNED`, reports `ERROR`, or has an unexpected status. The documented TradFi limitation remains visible instead of being silently treated as complete history.
 
 ## Backtest consumption rule
 
-Backtests must consume immutable completed-month objects and a specific run/route manifest. A current-month snapshot is research-freshness data and must not replace a previously locked OOS dataset without creating a new dataset identity/fingerprint.
+Phase 48 and other qualification backtests must consume:
 
-Before any Phase 48 qualification run, the consumer must verify the manifest identity, partition list and content integrity and then lock the selected date range. Existing dataset versioning, OOS locking, reproducibility and B2 source-snapshot controls remain authoritative for qualification evidence.
+1. immutable completed-month objects;
+2. an explicit route/run manifest;
+3. a locked date range and dataset identity/fingerprint.
+
+A current-month snapshot must not replace a previously locked OOS dataset without producing a new dataset identity. Existing dataset versioning, provenance, OOS locking, reproducibility and B2 source-snapshot controls remain authoritative.
 
 ## Operational commands
 
@@ -206,7 +228,7 @@ python scripts/backtest/sync_gate_universe_history_to_b2.py \
   --output artifacts/gate-history-discovery.json
 ```
 
-Sync one verified route when B2 environment variables are present:
+Sync one route when B2 environment variables are available:
 
 ```bash
 python scripts/backtest/sync_gate_universe_history_to_b2.py \
@@ -215,8 +237,8 @@ python scripts/backtest/sync_gate_universe_history_to_b2.py \
   --asset-class crypto \
   --provider gateio \
   --provider-symbol BTC_USDT \
-  --start 2013-01-01T00:00:00Z \
+  --start 2023-01-01T00:00:00Z \
   --end 2026-09-14T00:00:00Z
 ```
 
-Normal production use is the GitHub Actions workflow rather than a laptop process.
+Normal production operation is the GitHub Actions workflow rather than a laptop process.
