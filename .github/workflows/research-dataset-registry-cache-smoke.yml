@@ -1,0 +1,100 @@
+name: Research Dataset Registry Cache Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "config/research/dataset_registry.json"
+      - "scripts/backtest/validate_research_dataset_registry.py"
+      - ".github/workflows/research-dataset-registry-cache-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DATASET_ID: btc-usdt-one-year-v1
+
+jobs:
+  registry-cache-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project dependencies
+        run: python -m pip install -e ".[dev]"
+
+      - name: Resolve governed dataset
+        id: registry
+        run: |
+          mkdir -p artifacts/registry-cache-smoke
+          python scripts/backtest/validate_research_dataset_registry.py \
+            --dataset-id "$DATASET_ID" \
+            --github-output "$GITHUB_OUTPUT" \
+            | tee artifacts/registry-cache-smoke/resolution.json
+
+      - name: Restore immutable research cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: artifacts/research-lock
+          key: ${{ steps.registry.outputs.cache_key }}
+          fail-on-cache-miss: true
+
+      - name: Verify cached lock against governed registry
+        shell: bash
+        env:
+          EXPECTED_SYMBOL: ${{ steps.registry.outputs.symbol }}
+          EXPECTED_DATASET_FINGERPRINT: ${{ steps.registry.outputs.dataset_fingerprint }}
+          EXPECTED_MANIFEST_FINGERPRINT: ${{ steps.registry.outputs.manifest_fingerprint }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from app.data.historical_backfill import load_locked_dataset
+
+          bundle = load_locked_dataset("artifacts/research-lock")
+          manifest = bundle.manifest
+          checks = {
+              "symbol": manifest.get("symbol") == os.environ["EXPECTED_SYMBOL"],
+              "dataset_bundle_fingerprint": (
+                  manifest.get("dataset_bundle_fingerprint")
+                  == os.environ["EXPECTED_DATASET_FINGERPRINT"]
+              ),
+              "manifest_fingerprint": (
+                  manifest.get("manifest_fingerprint")
+                  == os.environ["EXPECTED_MANIFEST_FINGERPRINT"]
+              ),
+          }
+          if not all(checks.values()):
+              raise SystemExit(f"registry/cache identity mismatch: {checks}")
+          evidence = {
+              "status": "REGISTRY_CACHE_VERIFIED",
+              "mode": "RESEARCH_PAPER_ONLY",
+              "symbol": manifest.get("symbol"),
+              "dataset_bundle_fingerprint": manifest.get("dataset_bundle_fingerprint"),
+              "manifest_fingerprint": manifest.get("manifest_fingerprint"),
+              "checks": checks,
+          }
+          Path("artifacts/registry-cache-smoke/evidence.json").write_text(
+              json.dumps(evidence, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print("REGISTRY_CACHE_VERIFIED")
+          PY
+
+      - name: Upload non-secret registry/cache evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-dataset-registry-cache-smoke-${{ github.run_id }}
+          path: artifacts/registry-cache-smoke
+          if-no-files-found: error
+          retention-days: 30
