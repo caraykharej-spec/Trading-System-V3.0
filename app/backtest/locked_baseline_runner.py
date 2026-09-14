@@ -12,9 +12,14 @@ from app.data.historical_backfill import load_locked_dataset
 from app.storm_costs import StormCostService
 from app.strategy.rules import DEFAULT_RULES
 
-from .diagnostics import SignalAttritionDiagnostics
+from .diagnostics import BacktestDiagnosticEvent, SignalAttritionDiagnostics
 from .engine import BacktestEngine
 from .models import BacktestConfig, BacktestResult
+from .regime_attribution import (
+    attribute_regime_evidence,
+    build_daily_regime_timeline,
+    validate_regime_attribution,
+)
 
 _REQUIRED_DAILY_WARMUP = 200
 
@@ -195,14 +200,37 @@ def run_locked_historical_baseline(
     storm_costs = cost_service or StormCostService()
     config, cost_evidence = _cost_config(storm_costs, symbol)
     diagnostics = SignalAttritionDiagnostics()
+    diagnostic_events: list[BacktestDiagnosticEvent] = []
+
+    def observe(event: BacktestDiagnosticEvent) -> None:
+        diagnostics.record(event)
+        diagnostic_events.append(event)
+
     result = BacktestEngine(config).run(
         symbol,
         bundle.candles_by_timeframe,
         evaluation_start=evaluation_start_utc,
-        diagnostic_observer=diagnostics.record,
+        diagnostic_observer=observe,
     )
     diagnostic_payload = diagnostics.to_payload()
     _validate_diagnostics(diagnostic_payload, result)
+
+    regime_timeline = build_daily_regime_timeline(symbol, daily)
+    regime_payload = attribute_regime_evidence(
+        diagnostic_events,
+        result.trades,
+        regime_timeline,
+        initial_equity=result.initial_equity,
+    )
+    validate_regime_attribution(
+        regime_payload,
+        expected_decision_points=int(diagnostic_payload["decision_points"]),
+        expected_ready=int(diagnostic_payload["ready_for_risk_review"]),
+        expected_entry_rejections=int(diagnostic_payload["entry_rejections"]),
+        expected_trades=len(result.trades),
+        trades=result.trades,
+    )
+
     result_payload = _result_payload(result)
     strategy_payload = asdict(DEFAULT_RULES)
     config_payload = asdict(config)
@@ -232,11 +260,14 @@ def run_locked_historical_baseline(
         "config_fingerprint": _fingerprint(config_payload),
         "cost_evidence": cost_evidence,
         "signal_attrition": diagnostic_payload,
+        "regime_attribution": regime_payload,
         "result": result_payload,
         "limitations": (
             "Gate.io candles are research OHLCV evidence; Storm is the execution venue.",
             "Pre-evaluation candles are warm-up only and are excluded from measured strategy decisions, rejections and entries.",
             "Signal attrition is observational evidence from the unchanged baseline execution path; it does not alter strategy thresholds or risk rules.",
+            "Regime attribution uses only the latest fully completed 1D candle at each event/trade entry time and does not use future candles.",
+            "Regime performance is descriptive attribution over the observed sample; it is not a strategy optimization or qualification result.",
             "This baseline uses current Storm protocol fee and VPI spread, not historical fee/spread series.",
             "Historical funding, calibrated slippage and market impact are not claimed by this baseline; Phase 48.8 stress qualification remains mandatory.",
             "A successful baseline run is not a live-trading authorization or a guarantee of future profitability.",
