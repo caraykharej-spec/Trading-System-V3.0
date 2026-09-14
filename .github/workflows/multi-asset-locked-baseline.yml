@@ -4,8 +4,17 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "app/backtest/**"
+      - "app/data/**"
+      - "app/market/**"
       - "app/research/**"
+      - "app/risk/**"
+      - "app/storm_costs/**"
+      - "app/strategy/**"
+      - "scripts/backtest/**"
       - "scripts/research/**"
+      - "tests/backtest/**"
+      - "tests/data_platform/**"
       - "tests/research/**"
       - ".github/workflows/multi-asset-locked-baseline.yml"
   workflow_dispatch:
