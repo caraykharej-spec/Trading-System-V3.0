@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -12,12 +13,14 @@ from app.strategy.rules import DEFAULT_RULES, StrategyRules
 from app.strategy.strategy_engine import StrategySignal, StrategyState, evaluate_strategy
 
 from .costs import BacktestCostModel
+from .diagnostics import BacktestDiagnosticEvent
 from .incremental_snapshots import IncrementalSnapshotCursor
 from .metrics import calculate_metrics
 from .models import BacktestConfig, BacktestResult, TradeRecord
 
 
 _TIMEFRAME_MINUTES = {"15m": 15, "1h": 60, "4h": 240, "1d": 1440}
+DiagnosticObserver = Callable[[BacktestDiagnosticEvent], None]
 
 
 @dataclass
@@ -58,11 +61,48 @@ class BacktestEngine:
     def _reset_snapshot_cache(self) -> None:
         self._snapshot_cursors.clear()
 
+    @staticmethod
+    def _emit(
+        observer: DiagnosticObserver | None,
+        timestamp: datetime,
+        code: str,
+        *,
+        signal: StrategySignal | None = None,
+        reasons: tuple[str, ...] = (),
+    ) -> None:
+        if observer is None:
+            return
+        observer(
+            BacktestDiagnosticEvent(
+                timestamp=timestamp,
+                code=code,
+                reasons=reasons,
+                direction=getattr(signal, "direction", None),
+                setup=getattr(signal, "setup", None),
+                rr=getattr(signal, "rr", None),
+                score=getattr(signal, "score", None),
+                confidence=getattr(signal, "confidence", None),
+            )
+        )
+
+    @staticmethod
+    def _strategy_failure_reason(exc: BaseException) -> str:
+        message = str(exc)
+        if message == "No aligned HTF direction":
+            return "NO_ALIGNED_HTF_DIRECTION"
+        if message == "No approved setup":
+            return "NO_APPROVED_SETUP"
+        if message == "No valid entry/SL/target levels":
+            return "NO_VALID_LEVELS"
+        return "STRATEGY_EVALUATION_ERROR"
+
     def run(
         self,
         symbol: str,
         candles_by_timeframe: dict[str, list[Candle]],
         evaluation_start: datetime | None = None,
+        *,
+        diagnostic_observer: DiagnosticObserver | None = None,
     ) -> BacktestResult:
         self._reset_snapshot_cache()
         candles = self._prepare(symbol, candles_by_timeframe)
@@ -81,12 +121,35 @@ class BacktestEngine:
             if in_test and pending_signal is not None:
                 if pending_signal.direction == "SHORT" and not self.config.allow_short:
                     rejected += 1
+                    self._emit(
+                        diagnostic_observer,
+                        bar.timestamp,
+                        "ENTRY_REJECT",
+                        signal=pending_signal,
+                        reasons=("SHORT_DISABLED",),
+                    )
                 else:
-                    candidate = self._open_trade(pending_signal, bar, equity, open_trades)
+                    candidate, entry_reject_reason = self._open_trade_with_reason(
+                        pending_signal, bar, equity, open_trades
+                    )
                     if candidate is not None:
                         equity -= candidate.entry_commission
                         open_trades.append(candidate)
                         max_concurrent = max(max_concurrent, len(open_trades))
+                        self._emit(
+                            diagnostic_observer,
+                            bar.timestamp,
+                            "TRADE_OPENED",
+                            signal=pending_signal,
+                        )
+                    elif entry_reject_reason is not None:
+                        self._emit(
+                            diagnostic_observer,
+                            bar.timestamp,
+                            "ENTRY_REJECT",
+                            signal=pending_signal,
+                            reasons=(entry_reject_reason,),
+                        )
                 pending_signal = None
 
             remaining: list[_OpenTrade] = []
@@ -131,21 +194,56 @@ class BacktestEngine:
             if not in_test:
                 continue
 
-            if snapshots is not None:
-                try:
-                    signal = evaluate_strategy(
-                        snapshots["1d"],
-                        snapshots["4h"],
-                        snapshots["1h"],
-                        snapshots["15m"],
-                        rules=self.rules,
+            if snapshots is None:
+                self._emit(
+                    diagnostic_observer,
+                    decision_time,
+                    "DECISION_NO_SNAPSHOT",
+                )
+                continue
+
+            try:
+                signal = evaluate_strategy(
+                    snapshots["1d"],
+                    snapshots["4h"],
+                    snapshots["1h"],
+                    snapshots["15m"],
+                    rules=self.rules,
+                )
+                if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
+                    pending_signal = signal
+                    self._emit(
+                        diagnostic_observer,
+                        decision_time,
+                        "READY_FOR_RISK_REVIEW",
+                        signal=signal,
                     )
-                    if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
-                        pending_signal = signal
-                    else:
-                        rejected += 1
-                except (ValueError, ArithmeticError, IndexError):
+                else:
                     rejected += 1
+                    self._emit(
+                        diagnostic_observer,
+                        decision_time,
+                        "STRATEGY_SIGNAL_REJECT",
+                        signal=signal,
+                        reasons=tuple(signal.reasons),
+                    )
+            except (ValueError, ArithmeticError, IndexError) as exc:
+                rejected += 1
+                self._emit(
+                    diagnostic_observer,
+                    decision_time,
+                    "STRATEGY_PRE_SIGNAL_REJECT",
+                    reasons=(self._strategy_failure_reason(exc),),
+                )
+
+        if pending_signal is not None:
+            final_decision_time = fifteen[-1].timestamp + self._duration("15m")
+            self._emit(
+                diagnostic_observer,
+                final_decision_time,
+                "PENDING_SIGNAL_END_OF_TEST",
+                signal=pending_signal,
+            )
 
         if open_trades:
             final_bar = fifteen[-1]
@@ -241,6 +339,44 @@ class BacktestEngine:
             snapshots[timeframe] = analyze_market(symbol, timeframe, completed)
         return snapshots
 
+    def _open_trade_with_reason(
+        self,
+        signal: StrategySignal,
+        bar: Candle,
+        equity: Decimal,
+        existing: list[_OpenTrade],
+    ) -> tuple[_OpenTrade | None, str | None]:
+        entry = self.costs.entry_price(signal.direction, bar.open)
+        distance = abs(entry - signal.stop_loss) / entry
+        if distance <= 0 or signal.stop_loss <= 0:
+            return None, "INVALID_STOP_DISTANCE"
+        risk_cash = risk_budget_amount(equity, self.config.risk_per_trade_percent)
+        current_risk = sum((self._risk_cash(trade) for trade in existing), Decimal("0"))
+        aggregate_budget = risk_budget_amount(equity, self.config.max_aggregate_risk_percent)
+        if current_risk + risk_cash > aggregate_budget:
+            return None, "AGGREGATE_RISK_LIMIT"
+        amount = risk_cash / distance
+        current_capital = sum((trade.total_amount for trade in existing), Decimal("0"))
+        max_capital = risk_budget_amount(equity, self.config.max_futures_capital_percent)
+        if current_capital + amount > max_capital:
+            return None, "FUTURES_CAPITAL_LIMIT"
+        leverage = Decimal("1")
+        quantity = amount / entry
+        commission = self.costs.commission(amount)
+        return (
+            _OpenTrade(
+                str(uuid4()),
+                signal,
+                bar.timestamp,
+                entry,
+                quantity,
+                amount,
+                leverage,
+                commission,
+            ),
+            None,
+        )
+
     def _open_trade(
         self,
         signal: StrategySignal,
@@ -248,33 +384,8 @@ class BacktestEngine:
         equity: Decimal,
         existing: list[_OpenTrade],
     ) -> _OpenTrade | None:
-        entry = self.costs.entry_price(signal.direction, bar.open)
-        distance = abs(entry - signal.stop_loss) / entry
-        if distance <= 0 or signal.stop_loss <= 0:
-            return None
-        risk_cash = risk_budget_amount(equity, self.config.risk_per_trade_percent)
-        current_risk = sum((self._risk_cash(trade) for trade in existing), Decimal("0"))
-        aggregate_budget = risk_budget_amount(equity, self.config.max_aggregate_risk_percent)
-        if current_risk + risk_cash > aggregate_budget:
-            return None
-        amount = risk_cash / distance
-        current_capital = sum((trade.total_amount for trade in existing), Decimal("0"))
-        max_capital = risk_budget_amount(equity, self.config.max_futures_capital_percent)
-        if current_capital + amount > max_capital:
-            return None
-        leverage = Decimal("1")
-        quantity = amount / entry
-        commission = self.costs.commission(amount)
-        return _OpenTrade(
-            str(uuid4()),
-            signal,
-            bar.timestamp,
-            entry,
-            quantity,
-            amount,
-            leverage,
-            commission,
-        )
+        candidate, _ = self._open_trade_with_reason(signal, bar, equity, existing)
+        return candidate
 
     @staticmethod
     def _risk_cash(trade: _OpenTrade) -> Decimal:
