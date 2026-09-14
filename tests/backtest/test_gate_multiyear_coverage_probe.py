@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,9 +12,11 @@ MODULE_PATH = (
     / "backtest"
     / "probe_gate_multiyear_coverage.py"
 )
-SPEC = importlib.util.spec_from_file_location("probe_gate_multiyear_coverage", MODULE_PATH)
+MODULE_NAME = "probe_gate_multiyear_coverage"
+SPEC = importlib.util.spec_from_file_location(MODULE_NAME, MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 probe = importlib.util.module_from_spec(SPEC)
+sys.modules[MODULE_NAME] = probe
 SPEC.loader.exec_module(probe)
 
 
