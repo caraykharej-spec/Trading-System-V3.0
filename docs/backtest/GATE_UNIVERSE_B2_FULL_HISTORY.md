@@ -26,36 +26,53 @@ Every Gate route is represented independently, so one canonical project symbol m
 
 The backfill uses Gate's public Historical Quotation service at `download.gatedata.org`.
 
-Gate's current Historical Quotation documentation states that downloadable candlestick history is supported from **January 2023** and documents month-by-month retrieval for non-hourly data types. The v2 research store therefore uses `2023-01-01T00:00:00Z` as the default and minimum authoritative archive start.
+Gate states that downloadable candlestick history is supported from **January 2023**. The v2 research store therefore uses `2023-01-01T00:00:00Z` as the default and minimum authoritative archive start.
 
-For Spot and USDT-M Futures, the production K-line archive contract used by this project is:
+Gate currently exposes two K-line object conventions in its own documentation and public archive. Live contract probes performed by this repository confirm that both are used in practice:
+
+Monthly object:
 
 ```text
 https://download.gatedata.org/<biz>/candlesticks_5m/YYYYMM/<market>-YYYYMM.csv.gz
 ```
 
-where `biz` is:
+Daily object inside the month directory:
+
+```text
+https://download.gatedata.org/<biz>/candlesticks_5m/YYYYMM/<market>-YYYYMMDD.csv.gz
+```
+
+A public-object probe on 2026-09-14 verified that `BTC_USDT` Spot and USDT Futures historical samples resolve with the monthly convention, while a historical `DOGS_USDT` Spot sample resolves with the daily convention. The collector therefore uses an **adaptive contract**:
+
+1. request the monthly K-line object first;
+2. if that object is absent, request the corresponding daily objects for the month;
+3. only for a recent archive-publication tail, use bounded REST fallback for days still unavailable.
+
+This prevents a monthly-only or daily-only assumption from silently truncating valid history.
+
+`biz` is:
 
 - `spot` for Gate Spot;
 - `futures_usdt` for USDT-M Futures.
 
 The project ingests **5m** as the canonical source grain and deterministically derives the required research timeframes `15m`, `1h`, `4h` and `1d`.
 
-Official reference:
+Official references:
 
 ```text
 https://www.gate.com/developer/historical_quotes
+https://testnet.gate.com/developer/historical_quotes
 ```
 
 ### REST tail fallback
 
 The Gate REST candlestick APIs are not used as the long-range archive source. They are used only as a bounded fallback for a recent unpublished archive tail, limited to the most recent 30 UTC days.
 
-This accommodates monthly publication lag without treating REST as an unlimited history store. The fallback remains subject to Gate's public request-size limits.
+This accommodates archive publication lag without treating REST as an unlimited history store. The fallback remains subject to Gate's public request-size limits.
 
 ### Gate TradFi
 
-Gate's Historical Quotation interface visibly exposes a TradFi category, but the generic downloadable-path contract currently documents `spot`, `futures_usdt` and `futures_btc` business identifiers and does not provide this project with a verified programmatic TradFi historical path contract.
+Gate's Historical Quotation interface visibly exposes a TradFi category, but its documented programmatic download-path contract defines `spot`, `futures_usdt` and `futures_btc` business identifiers and does not provide this project with a verified stable TradFi archive-path contract.
 
 Accordingly, Gate TradFi routes remain present in discovery and run evidence but are fail-closed as:
 
@@ -82,6 +99,8 @@ Default requested interval:
 - end: start of the current UTC day, exclusive
 
 A requested start before January 2023 is clipped to the verified archive start and recorded as `effective_archive_start` in the route manifest.
+
+For markets listed after January 2023, the manifest records the first actually observed source timestamp. Pre-listing time is never synthesized.
 
 ## Storage format
 
@@ -168,7 +187,8 @@ Each route manifest records:
 - first/last observed source timestamps;
 - total 5m row count;
 - route-wide missing 5m count;
-- represented/missing source-day evidence;
+- archive-day availability and missing-day evidence;
+- monthly and daily archive object counts;
 - recent REST fallback-day count;
 - source months requested/with rows/without rows;
 - partition object keys and SHA-256 values;
@@ -191,10 +211,14 @@ Workflow:
 
 `.github/workflows/gate-universe-full-history-to-b2.yml`
 
+Supporting public-source contract probe:
+
+`.github/workflows/gate-archive-contract-probe.yml`
+
 Stages:
 
 1. **Discover** — resolve the live project universe and every Gate route.
-2. **Sync** — fan out one independent matrix job per Gate route; retrieve monthly 5m archives, use recent REST fallback only when necessary, normalize, resample, checksum-verify and upload Parquet partitions.
+2. **Sync** — fan out one independent matrix job per Gate route; resolve monthly/daily archive convention, normalize, resample, checksum-verify and upload Parquet partitions.
 3. **Summarize** — collect every route summary, build consolidated run evidence and publish the run manifest to B2.
 
 The matrix uses `fail-fast: false`; one failing route cannot erase evidence from routes that completed successfully.
