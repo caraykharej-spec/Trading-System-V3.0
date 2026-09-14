@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   group: gate-universe-full-history-to-b2
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -56,7 +56,7 @@ jobs:
 
       - name: Discover live Storm universe and Gate routes
         run: >-
-          python scripts/backtest/sync_gate_universe_history_to_b2.py
+          python scripts/backtest/sync_gate_universe_monthly_archive_to_b2.py
           --discover-only
           --output artifacts/gate-history-discovery.json
 
@@ -162,7 +162,7 @@ jobs:
           if [ "${INPUT_FORCE:-false}" = "true" ]; then
             args+=(--force)
           fi
-          python scripts/backtest/sync_gate_universe_history_to_b2.py "${args[@]}"
+          python scripts/backtest/sync_gate_universe_monthly_archive_to_b2.py "${args[@]}"
 
       - name: Upload route evidence
         if: always()
