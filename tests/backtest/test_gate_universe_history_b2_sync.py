@@ -4,10 +4,10 @@ from decimal import Decimal
 from app.data.market_data import Candle
 from scripts.backtest.sync_gate_universe_history_to_b2 import (
     GateHistoryRoute,
-    archive_url,
     iter_month_ranges,
     resample,
 )
+from scripts.backtest.sync_gate_universe_monthly_archive_to_b2 import archive_month_url
 
 
 def _candle(minute: int, close: str) -> Candle:
@@ -80,7 +80,7 @@ def test_resample_drops_incomplete_higher_timeframe_bar() -> None:
     assert rows == []
 
 
-def test_archive_url_uses_documented_spot_daily_kline_layout() -> None:
+def test_archive_url_uses_production_spot_monthly_kline_layout() -> None:
     route = GateHistoryRoute(
         canonical_symbol="BTC/USDT",
         base_asset="BTC",
@@ -89,13 +89,13 @@ def test_archive_url_uses_documented_spot_daily_kline_layout() -> None:
         provider_symbol="BTC_USDT",
     )
 
-    assert archive_url(route, datetime(2026, 9, 13, tzinfo=timezone.utc)) == (
+    assert archive_month_url(route, datetime(2026, 9, 13, tzinfo=timezone.utc)) == (
         "https://download.gatedata.org/spot/candlesticks_5m/202609/"
-        "BTC_USDT-20260913.csv.gz"
+        "BTC_USDT-202609.csv.gz"
     )
 
 
-def test_archive_url_uses_documented_usdt_futures_layout() -> None:
+def test_archive_url_uses_production_usdt_futures_monthly_layout() -> None:
     route = GateHistoryRoute(
         canonical_symbol="1000PEPE/USDT",
         base_asset="1000PEPE",
@@ -105,9 +105,9 @@ def test_archive_url_uses_documented_usdt_futures_layout() -> None:
         price_multiplier="1000",
     )
 
-    assert archive_url(route, datetime(2026, 9, 13, tzinfo=timezone.utc)) == (
+    assert archive_month_url(route, datetime(2026, 9, 13, tzinfo=timezone.utc)) == (
         "https://download.gatedata.org/futures_usdt/candlesticks_5m/202609/"
-        "PEPE_USDT-20260913.csv.gz"
+        "PEPE_USDT-202609.csv.gz"
     )
 
 
