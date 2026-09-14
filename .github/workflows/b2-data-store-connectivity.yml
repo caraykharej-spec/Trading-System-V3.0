@@ -1,0 +1,134 @@
+name: B2 Data Store Connectivity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: b2-data-store-connectivity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  connectivity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      AWS_DEFAULT_REGION: eu-central-003
+      AWS_EC2_METADATA_DISABLED: "true"
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate required secrets exist
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME; do
+            if [ -z "${!name:-}" ]; then
+              echo "Required secret-backed environment variable is missing: $name" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Confirm AWS CLI availability
+        run: aws --version
+
+      - name: Normalize endpoint
+        id: endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$B2_S3_ENDPOINT"
+          case "$endpoint" in
+            http://*|https://*) ;;
+            *) endpoint="https://$endpoint" ;;
+          esac
+          echo "url=$endpoint" >> "$GITHUB_OUTPUT"
+
+      - name: Verify private bucket access
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3api head-bucket \
+            --bucket "$B2_BUCKET_NAME" \
+            --endpoint-url "${{ steps.endpoint.outputs.url }}"
+
+      - name: Create deterministic integrity payload
+        id: payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/b2-connectivity
+          object_key="_connectivity/github-actions/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA}.txt"
+          printf 'repository=%s\nrun_id=%s\nrun_attempt=%s\nsha=%s\n' \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" \
+            > artifacts/b2-connectivity/source.txt
+          source_sha="$(sha256sum artifacts/b2-connectivity/source.txt | awk '{print $1}')"
+          echo "object_key=$object_key" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Upload test object
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3api put-object \
+            --bucket "$B2_BUCKET_NAME" \
+            --key "${{ steps.payload.outputs.object_key }}" \
+            --body artifacts/b2-connectivity/source.txt \
+            --content-type text/plain \
+            --metadata "purpose=connectivity-check,git-sha=${GITHUB_SHA}" \
+            --endpoint-url "${{ steps.endpoint.outputs.url }}" \
+            > artifacts/b2-connectivity/put-object.json
+
+      - name: Read object back
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws s3api get-object \
+            --bucket "$B2_BUCKET_NAME" \
+            --key "${{ steps.payload.outputs.object_key }}" \
+            --endpoint-url "${{ steps.endpoint.outputs.url }}" \
+            artifacts/b2-connectivity/readback.txt \
+            > artifacts/b2-connectivity/get-object.json
+
+      - name: Verify SHA-256 integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          readback_sha="$(sha256sum artifacts/b2-connectivity/readback.txt | awk '{print $1}')"
+          if [ "$readback_sha" != "${{ steps.payload.outputs.source_sha }}" ]; then
+            echo "B2 read-back integrity mismatch" >&2
+            exit 1
+          fi
+          printf '{"status":"PASS","sha256":"%s","bucket":"%s","endpoint":"%s"}\n' \
+            "$readback_sha" "$B2_BUCKET_NAME" "${{ steps.endpoint.outputs.url }}" \
+            > artifacts/b2-connectivity/result.json
+
+      - name: Delete test object
+        if: always() && steps.payload.outputs.object_key != ''
+        shell: bash
+        run: |
+          set +e
+          aws s3api delete-object \
+            --bucket "$B2_BUCKET_NAME" \
+            --key "${{ steps.payload.outputs.object_key }}" \
+            --endpoint-url "${{ steps.endpoint.outputs.url }}"
+
+      - name: Upload non-secret connectivity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2-connectivity-${{ github.sha }}
+          path: |
+            artifacts/b2-connectivity/result.json
+          if-no-files-found: ignore
+          retention-days: 14
