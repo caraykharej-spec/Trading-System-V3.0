@@ -37,8 +37,11 @@ def main() -> int:
     )
 
     result = report["result"]
+    attrition = report["signal_attrition"]
     if not isinstance(result, dict):
         raise RuntimeError("baseline report result payload invalid")
+    if not isinstance(attrition, dict):
+        raise RuntimeError("baseline report signal_attrition payload invalid")
     print("LOCKED HISTORICAL BASELINE COMPLETE")
     print(f"symbol={report['symbol']}")
     print(f"dataset_start={report['dataset_requested_start']}")
@@ -50,6 +53,17 @@ def main() -> int:
     print(f"evidence_fingerprint={report['evidence_fingerprint']}")
     print(f"trade_count={result['trade_count']}")
     print(f"rejected_signals={result['rejected_signals']}")
+    print(f"decision_points={attrition['decision_points']}")
+    print(f"pre_signal_rejections={attrition['pre_signal_rejections']}")
+    print(f"post_signal_rejections={attrition['post_signal_rejections']}")
+    print(f"ready_for_risk_review={attrition['ready_for_risk_review']}")
+    print(f"entry_rejections={attrition['entry_rejections']}")
+    print(f"pre_signal_reasons={json.dumps(attrition['pre_signal_reasons'], sort_keys=True)}")
+    print(
+        "post_signal_reason_occurrences="
+        f"{json.dumps(attrition['post_signal_reason_occurrences'], sort_keys=True)}"
+    )
+    print(f"entry_reasons={json.dumps(attrition['entry_reasons'], sort_keys=True)}")
     print(f"final_equity={result['final_equity']}")
     print(f"total_return_percent={result['total_return_percent']}")
     print(f"max_drawdown_percent={result['max_drawdown_percent']}")

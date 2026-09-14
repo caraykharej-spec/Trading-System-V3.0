@@ -12,6 +12,7 @@ from app.data.historical_backfill import load_locked_dataset
 from app.storm_costs import StormCostService
 from app.strategy.rules import DEFAULT_RULES
 
+from .diagnostics import SignalAttritionDiagnostics
 from .engine import BacktestEngine
 from .models import BacktestConfig, BacktestResult
 
@@ -124,6 +125,22 @@ def _cost_config(
     return config, evidence
 
 
+def _validate_diagnostics(
+    diagnostics: dict[str, Any],
+    result: BacktestResult,
+) -> None:
+    if diagnostics["legacy_rejected_signals_equivalent"] != result.rejected_signals:
+        raise RuntimeError(
+            "signal attrition diagnostics diverged from legacy rejected_signals"
+        )
+    if diagnostics["trades_opened"] != len(result.trades):
+        raise RuntimeError("signal attrition diagnostics diverged from trade count")
+    if diagnostics["ready_for_risk_review"] != (
+        diagnostics["entry_attempts"] + diagnostics["pending_signal_at_end"]
+    ):
+        raise RuntimeError("signal attrition diagnostics ready/entry accounting mismatch")
+
+
 def run_locked_historical_baseline(
     dataset_dir: str | Path,
     *,
@@ -177,11 +194,15 @@ def run_locked_historical_baseline(
 
     storm_costs = cost_service or StormCostService()
     config, cost_evidence = _cost_config(storm_costs, symbol)
+    diagnostics = SignalAttritionDiagnostics()
     result = BacktestEngine(config).run(
         symbol,
         bundle.candles_by_timeframe,
         evaluation_start=evaluation_start_utc,
+        diagnostic_observer=diagnostics.record,
     )
+    diagnostic_payload = diagnostics.to_payload()
+    _validate_diagnostics(diagnostic_payload, result)
     result_payload = _result_payload(result)
     strategy_payload = asdict(DEFAULT_RULES)
     config_payload = asdict(config)
@@ -210,10 +231,12 @@ def run_locked_historical_baseline(
         "backtest_config": config_payload,
         "config_fingerprint": _fingerprint(config_payload),
         "cost_evidence": cost_evidence,
+        "signal_attrition": diagnostic_payload,
         "result": result_payload,
         "limitations": (
             "Gate.io candles are research OHLCV evidence; Storm is the execution venue.",
             "Pre-evaluation candles are warm-up only and are excluded from measured strategy decisions, rejections and entries.",
+            "Signal attrition is observational evidence from the unchanged baseline execution path; it does not alter strategy thresholds or risk rules.",
             "This baseline uses current Storm protocol fee and VPI spread, not historical fee/spread series.",
             "Historical funding, calibrated slippage and market impact are not claimed by this baseline; Phase 48.8 stress qualification remains mandatory.",
             "A successful baseline run is not a live-trading authorization or a guarantee of future profitability.",
