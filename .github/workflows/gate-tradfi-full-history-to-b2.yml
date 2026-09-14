@@ -55,7 +55,7 @@ jobs:
           cache: pip
 
       - name: Install project dependencies
-        run: python -m pip install -e ".[research-data]" pytest
+        run: python -m pip install -e ".[research-data]"
 
       - name: Run focused unit tests
         run: python -m pytest -q tests/backtest/test_gate_tradfi_history_b2_sync.py
@@ -75,16 +75,14 @@ jobs:
           import json
           from pathlib import Path
 
-          payload = json.loads(
-              Path("artifacts/gate-tradfi-discovery.json").read_text(encoding="utf-8")
-          )
+          payload = json.loads(Path("artifacts/gate-tradfi-discovery.json").read_text(encoding="utf-8"))
           routes = payload["routes"]
           if not routes:
-              raise SystemExit("Gate TradFi route discovery returned an empty matrix")
+              raise SystemExit("Gate TradFi discovery returned no routes")
           if len(routes) > 256:
               raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
           print("matrix=" + json.dumps({"route": routes}, separators=(",", ":")))
-          print(f"route_count={payload['route_count']}")
+          print(f"route_count={len(routes)}")
           PY
 
       - name: Upload discovery evidence
@@ -160,7 +158,31 @@ jobs:
           if [ "${INPUT_FORCE:-false}" = "true" ]; then
             args+=(--force)
           fi
-          python -m scripts.backtest.sync_gate_tradfi_history_to_b2 "${args[@]}"
+          python - "${args[@]}" <<'PY'
+          import sys
+          import time
+          from scripts.backtest import sync_gate_tradfi_history_to_b2 as module
+
+          original_put_file = module._put_file
+
+          def put_file_with_visibility_wait(path, key, sha256, content_type):
+              original_put_file(path, key, sha256, content_type)
+              delay = 1.0
+              last = None
+              for _ in range(8):
+                  last = module._head_sha256(key)
+                  if last == sha256:
+                      return
+                  time.sleep(delay)
+                  delay = min(delay * 2.0, 8.0)
+              raise RuntimeError(
+                  f"B2 SHA-256 metadata did not become visible for {key}: {last!r} != {sha256!r}"
+              )
+
+          module._put_file = put_file_with_visibility_wait
+          sys.argv = ["sync_gate_tradfi_history_to_b2.py", *sys.argv[1:]]
+          raise SystemExit(module.main())
+          PY
 
       - name: Upload route evidence
         if: always()
@@ -211,60 +233,65 @@ jobs:
           from datetime import datetime, timezone
           from pathlib import Path
 
-          summaries = [
-              json.loads(path.read_text(encoding="utf-8"))
-              for path in sorted(Path("artifacts/routes").rglob("route-summary.json"))
-          ]
+          summaries = []
+          for path in sorted(Path("artifacts/routes").rglob("route-summary.json")):
+              summaries.append(json.loads(path.read_text(encoding="utf-8")))
+
           expected = int(os.environ["EXPECTED_ROUTES"])
+          sync_result = os.environ.get("SYNC_RESULT")
           complete = sum(item.get("status") == "COMPLETE" for item in summaries)
           errors = sum(item.get("status") == "ERROR" for item in summaries)
           unexpected = sum(item.get("status") not in {"COMPLETE", "ERROR"} for item in summaries)
           missing = max(0, expected - len(summaries))
+          failed = bool(sync_result != "success" or complete != expected or errors or unexpected or missing)
+
           payload = {
               "schema_version": 3,
-              "source": "gateio_tradfi",
-              "source_kind": "gate_tradfi_public_kline_rest",
               "generated_at": datetime.now(timezone.utc).isoformat(),
               "github_run_id": os.environ.get("GITHUB_RUN_ID"),
               "github_sha": os.environ.get("GITHUB_SHA"),
+              "status": "FAIL_INCOMPLETE_GATE_TRADFI_TRANSFER" if failed else "PASS_COMPLETE_GATE_TRADFI_TRANSFER",
+              "sync_job_result": sync_result,
               "expected_routes": expected,
               "received_route_summaries": len(summaries),
               "completed_routes": complete,
               "error_routes": errors,
-              "unexpected_routes": unexpected,
+              "unexpected_status_routes": unexpected,
               "missing_route_summaries": missing,
-              "sync_result": os.environ.get("SYNC_RESULT"),
               "total_rows": sum(int(item.get("total_rows", 0)) for item in summaries),
               "partition_objects_recorded": sum(int(item.get("partition_objects_recorded", 0)) for item in summaries),
               "reused_verified_partition_objects": sum(int(item.get("reused_verified_partition_objects", 0)) for item in summaries),
               "uploaded_or_replaced_partition_objects": sum(int(item.get("uploaded_or_replaced_partition_objects", 0)) for item in summaries),
-              "routes": summaries,
+              "route_summaries": summaries,
           }
+          Path("artifacts").mkdir(exist_ok=True)
           Path("artifacts/gate-tradfi-run-manifest.json").write_text(
-              json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+              json.dumps(payload, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
           )
-          if os.environ.get("SYNC_RESULT") != "success":
-              raise SystemExit(f"matrix sync result was {os.environ.get('SYNC_RESULT')!r}")
-          if len(summaries) != expected or complete != expected or errors or unexpected or missing:
-              raise SystemExit(
-                  f"Gate TradFi accounting failed: expected={expected}, received={len(summaries)}, "
-                  f"complete={complete}, errors={errors}, unexpected={unexpected}, missing={missing}"
-              )
+          print(json.dumps({k: payload[k] for k in (
+              "status", "expected_routes", "received_route_summaries", "completed_routes",
+              "error_routes", "missing_route_summaries", "total_rows", "partition_objects_recorded"
+          )}, sort_keys=True))
+          if failed:
+              raise SystemExit("Gate TradFi transfer is incomplete")
           PY
 
       - name: Publish consolidated run manifest to B2
+        if: success()
         run: >-
           python -m scripts.backtest.sync_gate_tradfi_history_to_b2
           --publish-manifest artifacts/gate-tradfi-run-manifest.json
-          --run-id "${GITHUB_RUN_ID}"
-          --output artifacts/publish-result.json
+          --run-id "$GITHUB_RUN_ID"
+          --output artifacts/published-run-manifest.json
 
       - name: Upload consolidated evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gate-tradfi-run-manifest-${{ github.run_id }}
           path: |
             artifacts/gate-tradfi-run-manifest.json
-            artifacts/publish-result.json
-          if-no-files-found: error
+            artifacts/published-run-manifest.json
+          if-no-files-found: ignore
           retention-days: 90
