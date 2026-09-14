@@ -62,7 +62,7 @@ jobs:
 
       - name: Discover Gate TradFi routes
         run: >-
-          python scripts/backtest/sync_gate_tradfi_history_to_b2.py
+          python -m scripts.backtest.sync_gate_tradfi_history_to_b2
           --discover-only
           --output artifacts/gate-tradfi-discovery.json
 
@@ -160,7 +160,7 @@ jobs:
           if [ "${INPUT_FORCE:-false}" = "true" ]; then
             args+=(--force)
           fi
-          python scripts/backtest/sync_gate_tradfi_history_to_b2.py "${args[@]}"
+          python -m scripts.backtest.sync_gate_tradfi_history_to_b2 "${args[@]}"
 
       - name: Upload route evidence
         if: always()
@@ -254,7 +254,7 @@ jobs:
 
       - name: Publish consolidated run manifest to B2
         run: >-
-          python scripts/backtest/sync_gate_tradfi_history_to_b2.py
+          python -m scripts.backtest.sync_gate_tradfi_history_to_b2
           --publish-manifest artifacts/gate-tradfi-run-manifest.json
           --run-id "${GITHUB_RUN_ID}"
           --output artifacts/publish-result.json
