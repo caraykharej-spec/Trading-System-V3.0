@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 # `python scripts/backtest/<file>.py` puts scripts/backtest, not the repository
-# root, on sys.path.  Keep the documented direct entrypoint reliable while the
+# root, on sys.path. Keep the documented direct entrypoint reliable while the
 # same module remains importable by tests and `python -m`.
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -25,7 +25,7 @@ _CORE_SYNC_ROUTE = core.sync_route
 
 
 def archive_month_url(route: core.GateHistoryRoute, value: datetime) -> str:
-    """Build the production Gate Historical Quotation monthly K-line URL."""
+    """Build Gate's monthly Historical Quotation K-line URL."""
 
     business = route.archive_business
     if business is None:
@@ -37,6 +37,12 @@ def archive_month_url(route: core.GateHistoryRoute, value: datetime) -> str:
         f"{core._ARCHIVE_BASE_URL}/{business}/candlesticks_5m/{month}/"
         f"{market}-{month}.csv.gz"
     )
+
+
+def archive_day_url(route: core.GateHistoryRoute, value: datetime) -> str:
+    """Build Gate's daily Historical Quotation K-line URL."""
+
+    return core.archive_url(route, value)
 
 
 def _parse_month_archive_5m(
@@ -106,59 +112,95 @@ def fetch_month_5m(
     route: core.GateHistoryRoute,
     start: datetime,
     end: datetime,
-) -> tuple[list[Candle], int, int, int]:
-    """Fetch one monthly archive and use REST only for a recent unpublished tail.
+) -> tuple[list[Candle], int, int, int, int, int]:
+    """Resolve Gate history adaptively: monthly, then daily, then recent REST.
 
-    The return shape intentionally matches the core collector contract:
-    rows, archive_days_found, archive_days_missing, rest_fallback_days.
+    Gate's live public archive currently contains both monthly and daily K-line
+    object conventions depending on instrument/history segment. Monthly is
+    attempted first because it minimizes requests. If absent, each requested
+    UTC day is resolved through the daily K-line convention. REST remains a
+    bounded fallback only for a recent unpublished archive tail.
 
-    Gate publishes the historical quotation archive at monthly granularity.  The
-    day counters below describe represented UTC calendar days inside that
-    monthly source file, not the number of HTTP archive objects.
+    Returns:
+      rows,
+      archive_days_found,
+      archive_days_missing,
+      rest_fallback_days,
+      monthly_archive_objects_found,
+      daily_archive_objects_found.
     """
 
     output: dict[datetime, Candle] = {}
+    archive_days_found = 0
+    archive_days_missing = 0
     rest_fallback_days = 0
+    monthly_archive_objects_found = 0
+    daily_archive_objects_found = 0
     recent_cutoff = core._utc_day_floor(datetime.now(timezone.utc)) - timedelta(days=30)
+    requested_days = list(core.iter_days(start, end))
 
-    with tempfile.TemporaryDirectory(prefix="gate-monthly-archive-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="gate-adaptive-archive-") as temp_dir:
+        root = Path(temp_dir)
         month = start.astimezone(timezone.utc).strftime("%Y%m")
-        path = Path(temp_dir) / f"{route.provider_symbol}-{month}.csv.gz"
-        found = core._download_archive(archive_month_url(route, start), path)
-        archive_rows: list[Candle] = []
-        if found:
-            archive_rows = _parse_month_archive_5m(path, route, start, end)
-            for candle in archive_rows:
+        month_path = root / f"{route.provider_symbol}-{month}.csv.gz"
+        monthly_found = core._download_archive(archive_month_url(route, start), month_path)
+
+        archive_day_keys: set[str] = set()
+        if monthly_found:
+            monthly_archive_objects_found = 1
+            monthly_rows = _parse_month_archive_5m(month_path, route, start, end)
+            for candle in monthly_rows:
                 output[candle.timestamp] = candle
+                archive_day_keys.add(_day_key(candle.timestamp))
+            archive_days_found = len(archive_day_keys)
+            archive_days_missing = max(0, len(requested_days) - archive_days_found)
 
-        archive_day_keys = {_day_key(item.timestamp) for item in archive_rows}
-        requested_days = list(core.iter_days(start, end))
-
-        # A monthly file for the current UTC month may not have been published
-        # yet.  REST is deliberately bounded to the recent tail only.
-        for day in requested_days:
-            if day < recent_cutoff or _day_key(day) in archive_day_keys:
-                continue
-            try:
-                recent = core._fetch_recent_rest_5m(route, day)
-            except ProviderError:
-                recent = []
-            if recent:
-                rest_fallback_days += 1
-                for candle in recent:
+            # A current monthly object can be incomplete. Only fill recent days
+            # missing from the archive; never use REST as long-range history.
+            for day in requested_days:
+                if _day_key(day) in archive_day_keys or day < recent_cutoff:
+                    continue
+                try:
+                    recent = core._fetch_recent_rest_5m(route, day)
+                except ProviderError:
+                    recent = []
+                if recent:
+                    rest_fallback_days += 1
+                    for candle in recent:
+                        if start <= candle.timestamp < end:
+                            output[candle.timestamp] = candle
+        else:
+            # Gate also serves K-line history as daily objects for some markets.
+            # This contract is documented by Gate and independently probed by
+            # the repository's archive-contract workflow.
+            for day in requested_days:
+                daily_path = root / f"{route.provider_symbol}-{day.strftime('%Y%m%d')}.csv.gz"
+                daily_found = core._download_archive(archive_day_url(route, day), daily_path)
+                rows: list[Candle] = []
+                if daily_found:
+                    daily_archive_objects_found += 1
+                    archive_days_found += 1
+                    rows = core._parse_archive_5m(daily_path, route, day)
+                else:
+                    archive_days_missing += 1
+                    if day >= recent_cutoff:
+                        try:
+                            rows = core._fetch_recent_rest_5m(route, day)
+                        except ProviderError:
+                            rows = []
+                        if rows:
+                            rest_fallback_days += 1
+                for candle in rows:
                     if start <= candle.timestamp < end:
                         output[candle.timestamp] = candle
 
-    output_rows = [output[key] for key in sorted(output)]
-    represented_days = {_day_key(item.timestamp) for item in output_rows}
-    requested_day_count = len(list(core.iter_days(start, end)))
-    archive_days_found = len(archive_day_keys)
-    archive_days_missing = max(0, requested_day_count - len(represented_days))
     return (
-        output_rows,
+        [output[key] for key in sorted(output)],
         archive_days_found,
         archive_days_missing,
         rest_fallback_days,
+        monthly_archive_objects_found,
+        daily_archive_objects_found,
     )
 
 
@@ -208,7 +250,7 @@ def sync_route(
     end: datetime,
     force: bool = False,
 ) -> dict[str, object]:
-    """Sync and verify one route using Gate's production monthly archive contract."""
+    """Sync and verify one route using Gate's adaptive archive contracts."""
 
     if not route.full_history_supported:
         return _CORE_SYNC_ROUTE(route, start=start, end=end, force=force)
@@ -222,9 +264,13 @@ def sync_route(
     total_archive_days_found = 0
     total_archive_days_missing = 0
     total_rest_fallback_days = 0
+    total_monthly_archive_objects_found = 0
+    total_daily_archive_objects_found = 0
     source_months_requested = 0
     source_months_with_rows = 0
     source_months_without_rows: list[str] = []
+    source_months_using_monthly_archive = 0
+    source_months_using_daily_archive = 0
     uploaded_new_partition_objects = 0
     replaced_partition_objects = 0
     reused_verified_partition_objects = 0
@@ -238,14 +284,22 @@ def sync_route(
             archive_days_found,
             archive_days_missing,
             rest_fallback_days,
+            monthly_archive_objects_found,
+            daily_archive_objects_found,
         ) = fetch_month_5m(route, month_start, month_end)
 
-        # Count source availability even when a whole month has no rows.  This
-        # prevents a missing source month from disappearing from evidence.
         total_archive_days_found += archive_days_found
         total_archive_days_missing += archive_days_missing
         total_rest_fallback_days += rest_fallback_days
+        total_monthly_archive_objects_found += monthly_archive_objects_found
+        total_daily_archive_objects_found += daily_archive_objects_found
+        if monthly_archive_objects_found:
+            source_months_using_monthly_archive += 1
+        if daily_archive_objects_found:
+            source_months_using_daily_archive += 1
 
+        # Count source availability even when a whole month has no rows. This
+        # prevents a missing source month from disappearing from evidence.
         if not five:
             source_months_without_rows.append(month_label)
             continue
@@ -263,7 +317,7 @@ def sync_route(
             key = core._partition_key(route, timeframe, month_start, month_end, end)
 
             # Rebuild deterministic Parquet bytes first, then compare their
-            # digest to B2 metadata.  Mere object existence is not sufficient
+            # digest to B2 metadata. Mere object existence is not sufficient
             # qualification evidence.
             with tempfile.TemporaryDirectory(prefix="gate-history-") as temp_dir:
                 path = Path(temp_dir) / f"{timeframe}.parquet"
@@ -323,7 +377,7 @@ def sync_route(
         "requested_end": end.isoformat(),
         "generated_at": generated_at.isoformat(),
         "source_kind": "gate_historical_quotation",
-        "source_archive_contract": "monthly",
+        "source_archive_contract": "adaptive_monthly_then_daily",
         "source_timeframe": "5m",
         "derived_timeframes": list(core._TIMEFRAMES),
         "observed_first": observed_first.isoformat() if observed_first else None,
@@ -333,9 +387,13 @@ def sync_route(
         "archive_days_found": total_archive_days_found,
         "archive_days_missing": total_archive_days_missing,
         "rest_fallback_days": total_rest_fallback_days,
+        "monthly_archive_objects_found": total_monthly_archive_objects_found,
+        "daily_archive_objects_found": total_daily_archive_objects_found,
         "source_months_requested": source_months_requested,
         "source_months_with_rows": source_months_with_rows,
         "source_months_without_rows": source_months_without_rows,
+        "source_months_using_monthly_archive": source_months_using_monthly_archive,
+        "source_months_using_daily_archive": source_months_using_daily_archive,
         "partition_objects_recorded": len(partitions),
         "uploaded_new_partition_objects": uploaded_new_partition_objects,
         "replaced_partition_objects": replaced_partition_objects,
@@ -350,8 +408,8 @@ def sync_route(
 
 def main() -> int:
     # Core owns universe discovery, deterministic resampling, Parquet schema,
-    # B2 object layout, route manifests and CLI.  This module installs Gate's
-    # production monthly archive transport plus checksum-aware qualification.
+    # B2 object layout, route manifests and CLI. This module installs Gate's
+    # adaptive archive transport plus checksum-aware qualification.
     core.fetch_month_5m = fetch_month_5m
     core.sync_route = sync_route
     return core.main()
