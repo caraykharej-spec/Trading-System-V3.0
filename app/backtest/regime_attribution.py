@@ -4,7 +4,7 @@ from bisect import bisect_right
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from typing import Any, Iterable, Sequence
 
 from app.data.market_data import Candle
@@ -20,6 +20,7 @@ _DECISION_CODES = {
     "STRATEGY_SIGNAL_REJECT",
     "READY_FOR_RISK_REVIEW",
 }
+_DECIMAL_RECONCILIATION_PRECISION = 128
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,14 @@ class RegimePoint:
     effective_at: datetime
     regime: str
     volatility: str
+
+
+def _precise_sum(values: Iterable[Decimal]) -> Decimal:
+    """Sum financial Decimal values without order-dependent context rounding."""
+
+    with localcontext() as context:
+        context.prec = _DECIMAL_RECONCILIATION_PRECISION
+        return sum(values, Decimal("0"))
 
 
 def build_daily_regime_timeline(
@@ -82,29 +91,33 @@ def _trade_metrics(
 
     def summarize(rows: list[TradeRecord]) -> dict[str, object]:
         pnls = [trade.realized_pnl for trade in rows]
-        positive = sum((pnl for pnl in pnls if pnl > 0), Decimal("0"))
-        negative = sum((pnl for pnl in pnls if pnl < 0), Decimal("0"))
+        positive = _precise_sum(pnl for pnl in pnls if pnl > 0)
+        negative = _precise_sum(pnl for pnl in pnls if pnl < 0)
         wins = sum(1 for pnl in pnls if pnl > 0)
         losses = sum(1 for pnl in pnls if pnl < 0)
         breakeven = len(pnls) - wins - losses
-        net_pnl = sum(pnls, Decimal("0"))
+        net_pnl = _precise_sum(pnls)
         profit_factor: Decimal | None
         if negative < 0:
-            profit_factor = positive / abs(negative)
+            with localcontext() as context:
+                context.prec = _DECIMAL_RECONCILIATION_PRECISION
+                profit_factor = positive / abs(negative)
         elif positive > 0:
             profit_factor = None
         else:
             profit_factor = Decimal("0") if rows else None
-        win_rate = (
-            Decimal(wins) / Decimal(len(rows)) * Decimal("100")
-            if rows
-            else Decimal("0")
-        )
-        contribution = (
-            net_pnl / initial_equity * Decimal("100")
-            if initial_equity > 0
-            else Decimal("0")
-        )
+        with localcontext() as context:
+            context.prec = _DECIMAL_RECONCILIATION_PRECISION
+            win_rate = (
+                Decimal(wins) / Decimal(len(rows)) * Decimal("100")
+                if rows
+                else Decimal("0")
+            )
+            contribution = (
+                net_pnl / initial_equity * Decimal("100")
+                if initial_equity > 0
+                else Decimal("0")
+            )
         return {
             "trade_count": len(rows),
             "wins": wins,
@@ -217,10 +230,12 @@ def validate_regime_attribution(
     if attributed_trade_count != expected_trades:
         raise RuntimeError("regime attribution closed-trade accounting mismatch")
 
-    attributed_pnl = sum(
-        (Decimal(str(bucket["net_pnl"])) for bucket in trade_metrics.values()),
-        Decimal("0"),
+    attributed_pnl = _precise_sum(
+        Decimal(str(bucket["net_pnl"])) for bucket in trade_metrics.values()
     )
-    actual_pnl = sum((trade.realized_pnl for trade in trades), Decimal("0"))
+    actual_pnl = _precise_sum(trade.realized_pnl for trade in trades)
     if attributed_pnl != actual_pnl:
-        raise RuntimeError("regime attribution PnL accounting mismatch")
+        raise RuntimeError(
+            "regime attribution PnL accounting mismatch: "
+            f"attributed={attributed_pnl} actual={actual_pnl}"
+        )
