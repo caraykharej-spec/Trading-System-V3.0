@@ -210,23 +210,6 @@ class BacktestEngine:
                     snapshots["15m"],
                     rules=self.rules,
                 )
-                if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
-                    pending_signal = signal
-                    self._emit(
-                        diagnostic_observer,
-                        decision_time,
-                        "READY_FOR_RISK_REVIEW",
-                        signal=signal,
-                    )
-                else:
-                    rejected += 1
-                    self._emit(
-                        diagnostic_observer,
-                        decision_time,
-                        "STRATEGY_SIGNAL_REJECT",
-                        signal=signal,
-                        reasons=tuple(signal.reasons),
-                    )
             except (ValueError, ArithmeticError, IndexError) as exc:
                 rejected += 1
                 self._emit(
@@ -234,6 +217,25 @@ class BacktestEngine:
                     decision_time,
                     "STRATEGY_PRE_SIGNAL_REJECT",
                     reasons=(self._strategy_failure_reason(exc),),
+                )
+                continue
+
+            if signal.state is StrategyState.READY_FOR_RISK_REVIEW:
+                pending_signal = signal
+                self._emit(
+                    diagnostic_observer,
+                    decision_time,
+                    "READY_FOR_RISK_REVIEW",
+                    signal=signal,
+                )
+            else:
+                rejected += 1
+                self._emit(
+                    diagnostic_observer,
+                    decision_time,
+                    "STRATEGY_SIGNAL_REJECT",
+                    signal=signal,
+                    reasons=tuple(signal.reasons),
                 )
 
         if pending_signal is not None:
