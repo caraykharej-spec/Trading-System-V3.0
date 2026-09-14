@@ -6,18 +6,18 @@ This document defines the persistent historical-data architecture used by the re
 
 ## Objectives
 
-The store exists to avoid repeatedly downloading and reconstructing the same historical market data for walk-forward, OOS, Monte Carlo, sensitivity, regime and statistical-qualification workloads.
+The store avoids repeatedly downloading and reconstructing the same historical market data for walk-forward, OOS, Monte Carlo, sensitivity, regime and statistical-qualification workloads.
 
 The design goals are:
 
-- immutable, content-addressed research datasets;
-- deterministic dataset fingerprints;
+- content-addressed research datasets;
+- deterministic dataset fingerprints that bind source data, Git revision and writer version;
 - fail-closed quality and integrity validation;
 - explicit source lineage and Git revision;
 - Parquet storage with ZSTD compression;
 - SHA-256 verification before and after B2 upload;
 - no credentials in source control;
-- no overwrite of published research objects.
+- idempotent exact-byte retries for interrupted publications.
 
 ## Storage Roles
 
@@ -53,36 +53,51 @@ gold/locked-research-datasets/v1/
       manifest.json
 ```
 
-`dataset_fingerprint` is SHA-256 over the stable research identity, including source dataset fingerprints and the SHA-256 of every Parquet partition. Published paths are therefore content-addressed.
+`dataset_fingerprint` is SHA-256 over the stable research identity, including source fingerprints, Git revision, Parquet writer identity and the SHA-256 of every Parquet partition. The object prefix is recomputed from that fingerprint during verification and is never trusted from arbitrary manifest input.
 
-## Commit Protocol
+## Publication and Retry Semantics
 
 Publishing is fail-closed and uses the following order:
 
 1. verify the existing locked source dataset;
 2. build Parquet+ZSTD partitions;
-3. verify local Parquet checksums;
-4. upload Parquet objects without overwrite;
-5. download each uploaded object and verify SHA-256;
-6. upload `checksums.json` and verify it;
-7. upload `manifest.json` **last** and verify it.
+3. verify local Parquet checksums and `checksums.json` consistency;
+4. upload/reuse each data object only when its bytes match the expected SHA-256 exactly;
+5. download and verify every B2 object;
+6. publish `checksums.json` with the same exact-byte retry policy;
+7. publish `manifest.json` **last** with the same exact-byte retry policy.
 
 `manifest.json` is the commit marker. A prefix without a valid manifest is incomplete and must not be consumed by research jobs.
 
-## Credentials
+Backblaze's documented S3 Put Object headers do not advertise a conditional-create header. The implementation therefore makes retry safety content-addressed: all lineage that can change the manifest is bound into the dataset fingerprint, and an existing key is accepted only after read-back SHA-256 matches the expected bytes. A mismatched object fails closed.
+
+## Path Safety
+
+Parquet paths are not arbitrary manifest paths. For each timeframe, the only permitted relative path is exactly:
+
+```text
+parquet/<timeframe>.parquet
+```
+
+Absolute paths, `..`, backslashes and paths escaping the bundle root are rejected before publication.
+
+## Credentials and Region
 
 The application never accepts B2 credentials as command-line arguments and never writes them to files.
 
-Expected execution-environment variables:
+Expected execution-environment values:
 
 ```text
 AWS_ACCESS_KEY_ID
 AWS_SECRET_ACCESS_KEY
 B2_S3_ENDPOINT
 B2_BUCKET_NAME
+B2_S3_REGION          # preferred
 ```
 
-For GitHub Actions these values are supplied from GitHub Secrets. The B2 workflow is trusted/manual only (`workflow_dispatch`); pull-request code must not receive storage credentials.
+`AWS_DEFAULT_REGION` may be used instead of `B2_S3_REGION`. The region is passed explicitly to every AWS CLI S3 API invocation for Signature V4 signing.
+
+For GitHub Actions these values are supplied from GitHub Secrets/environment configuration. The B2 connectivity workflow is trusted/manual only (`workflow_dispatch`); pull-request code must not receive storage credentials.
 
 ## Build Only
 
@@ -98,7 +113,7 @@ This performs source verification and creates the Parquet research bundle withou
 
 ## Publish and Verify
 
-With the four required environment variables present:
+With the required environment values present:
 
 ```bash
 python scripts/backtest/publish_locked_dataset_to_b2.py \
@@ -107,13 +122,13 @@ python scripts/backtest/publish_locked_dataset_to_b2.py \
   --git-revision "$GITHUB_SHA"
 ```
 
-A successful run prints `PUBLISHED_AND_VERIFIED` together with the dataset fingerprint and immutable object prefix.
+A successful run prints `PUBLISHED_AND_VERIFIED` together with the dataset fingerprint and content-addressed object prefix.
 
 ## Data Quality Policy
 
 Missing source candles are not forward-filled, interpolated or silently synthesized. If the existing locked-dataset pipeline reports a gap, the dataset remains rejected until the gap is resolved through a documented authoritative-source repair process.
 
-Example: the BTC/USDT March 2021 archive currently exposes a three-bucket 5-minute gap during reconstruction. That month must not be promoted to GOLD until the source-quality issue is resolved and provenance is recorded.
+Example: BTC/USDT March 2021 currently exposes a three-bucket 5-minute gap during reconstruction. That month must not be promoted to GOLD until the source-quality issue is resolved and provenance is recorded.
 
 ## Future Extensions
 
@@ -123,4 +138,4 @@ The same object-store contract will be extended to:
 - SILVER canonical 15-minute candles and deterministically derived 1h/4h/1d candles;
 - monthly incremental ingestion for newly completed months;
 - B2-first backtest restore/cache so historical reconstruction is not repeated;
-- separate read-only CI credentials from ingestion read/write credentials.
+- separate read-only research-consumer credentials from ingestion read/write credentials.

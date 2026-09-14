@@ -6,7 +6,7 @@ import os
 import subprocess
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.data.historical_backfill import LockedDatasetBundle, load_locked_dataset
@@ -16,6 +16,9 @@ _SCHEMA_VERSION = 1
 _STORAGE_FORMAT = "parquet"
 _COMPRESSION = "zstd"
 _RESEARCH_STATUS = "RESEARCH_PAPER_ONLY"
+_IMMUTABILITY = "CONTENT_ADDRESSED_EXACT_RETRY"
+_COMMIT_PROTOCOL = "DATA_THEN_CHECKSUMS_THEN_MANIFEST_LAST"
+_NAMESPACE = "gold/locked-research-datasets/v1"
 _TIMEFRAMES = ("15m", "1h", "4h", "1d")
 
 
@@ -79,6 +82,35 @@ def _load_pyarrow() -> tuple[Any, Any]:
             "install the research-data optional dependency"
         ) from exc
     return pa, pq
+
+
+def _writer_identity() -> dict[str, str]:
+    pa, _ = _load_pyarrow()
+    return {"library": "pyarrow", "version": str(pa.__version__)}
+
+
+def _expected_relative_path(timeframe: str) -> str:
+    if timeframe not in _TIMEFRAMES:
+        raise ResearchStoreError(f"unsupported research timeframe: {timeframe}")
+    return f"parquet/{timeframe}.parquet"
+
+
+def _safe_partition_path(root: Path, relative: str, timeframe: str) -> Path:
+    expected = _expected_relative_path(timeframe)
+    pure = PurePosixPath(relative)
+    if relative != expected or pure.is_absolute() or ".." in pure.parts or "\\" in relative:
+        raise ResearchStoreError(f"unsafe parquet path for {timeframe}: {relative}")
+    root_resolved = root.resolve()
+    candidate = (root / Path(*pure.parts)).resolve()
+    try:
+        candidate.relative_to(root_resolved)
+    except ValueError as exc:
+        raise ResearchStoreError(f"parquet path escapes bundle root: {relative}") from exc
+    return candidate
+
+
+def _expected_object_prefix(symbol: str, dataset_fingerprint: str) -> str:
+    return f"{_NAMESPACE}/{_slug(symbol)}/{dataset_fingerprint}"
 
 
 def _validate_partition(candles: list[Candle], *, symbol: str, timeframe: str) -> None:
@@ -157,12 +189,7 @@ def build_research_bundle(
     git_revision: str,
     tier: str = "gold",
 ) -> ResearchBundle:
-    """Convert a verified locked dataset into immutable Parquet research objects.
-
-    The source locked dataset is reloaded through its existing fail-closed verifier before
-    any Parquet file is written. The resulting fingerprint is content-addressed and does
-    not depend on local paths or creation time.
-    """
+    """Convert a verified locked dataset into immutable Parquet research objects."""
 
     if tier != "gold":
         raise ResearchStoreError("only gold locked-research datasets are publishable")
@@ -183,14 +210,13 @@ def build_research_bundle(
         raise ResearchStoreError("source content_sha256 map missing")
 
     root = Path(output_dir)
-    parquet_dir = root / "parquet"
     timeframe_entries: dict[str, object] = {}
-
     for timeframe in _TIMEFRAMES:
         candles = source.candles_by_timeframe.get(timeframe)
         if not isinstance(candles, list):
             raise ResearchStoreError(f"source timeframe missing: {timeframe}")
-        parquet_path = parquet_dir / f"{timeframe}.parquet"
+        relative = _expected_relative_path(timeframe)
+        parquet_path = _safe_partition_path(root, relative, timeframe)
         _write_parquet(parquet_path, candles, symbol=symbol, timeframe=timeframe)
         source_hash = content_hashes.get(timeframe)
         if not isinstance(source_hash, str):
@@ -198,7 +224,7 @@ def build_research_bundle(
         timeframe_entries[timeframe] = {
             "row_count": len(candles),
             "source_content_sha256": source_hash,
-            "parquet_file": parquet_path.relative_to(root).as_posix(),
+            "parquet_file": relative,
             "parquet_sha256": _file_sha256(parquet_path),
         }
 
@@ -214,21 +240,19 @@ def build_research_bundle(
         "dataset_version": dataset_version,
         "source_dataset_bundle_fingerprint": source_bundle_fingerprint,
         "source_manifest_fingerprint": source_manifest_fingerprint,
+        "git_revision": git_revision,
+        "writer": _writer_identity(),
         "timeframes": timeframe_entries,
     }
     dataset_fingerprint = _fingerprint(stable_identity)
-    object_prefix = (
-        f"gold/locked-research-datasets/v1/{_slug(symbol)}/"
-        f"{dataset_fingerprint}"
-    )
+    object_prefix = _expected_object_prefix(symbol, dataset_fingerprint)
     manifest: dict[str, object] = {
         **stable_identity,
         "dataset_fingerprint": dataset_fingerprint,
         "object_prefix": object_prefix,
-        "git_revision": git_revision,
         "qualification_status": _RESEARCH_STATUS,
-        "immutability": "CONTENT_ADDRESSED_NO_OVERWRITE",
-        "commit_protocol": "DATA_THEN_CHECKSUMS_THEN_MANIFEST_LAST",
+        "immutability": _IMMUTABILITY,
+        "commit_protocol": _COMMIT_PROTOCOL,
     }
     manifest["manifest_fingerprint"] = _fingerprint(manifest)
 
@@ -244,17 +268,37 @@ def build_research_bundle(
 
 def verify_research_bundle(bundle_dir: str | Path) -> ResearchBundle:
     root = Path(bundle_dir)
-    raw = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    try:
+        raw = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ResearchStoreError("research manifest is missing or invalid") from exc
     if not isinstance(raw, dict):
         raise ResearchStoreError("research manifest must be an object")
     manifest = {str(key): value for key, value in raw.items()}
+
     stored_manifest_fp = _require_text(manifest, "manifest_fingerprint")
     fingerprint_payload = dict(manifest)
     fingerprint_payload.pop("manifest_fingerprint", None)
     if _fingerprint(fingerprint_payload) != stored_manifest_fp:
         raise ResearchStoreError("research manifest fingerprint mismatch")
 
+    if manifest.get("schema_version") != _SCHEMA_VERSION:
+        raise ResearchStoreError("unsupported research schema version")
+    if manifest.get("tier") != "gold":
+        raise ResearchStoreError("research tier must be gold")
+    if manifest.get("storage_format") != _STORAGE_FORMAT:
+        raise ResearchStoreError("research storage format mismatch")
+    if manifest.get("compression") != _COMPRESSION:
+        raise ResearchStoreError("research compression mismatch")
+    if manifest.get("qualification_status") != _RESEARCH_STATUS:
+        raise ResearchStoreError("research qualification status mismatch")
+    if manifest.get("immutability") != _IMMUTABILITY:
+        raise ResearchStoreError("research immutability policy mismatch")
+    if manifest.get("commit_protocol") != _COMMIT_PROTOCOL:
+        raise ResearchStoreError("research commit protocol mismatch")
+
     dataset_fingerprint = _require_text(manifest, "dataset_fingerprint")
+    symbol = _require_text(manifest, "symbol")
     stable_identity = {
         key: manifest.get(key)
         for key in (
@@ -269,15 +313,22 @@ def verify_research_bundle(bundle_dir: str | Path) -> ResearchBundle:
             "dataset_version",
             "source_dataset_bundle_fingerprint",
             "source_manifest_fingerprint",
+            "git_revision",
+            "writer",
             "timeframes",
         )
     }
     if _fingerprint(stable_identity) != dataset_fingerprint:
         raise ResearchStoreError("research dataset fingerprint mismatch")
+    expected_prefix = _expected_object_prefix(symbol, dataset_fingerprint)
+    if manifest.get("object_prefix") != expected_prefix:
+        raise ResearchStoreError("research object_prefix mismatch")
 
     entries = manifest.get("timeframes")
-    if not isinstance(entries, dict):
-        raise ResearchStoreError("research timeframe map missing")
+    if not isinstance(entries, dict) or set(entries) != set(_TIMEFRAMES):
+        raise ResearchStoreError("research timeframe map invalid")
+
+    expected_checksums: dict[str, str] = {}
     for timeframe in _TIMEFRAMES:
         raw_entry = entries.get(timeframe)
         if not isinstance(raw_entry, dict):
@@ -285,44 +336,68 @@ def verify_research_bundle(bundle_dir: str | Path) -> ResearchBundle:
         entry = {str(key): value for key, value in raw_entry.items()}
         relative = _require_text(entry, "parquet_file")
         expected_sha = _require_text(entry, "parquet_sha256")
-        path = root / relative
-        if not path.exists():
+        path = _safe_partition_path(root, relative, timeframe)
+        if not path.is_file():
             raise ResearchStoreError(f"research parquet missing: {timeframe}")
         if _file_sha256(path) != expected_sha:
             raise ResearchStoreError(f"research parquet checksum mismatch: {timeframe}")
+        expected_checksums[relative] = expected_sha
+
+    try:
+        checksums_raw = json.loads((root / "checksums.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ResearchStoreError("checksums.json is missing or invalid") from exc
+    if not isinstance(checksums_raw, dict):
+        raise ResearchStoreError("checksums.json must be an object")
+    checksums = {str(key): value for key, value in checksums_raw.items()}
+    if set(checksums) != set(expected_checksums):
+        raise ResearchStoreError("checksums.json partition set mismatch")
+    for relative, expected_sha in expected_checksums.items():
+        if checksums.get(relative) != expected_sha:
+            raise ResearchStoreError(f"checksums.json mismatch: {relative}")
+
     return ResearchBundle(root=root, manifest=manifest, dataset_fingerprint=dataset_fingerprint)
 
 
 class AwsCliB2Repository:
-    """Fail-closed Backblaze B2 repository using the S3-compatible AWS CLI.
+    """Fail-closed Backblaze B2 repository using the S3-compatible AWS CLI."""
 
-    Credentials are intentionally not accepted as constructor arguments. AWS_ACCESS_KEY_ID
-    and AWS_SECRET_ACCESS_KEY must be supplied by the execution environment (for example,
-    GitHub Actions secrets). This keeps credentials out of repository configuration and logs.
-    """
-
-    def __init__(self, *, endpoint: str, bucket: str) -> None:
+    def __init__(self, *, endpoint: str, bucket: str, region: str) -> None:
         if not endpoint.startswith("https://"):
             raise ValueError("B2 endpoint must use https")
         if not bucket:
             raise ValueError("B2 bucket is required")
+        if not region:
+            raise ValueError("B2 signing region is required")
         self.endpoint = endpoint.rstrip("/")
         self.bucket = bucket
+        self.region = region
 
     @classmethod
     def from_environment(cls) -> AwsCliB2Repository:
         endpoint = os.environ.get("B2_S3_ENDPOINT", "")
         bucket = os.environ.get("B2_BUCKET_NAME", "")
-        return cls(endpoint=endpoint, bucket=bucket)
+        region = os.environ.get("B2_S3_REGION") or os.environ.get("AWS_DEFAULT_REGION", "")
+        return cls(endpoint=endpoint, bucket=bucket, region=region)
 
-    def _run(self, *args: str, capture: bool = True) -> subprocess.CompletedProcess[str]:
-        command = ["aws", "s3api", *args, "--endpoint-url", self.endpoint]
+    def _command(self, *args: str) -> list[str]:
+        return [
+            "aws",
+            "s3api",
+            *args,
+            "--endpoint-url",
+            self.endpoint,
+            "--region",
+            self.region,
+        ]
+
+    def _run(self, *args: str) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
-                command,
+                self._command(*args),
                 check=True,
                 text=True,
-                capture_output=capture,
+                capture_output=True,
             )
         except FileNotFoundError as exc:
             raise ResearchStoreError("AWS CLI is not installed") from exc
@@ -331,19 +406,13 @@ class AwsCliB2Repository:
             raise ResearchStoreError(message) from exc
 
     def object_exists(self, key: str) -> bool:
-        command = [
-            "aws",
-            "s3api",
-            "head-object",
-            "--bucket",
-            self.bucket,
-            "--key",
-            key,
-            "--endpoint-url",
-            self.endpoint,
-        ]
         try:
-            subprocess.run(command, check=True, text=True, capture_output=True)
+            subprocess.run(
+                self._command("head-object", "--bucket", self.bucket, "--key", key),
+                check=True,
+                text=True,
+                capture_output=True,
+            )
             return True
         except FileNotFoundError as exc:
             raise ResearchStoreError("AWS CLI is not installed") from exc
@@ -352,19 +421,6 @@ class AwsCliB2Repository:
             if "not found" in stderr or "404" in stderr or "nosuchkey" in stderr:
                 return False
             raise ResearchStoreError((exc.stderr or exc.stdout or "head-object failed").strip()) from exc
-
-    def upload_immutable(self, local_path: Path, key: str) -> None:
-        if self.object_exists(key):
-            raise ResearchStoreError(f"immutable B2 object already exists: {key}")
-        self._run(
-            "put-object",
-            "--bucket",
-            self.bucket,
-            "--key",
-            key,
-            "--body",
-            str(local_path),
-        )
 
     def download(self, key: str, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -377,13 +433,40 @@ class AwsCliB2Repository:
             str(destination),
         )
 
+    def ensure_exact_object(self, local_path: Path, key: str, expected_sha: str) -> None:
+        """Create or idempotently reuse an object only when bytes are exactly identical.
+
+        Backblaze's documented S3 Put Object headers do not advertise conditional create.
+        The content-addressed namespace therefore binds all lineage into the fingerprint.
+        Concurrent writers for one prefix can only have the same expected bytes; a mismatch
+        is always rejected. Bucket versioning additionally preserves prior object versions.
+        """
+
+        if self.object_exists(key):
+            self._verify_remote_sha(key, expected_sha)
+            return
+        self._run(
+            "put-object",
+            "--bucket",
+            self.bucket,
+            "--key",
+            key,
+            "--body",
+            str(local_path),
+        )
+        self._verify_remote_sha(key, expected_sha)
+
+    def _verify_remote_sha(self, key: str, expected_sha: str) -> None:
+        with tempfile.TemporaryDirectory(prefix="b2-exact-") as temp_dir:
+            readback = Path(temp_dir) / "object"
+            self.download(key, readback)
+            actual_sha = _file_sha256(readback)
+            if actual_sha != expected_sha:
+                raise ResearchStoreError(f"B2 object checksum mismatch: {key}")
+
 
 def publish_research_bundle(bundle_dir: str | Path, repository: AwsCliB2Repository) -> ResearchBundle:
-    """Publish a verified bundle immutably and verify every uploaded byte.
-
-    The manifest is uploaded last and therefore acts as the commit marker. Consumers must
-    treat prefixes without manifest.json as incomplete and unusable.
-    """
+    """Publish a verified bundle and use manifest.json as the final commit marker."""
 
     bundle = verify_research_bundle(bundle_dir)
     entries = bundle.manifest.get("timeframes")
@@ -398,26 +481,18 @@ def publish_research_bundle(bundle_dir: str | Path, repository: AwsCliB2Reposito
         entry = {str(key): value for key, value in raw_entry.items()}
         relative = _require_text(entry, "parquet_file")
         expected_sha = _require_text(entry, "parquet_sha256")
-        upload_plan.append((bundle.root / relative, f"{bundle.object_prefix}/{relative}", expected_sha))
+        local_path = _safe_partition_path(bundle.root, relative, timeframe)
+        upload_plan.append((local_path, f"{bundle.object_prefix}/{relative}", expected_sha))
 
     checksums = bundle.root / "checksums.json"
     manifest = bundle.root / "manifest.json"
-    upload_plan.append((checksums, f"{bundle.object_prefix}/checksums.json", _file_sha256(checksums)))
+    upload_plan.append(
+        (checksums, f"{bundle.object_prefix}/checksums.json", _file_sha256(checksums))
+    )
 
     for local_path, key, expected_sha in upload_plan:
-        repository.upload_immutable(local_path, key)
-        with tempfile.TemporaryDirectory(prefix="b2-verify-") as temp_dir:
-            readback = Path(temp_dir) / local_path.name
-            repository.download(key, readback)
-            if _file_sha256(readback) != expected_sha:
-                raise ResearchStoreError(f"B2 read-back checksum mismatch: {key}")
+        repository.ensure_exact_object(local_path, key, expected_sha)
 
     manifest_key = f"{bundle.object_prefix}/manifest.json"
-    repository.upload_immutable(manifest, manifest_key)
-    with tempfile.TemporaryDirectory(prefix="b2-manifest-verify-") as temp_dir:
-        readback_manifest = Path(temp_dir) / "manifest.json"
-        repository.download(manifest_key, readback_manifest)
-        if _file_sha256(readback_manifest) != _file_sha256(manifest):
-            raise ResearchStoreError("B2 manifest read-back checksum mismatch")
-
+    repository.ensure_exact_object(manifest, manifest_key, _file_sha256(manifest))
     return bundle

@@ -45,8 +45,15 @@ def main() -> int:
     }
 
     if not args.build_only:
-        required = ("B2_S3_ENDPOINT", "B2_BUCKET_NAME", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
+        required = (
+            "B2_S3_ENDPOINT",
+            "B2_BUCKET_NAME",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+        )
         missing = [name for name in required if not os.environ.get(name)]
+        if not (os.environ.get("B2_S3_REGION") or os.environ.get("AWS_DEFAULT_REGION")):
+            missing.append("B2_S3_REGION or AWS_DEFAULT_REGION")
         if missing:
             raise SystemExit("missing required environment variables: " + ", ".join(missing))
         published = publish_research_bundle(bundle.root, AwsCliB2Repository.from_environment())
