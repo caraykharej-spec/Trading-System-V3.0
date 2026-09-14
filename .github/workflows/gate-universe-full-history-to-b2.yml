@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       start:
-        description: "UTC inclusive start (ISO-8601); defaults to 2013-01-01"
+        description: "UTC inclusive start (ISO-8601); defaults to Gate archive start 2023-01-01"
         required: false
         type: string
       end:
@@ -138,7 +138,7 @@ jobs:
           done
           aws --version
 
-      - name: Sync complete Gate public history for route
+      - name: Sync complete Gate historical quotation archive for route
         shell: bash
         run: |
           set -euo pipefail
@@ -168,7 +168,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gate-route-${{ matrix.route.provider }}-${{ matrix.route.provider_symbol }}
+          name: gate-route-${{ matrix.route.base_asset }}-${{ matrix.route.provider }}-${{ matrix.route.provider_symbol }}
           path: artifacts/route-summary.json
           if-no-files-found: ignore
           retention-days: 30
@@ -219,13 +219,26 @@ jobs:
               for item in summaries
           )
           no_history = sum(item.get("status") == "NO_HISTORY_RETURNED" for item in summaries)
+          errors = sum(item.get("status") == "ERROR" for item in summaries)
+          unexpected = sum(
+              item.get("status") not in {
+                  "COMPLETE",
+                  "COMPLETE_WITH_RECORDED_GAPS",
+                  "BLOCKED_FULL_HISTORY_UNAVAILABLE",
+                  "NO_HISTORY_RETURNED",
+                  "ERROR",
+              }
+              for item in summaries
+          )
           missing = max(0, expected - len(summaries))
           partitions = sum(len(item.get("partitions", [])) for item in summaries)
-          rows_15m = sum(int(item.get("total_15m_rows", 0)) for item in summaries)
-          gaps_15m = sum(int(item.get("total_missing_15m_points", 0)) for item in summaries)
+          rows_5m = sum(int(item.get("total_5m_rows", 0)) for item in summaries)
+          gaps_5m = sum(
+              int(item.get("missing_5m_inside_observed_span", 0)) for item in summaries
+          )
 
           payload = {
-              "schema_version": 1,
+              "schema_version": 2,
               "generated_at": datetime.now(timezone.utc).isoformat(),
               "github_run_id": os.environ.get("GITHUB_RUN_ID"),
               "github_sha": os.environ.get("GITHUB_SHA"),
@@ -237,15 +250,17 @@ jobs:
               "completed_routes": complete,
               "blocked_full_history_routes": blocked,
               "no_history_routes": no_history,
+              "error_routes": errors,
+              "unexpected_status_routes": unexpected,
               "missing_route_summaries": missing,
               "partition_objects_recorded": partitions,
-              "total_15m_rows": rows_15m,
-              "total_missing_15m_points": gaps_15m,
+              "total_5m_rows": rows_5m,
+              "missing_5m_inside_observed_span": gaps_5m,
               "route_summaries": summaries,
           }
           payload["status"] = (
               "PASS_WITH_DOCUMENTED_TRADFI_LIMITATION"
-              if missing == 0 and no_history == 0
+              if missing == 0 and no_history == 0 and errors == 0 and unexpected == 0
               else "FAIL_INCOMPLETE_GATE_HISTORY_TRANSFER"
           )
           Path("artifacts").mkdir(exist_ok=True)
@@ -258,12 +273,13 @@ jobs:
               "expected_routes": expected,
               "completed_routes": complete,
               "blocked_routes": blocked,
+              "error_routes": errors,
               "missing_routes": missing,
               "no_history_routes": no_history,
               "partition_objects_recorded": partitions,
-              "total_15m_rows": rows_15m,
+              "total_5m_rows": rows_5m,
           }, sort_keys=True))
-          if missing or no_history:
+          if missing or no_history or errors or unexpected:
               Path("artifacts/incomplete.flag").write_text("1\n", encoding="utf-8")
           PY
 
@@ -283,7 +299,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          key="manifests/gate-history/v1/runs/${GITHUB_RUN_ID}.json"
+          key="manifests/gate-history/v2/runs/${GITHUB_RUN_ID}.json"
           aws s3api put-object \
             --bucket "$B2_BUCKET_NAME" \
             --key "$key" \
