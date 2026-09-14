@@ -14,7 +14,7 @@ on:
   push:
     branches: [main]
     paths:
-      - ".github/b2-restore-requests/first-btc-gold.json"
+      - ".github/workflows/b2-restore-locked-dataset.yml"
 
 permissions:
   contents: read
@@ -50,8 +50,8 @@ jobs:
             symbol='${{ inputs.symbol }}'
             fingerprint='${{ inputs.dataset_fingerprint }}'
           else
-            symbol="$(python -c 'import json; print(json.load(open(".github/b2-restore-requests/first-btc-gold.json", encoding="utf-8"))["symbol"])')"
-            fingerprint="$(python -c 'import json; print(json.load(open(".github/b2-restore-requests/first-btc-gold.json", encoding="utf-8"))["dataset_fingerprint"])')"
+            symbol='BTC/USDT'
+            fingerprint='fed540e5153ea0788bcbe4d028fa693237292b3122bd5f666cc6f66cdc93b40d'
           fi
           [[ "$symbol" =~ ^[A-Za-z0-9_/-]+$ ]]
           [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
