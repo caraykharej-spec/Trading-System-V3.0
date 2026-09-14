@@ -1,0 +1,166 @@
+name: B2 Locked Source Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Actions run containing the exact locked dataset artifact"
+        required: true
+        type: string
+      source_artifact_name:
+        description: "Exact locked dataset artifact name"
+        required: true
+        type: string
+      symbol:
+        description: "Locked dataset symbol"
+        required: true
+        type: string
+      dataset_fingerprint:
+        description: "Expected locked dataset bundle fingerprint"
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/b2-locked-source-snapshot.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: b2-locked-source-snapshot-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      AWS_DEFAULT_REGION: eu-central-003
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Resolve trusted snapshot source
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            run_id='${{ inputs.source_run_id }}'
+            artifact='${{ inputs.source_artifact_name }}'
+            symbol='${{ inputs.symbol }}'
+            fingerprint='${{ inputs.dataset_fingerprint }}'
+          else
+            run_id='34869698128'
+            artifact='btc-usdt-warmup-plus-1y-locked-bec96d719228005287deef455f47531d60bf2e82'
+            symbol='BTC/USDT'
+            fingerprint='9c8d4d7712ae49adb0625519c18abac08420c020a8bf0271e51dcd128d7cb94f'
+          fi
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          [[ "$artifact" =~ ^[A-Za-z0-9._-]+$ ]]
+          [[ "$symbol" =~ ^[A-Za-z0-9_/-]+$ ]]
+          [[ "$fingerprint" =~ ^[0-9a-f]{64}$ ]]
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "symbol=$symbol" >> "$GITHUB_OUTPUT"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Validate B2 environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME AWS_DEFAULT_REGION; do
+            test -n "${!name:-}"
+          done
+
+      - name: Install research-data dependencies
+        run: python -m pip install -e ".[research-data]"
+
+      - name: Download exact verified locked dataset artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.artifact }}
+          path: artifacts/source-lock
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ steps.source.outputs.run_id }}
+
+      - name: Require exact source fingerprint before publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from app.data.historical_backfill import load_locked_dataset
+          import os
+          bundle = load_locked_dataset("artifacts/source-lock")
+          expected = "${{ steps.source.outputs.fingerprint }}"
+          if bundle.manifest.get("dataset_bundle_fingerprint") != expected:
+              raise SystemExit("source dataset fingerprint mismatch")
+          if bundle.manifest.get("symbol") != "${{ steps.source.outputs.symbol }}":
+              raise SystemExit("source symbol mismatch")
+          print("SOURCE_LOCK_VERIFIED")
+          print(bundle.manifest["manifest_fingerprint"])
+          PY
+
+      - name: Publish byte-exact locked source snapshot to B2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/evidence
+          python scripts/backtest/publish_locked_source_snapshot_to_b2.py \
+            --dataset-dir artifacts/source-lock \
+            | tee artifacts/evidence/publish.json
+          grep -q 'LOCKED_SOURCE_PUBLISHED_AND_VERIFIED' artifacts/evidence/publish.json
+
+      - name: Remove downloaded source before restore proof
+        run: rm -rf artifacts/source-lock
+
+      - name: Restore exact locked source from B2
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/backtest/restore_locked_source_snapshot_from_b2.py \
+            --symbol "${{ steps.source.outputs.symbol }}" \
+            --dataset-fingerprint "${{ steps.source.outputs.fingerprint }}" \
+            --output-dir artifacts/restored-lock \
+            | tee artifacts/evidence/restore.json
+          grep -q 'LOCKED_SOURCE_RESTORED_AND_VERIFIED' artifacts/evidence/restore.json
+
+      - name: Verify cache hit and exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/backtest/restore_locked_source_snapshot_from_b2.py \
+            --symbol "${{ steps.source.outputs.symbol }}" \
+            --dataset-fingerprint "${{ steps.source.outputs.fingerprint }}" \
+            --output-dir artifacts/restored-lock \
+            | tee artifacts/evidence/cache-hit.json
+          grep -q 'LOCKED_SOURCE_CACHE_HIT_VERIFIED' artifacts/evidence/cache-hit.json
+          python - <<'PY'
+          from app.data.historical_backfill import load_locked_dataset
+          bundle = load_locked_dataset("artifacts/restored-lock")
+          expected = "${{ steps.source.outputs.fingerprint }}"
+          if bundle.manifest.get("dataset_bundle_fingerprint") != expected:
+              raise SystemExit("restored dataset fingerprint mismatch")
+          print("LOCKED_SOURCE_IDENTITY_PRESERVED")
+          PY
+
+      - name: Upload non-secret snapshot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2-locked-source-evidence-${{ github.run_id }}
+          path: |
+            artifacts/evidence/*.json
+            artifacts/restored-lock/manifest.json
+          if-no-files-found: warn
+          retention-days: 30
