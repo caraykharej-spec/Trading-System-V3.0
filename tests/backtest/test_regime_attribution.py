@@ -125,6 +125,49 @@ def test_trade_performance_is_separated_by_entry_regime() -> None:
     assert ranging["win_rate_percent"] == Decimal("0")
 
 
+def test_pnl_reconciliation_is_stable_across_regime_grouping_order() -> None:
+    timeline = (
+        RegimePoint(_ts(1), "TRENDING_BULL", "NORMAL"),
+        RegimePoint(_ts(2), "TRENDING_BEAR", "NORMAL"),
+        RegimePoint(_ts(3), "RANGING", "NORMAL"),
+        RegimePoint(_ts(4), "TRENDING_BULL", "NORMAL"),
+    )
+    pnl_values = (
+        "3231460436848395048.142901639",
+        "557192943335616309411.0840648",
+        "-716787110541218.633483775642",
+        "10237198058595698.60163312969",
+    )
+    trades = tuple(
+        _trade(f"precision-{index}", _ts(index, 1), pnl)
+        for index, pnl in enumerate(pnl_values, start=1)
+    )
+    events = tuple(
+        event
+        for index in range(1, 5)
+        for event in (
+            BacktestDiagnosticEvent(_ts(index, 1), "READY_FOR_RISK_REVIEW"),
+            BacktestDiagnosticEvent(_ts(index, 1), "TRADE_OPENED"),
+        )
+    )
+
+    payload = attribute_regime_evidence(
+        events,
+        trades,
+        timeline,
+        initial_equity=Decimal("10000"),
+    )
+
+    validate_regime_attribution(
+        payload,
+        expected_decision_points=4,
+        expected_ready=4,
+        expected_entry_rejections=0,
+        expected_trades=4,
+        trades=trades,
+    )
+
+
 def test_attribution_fails_closed_without_completed_daily_regime() -> None:
     timeline = (RegimePoint(_ts(2), "TRENDING_BULL", "NORMAL"),)
     event = BacktestDiagnosticEvent(_ts(1, 12), "STRATEGY_PRE_SIGNAL_REJECT")
