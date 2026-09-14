@@ -8,7 +8,8 @@ from decimal import Decimal
 from typing import Any, Iterable, Sequence
 
 from app.data.market_data import Candle
-from app.market.analysis import analyze_market
+from app.market.regime import classify_regime
+from app.market.trend import analyze_trend
 
 from .diagnostics import BacktestDiagnosticEvent
 from .models import TradeRecord
@@ -34,17 +35,19 @@ def build_daily_regime_timeline(
 ) -> tuple[RegimePoint, ...]:
     """Build a no-lookahead 1D regime timeline from completed daily candles."""
 
+    del symbol
     ordered = sorted(daily_candles, key=lambda candle: candle.timestamp)
     points: list[RegimePoint] = []
     history: list[Candle] = []
     for candle in ordered:
         history.append(candle)
-        snapshot = analyze_market(symbol, "1d", history)
+        trend = analyze_trend(history)
+        regime = classify_regime(history, trend)
         points.append(
             RegimePoint(
                 effective_at=candle.timestamp + timedelta(days=1),
-                regime=snapshot.regime.regime,
-                volatility=snapshot.regime.volatility,
+                regime=regime.regime,
+                volatility=regime.volatility,
             )
         )
     return tuple(points)
@@ -53,8 +56,11 @@ def build_daily_regime_timeline(
 def _bucket_for(timestamp: datetime, timeline: Sequence[RegimePoint]) -> RegimePoint:
     if not timeline:
         raise ValueError("regime timeline is empty")
-    effective_times = [point.effective_at for point in timeline]
-    index = bisect_right(effective_times, timestamp) - 1
+    index = bisect_right(
+        timeline,
+        timestamp,
+        key=lambda point: point.effective_at,
+    ) - 1
     if index < 0:
         raise ValueError(
             f"no completed daily regime is available at {timestamp.isoformat()}"
