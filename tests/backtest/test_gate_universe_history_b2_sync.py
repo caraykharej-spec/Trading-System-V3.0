@@ -8,6 +8,7 @@ from scripts.backtest.sync_gate_universe_history_to_b2 import (
     resample,
 )
 from scripts.backtest.sync_gate_universe_monthly_archive_to_b2 import (
+    archive_day_url,
     archive_month_url,
     route_missing_5m_inside_observed_span,
 )
@@ -83,7 +84,7 @@ def test_resample_drops_incomplete_higher_timeframe_bar() -> None:
     assert rows == []
 
 
-def test_archive_url_uses_production_spot_monthly_kline_layout() -> None:
+def test_archive_month_url_uses_production_spot_monthly_kline_layout() -> None:
     route = GateHistoryRoute(
         canonical_symbol="BTC/USDT",
         base_asset="BTC",
@@ -95,6 +96,21 @@ def test_archive_url_uses_production_spot_monthly_kline_layout() -> None:
     assert archive_month_url(route, datetime(2026, 9, 13, tzinfo=timezone.utc)) == (
         "https://download.gatedata.org/spot/candlesticks_5m/202609/"
         "BTC_USDT-202609.csv.gz"
+    )
+
+
+def test_archive_day_url_supports_gate_daily_kline_contract() -> None:
+    route = GateHistoryRoute(
+        canonical_symbol="DOGS/USDT",
+        base_asset="DOGS",
+        asset_class="crypto",
+        provider="gateio",
+        provider_symbol="DOGS_USDT",
+    )
+
+    assert archive_day_url(route, datetime(2024, 9, 1, tzinfo=timezone.utc)) == (
+        "https://download.gatedata.org/spot/candlesticks_5m/202409/"
+        "DOGS_USDT-20240901.csv.gz"
     )
 
 
