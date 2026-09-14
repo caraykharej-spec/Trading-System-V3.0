@@ -1,5 +1,73 @@
-"""Research-only evidence aggregation helpers."""
-
+from .evaluator import (
+    BacktestResearchEvaluator,
+    PortfolioResearchEvaluator,
+    WalkForwardResearchEvaluator,
+    strategy_rules_from_parameters,
+)
+from .fingerprint import fingerprint_candles
+from .models import (
+    DatasetManifest,
+    EvaluationSummary,
+    ExperimentResult,
+    ExperimentSpec,
+    ObjectiveMetric,
+    ParameterDefinition,
+    ParameterRole,
+    ParameterSet,
+    ParameterSpace,
+    ResearchConstraints,
+    ResearchEvaluation,
+    SearchMethod,
+    TrialResult,
+)
 from .multi_asset_baseline import aggregate_multi_asset_baselines
+from .parameter_space import (
+    ResearchSpaceTooLargeError,
+    StrategyRuleParameterPolicy,
+    enumerate_parameter_sets,
+)
+from .registry import (
+    InMemoryExperimentRegistry,
+    SQLiteExperimentRegistry,
+    StoredExperiment,
+)
+from .runner import ExperimentRunner
+from .sensitivity import (
+    ParameterSensitivity,
+    SensitivityPoint,
+    SensitivityReport,
+    analyze_parameter_sensitivity,
+)
 
-__all__ = ["aggregate_multi_asset_baselines"]
+__all__ = [
+    "BacktestResearchEvaluator",
+    "DatasetManifest",
+    "EvaluationSummary",
+    "ExperimentResult",
+    "ExperimentRunner",
+    "ExperimentSpec",
+    "InMemoryExperimentRegistry",
+    "ObjectiveMetric",
+    "ParameterDefinition",
+    "ParameterRole",
+    "ParameterSensitivity",
+    "ParameterSet",
+    "ParameterSpace",
+    "PortfolioResearchEvaluator",
+    "ResearchConstraints",
+    "ResearchEvaluation",
+    "ResearchSpaceTooLargeError",
+    "SQLiteExperimentRegistry",
+    "SearchMethod",
+    "SensitivityPoint",
+    "SensitivityReport",
+    "StoredExperiment",
+    "StrategyRuleParameterPolicy",
+    "TrialResult",
+    "WalkForwardResearchEvaluator",
+    "aggregate_multi_asset_baselines",
+    "analyze_parameter_sensitivity",
+    "enumerate_parameter_sets",
+    "fingerprint_candles",
+    "strategy_rules_from_parameters",
+]
