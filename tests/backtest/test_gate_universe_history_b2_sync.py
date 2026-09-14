@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from app.data.market_data import Candle
@@ -7,7 +7,10 @@ from scripts.backtest.sync_gate_universe_history_to_b2 import (
     iter_month_ranges,
     resample,
 )
-from scripts.backtest.sync_gate_universe_monthly_archive_to_b2 import archive_month_url
+from scripts.backtest.sync_gate_universe_monthly_archive_to_b2 import (
+    archive_month_url,
+    route_missing_5m_inside_observed_span,
+)
 
 
 def _candle(minute: int, close: str) -> Candle:
@@ -109,6 +112,20 @@ def test_archive_url_uses_production_usdt_futures_monthly_layout() -> None:
         "https://download.gatedata.org/futures_usdt/candlesticks_5m/202609/"
         "PEPE_USDT-202609.csv.gz"
     )
+
+
+def test_route_wide_gap_is_zero_for_contiguous_five_minute_rows() -> None:
+    first = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    last = first + timedelta(minutes=10)
+
+    assert route_missing_5m_inside_observed_span(first, last, 3) == 0
+
+
+def test_route_wide_gap_detects_a_completely_missing_middle_window() -> None:
+    first = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    last = first + timedelta(minutes=20)
+
+    assert route_missing_5m_inside_observed_span(first, last, 2) == 3
 
 
 def test_tradfi_route_is_explicitly_not_full_history_capable() -> None:
