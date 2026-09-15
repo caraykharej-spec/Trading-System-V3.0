@@ -1,0 +1,372 @@
+name: Gate Universe Full History to B2
+
+on:
+  push:
+    branches: ["gate-universe-b2-full-history"]
+    paths:
+      - ".github/workflows/gate-universe-full-history-to-b2.yml"
+      - "scripts/backtest/sync_gate_universe_history_to_b2.py"
+      - "scripts/backtest/sync_gate_universe_monthly_archive_to_b2.py"
+      - "config/universe.json"
+      - "config/market_data/source_registry.json"
+      - "app/universe/gateio_discovery.py"
+      - "app/universe/storm_discovery.py"
+      - "app/data/source_registry.py"
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "UTC inclusive start (ISO-8601); defaults to Gate archive start 2023-01-01"
+        required: false
+        type: string
+      end:
+        description: "UTC exclusive end (ISO-8601); defaults to current UTC day"
+        required: false
+        type: string
+      force:
+        description: "Replace existing monthly objects"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-universe-full-history-to-b2
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: eu-central-003
+  AWS_EC2_METADATA_DISABLED: "true"
+
+jobs:
+  discover:
+    name: Discover Gate-backed project universe
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      route_count: ${{ steps.matrix.outputs.route_count }}
+      full_history_route_count: ${{ steps.matrix.outputs.full_history_route_count }}
+      blocked_route_count: ${{ steps.matrix.outputs.blocked_route_count }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project dependencies
+        run: python -m pip install -e ".[research-data]"
+
+      - name: Discover live Storm universe and Gate routes
+        run: >-
+          python scripts/backtest/sync_gate_universe_monthly_archive_to_b2.py
+          --discover-only
+          --output artifacts/gate-history-discovery.json
+
+      - name: Build bounded matrix
+        id: matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          payload = json.loads(
+              Path("artifacts/gate-history-discovery.json").read_text(encoding="utf-8")
+          )
+          routes = payload["routes"]
+          if not routes:
+              raise SystemExit("Gate route discovery returned an empty matrix")
+          if len(routes) > 256:
+              raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
+          print("matrix=" + json.dumps({"route": routes}, separators=(",", ":")))
+          print(f"route_count={payload['route_count']}")
+          print(f"full_history_route_count={payload['full_history_route_count']}")
+          print(f"blocked_route_count={payload['blocked_route_count']}")
+          PY
+
+      - name: Upload discovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-history-discovery-${{ github.run_id }}
+          path: artifacts/gate-history-discovery.json
+          if-no-files-found: error
+          retention-days: 30
+
+  sync:
+    name: Sync ${{ matrix.route.provider }} ${{ matrix.route.provider_symbol }}
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+      ROUTE_CANONICAL: ${{ matrix.route.canonical_symbol }}
+      ROUTE_BASE: ${{ matrix.route.base_asset }}
+      ROUTE_ASSET_CLASS: ${{ matrix.route.asset_class }}
+      ROUTE_PROVIDER: ${{ matrix.route.provider }}
+      ROUTE_PROVIDER_SYMBOL: ${{ matrix.route.provider_symbol }}
+      ROUTE_PRICE_MULTIPLIER: ${{ matrix.route.price_multiplier }}
+      ROUTE_ORIGIN: ${{ matrix.route.route_origin }}
+      INPUT_START: ${{ inputs.start }}
+      INPUT_END: ${{ inputs.end }}
+      INPUT_FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install research-data dependencies
+        run: python -m pip install -e ".[research-data]"
+
+      - name: Validate B2 secret-backed environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required secret-backed environment variable: $name" >&2
+              exit 1
+            fi
+          done
+          aws --version
+
+      - name: Sync complete Gate historical quotation archive for route
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          args=(
+            --canonical "$ROUTE_CANONICAL"
+            --base-asset "$ROUTE_BASE"
+            --asset-class "$ROUTE_ASSET_CLASS"
+            --provider "$ROUTE_PROVIDER"
+            --provider-symbol "$ROUTE_PROVIDER_SYMBOL"
+            --price-multiplier "$ROUTE_PRICE_MULTIPLIER"
+            --route-origin "$ROUTE_ORIGIN"
+            --output artifacts/route-summary.json
+          )
+          if [ -n "${INPUT_START:-}" ]; then
+            args+=(--start "$INPUT_START")
+          fi
+          if [ -n "${INPUT_END:-}" ]; then
+            args+=(--end "$INPUT_END")
+          fi
+          if [ "${INPUT_FORCE:-false}" = "true" ]; then
+            args+=(--force)
+          fi
+          python scripts/backtest/sync_gate_universe_monthly_archive_to_b2.py "${args[@]}"
+
+      - name: Upload route evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-route-${{ matrix.route.base_asset }}-${{ matrix.route.provider }}-${{ matrix.route.provider_symbol }}
+          path: artifacts/route-summary.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  summarize:
+    name: Consolidate transfer evidence
+    needs: [discover, sync]
+    if: always() && needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+      EXPECTED_ROUTES: ${{ needs.discover.outputs.route_count }}
+      EXPECTED_FULL_HISTORY_ROUTES: ${{ needs.discover.outputs.full_history_route_count }}
+      EXPECTED_BLOCKED_ROUTES: ${{ needs.discover.outputs.blocked_route_count }}
+      SYNC_RESULT: ${{ needs.sync.result }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: gate-route-*
+          path: artifacts/routes
+          merge-multiple: false
+
+      - name: Build run manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          summaries = []
+          for path in sorted(Path("artifacts/routes").rglob("route-summary.json")):
+              summaries.append(json.loads(path.read_text(encoding="utf-8")))
+
+          expected = int(os.environ["EXPECTED_ROUTES"])
+          expected_full = int(os.environ["EXPECTED_FULL_HISTORY_ROUTES"])
+          expected_blocked = int(os.environ["EXPECTED_BLOCKED_ROUTES"])
+          sync_result = os.environ.get("SYNC_RESULT")
+
+          complete = sum(
+              item.get("status") in {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
+              for item in summaries
+          )
+          blocked = sum(
+              item.get("status") == "BLOCKED_FULL_HISTORY_UNAVAILABLE"
+              for item in summaries
+          )
+          no_history = sum(item.get("status") == "NO_HISTORY_RETURNED" for item in summaries)
+          errors = sum(item.get("status") == "ERROR" for item in summaries)
+          unexpected = sum(
+              item.get("status") not in {
+                  "COMPLETE",
+                  "COMPLETE_WITH_RECORDED_GAPS",
+                  "BLOCKED_FULL_HISTORY_UNAVAILABLE",
+                  "NO_HISTORY_RETURNED",
+                  "ERROR",
+              }
+              for item in summaries
+          )
+          missing = max(0, expected - len(summaries))
+          classification_mismatch = complete != expected_full or blocked != expected_blocked
+          sync_failed = sync_result != "success"
+
+          partitions = sum(len(item.get("partitions", [])) for item in summaries)
+          rows_5m = sum(int(item.get("total_5m_rows", 0)) for item in summaries)
+          gaps_5m = sum(
+              int(item.get("missing_5m_inside_observed_span", 0)) for item in summaries
+          )
+          uploaded = sum(
+              int(item.get("uploaded_new_partition_objects", 0)) for item in summaries
+          )
+          replaced = sum(
+              int(item.get("replaced_partition_objects", 0)) for item in summaries
+          )
+          reused_verified = sum(
+              int(item.get("reused_verified_partition_objects", 0)) for item in summaries
+          )
+          forced = sum(
+              int(item.get("forced_partition_objects", 0)) for item in summaries
+          )
+
+          failed = any(
+              (
+                  missing,
+                  no_history,
+                  errors,
+                  unexpected,
+                  classification_mismatch,
+                  sync_failed,
+              )
+          )
+          status = (
+              "FAIL_INCOMPLETE_GATE_HISTORY_TRANSFER"
+              if failed
+              else "PASS_WITH_DOCUMENTED_TRADFI_LIMITATION"
+          )
+
+          payload = {
+              "schema_version": 2,
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "github_sha": os.environ.get("GITHUB_SHA"),
+              "sync_job_result": sync_result,
+              "status": status,
+              "expected_routes": expected,
+              "expected_full_history_routes": expected_full,
+              "expected_blocked_routes": expected_blocked,
+              "received_route_summaries": len(summaries),
+              "completed_routes": complete,
+              "blocked_full_history_routes": blocked,
+              "no_history_routes": no_history,
+              "error_routes": errors,
+              "unexpected_status_routes": unexpected,
+              "missing_route_summaries": missing,
+              "classification_mismatch": classification_mismatch,
+              "partition_objects_recorded": partitions,
+              "uploaded_new_partition_objects": uploaded,
+              "replaced_partition_objects": replaced,
+              "reused_verified_partition_objects": reused_verified,
+              "forced_partition_objects": forced,
+              "total_5m_rows": rows_5m,
+              "missing_5m_inside_observed_span": gaps_5m,
+              "route_summaries": summaries,
+          }
+          Path("artifacts").mkdir(exist_ok=True)
+          Path("artifacts/gate-history-run-manifest.json").write_text(
+              json.dumps(payload, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": status,
+              "expected_routes": expected,
+              "completed_routes": complete,
+              "blocked_routes": blocked,
+              "error_routes": errors,
+              "missing_routes": missing,
+              "no_history_routes": no_history,
+              "partition_objects_recorded": partitions,
+              "uploaded_new_partition_objects": uploaded,
+              "replaced_partition_objects": replaced,
+              "reused_verified_partition_objects": reused_verified,
+              "total_5m_rows": rows_5m,
+              "missing_5m_inside_observed_span": gaps_5m,
+          }, sort_keys=True))
+          if failed:
+              Path("artifacts/incomplete.flag").write_text("1\n", encoding="utf-8")
+          PY
+
+      - name: Normalize B2 endpoint
+        id: endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="$B2_S3_ENDPOINT"
+          case "$endpoint" in
+            http://*|https://*) ;;
+            *) endpoint="https://$endpoint" ;;
+          esac
+          echo "url=$endpoint" >> "$GITHUB_OUTPUT"
+
+      - name: Publish consolidated run manifest to B2
+        shell: bash
+        run: |
+          set -euo pipefail
+          key="manifests/gate-history/v2/runs/${GITHUB_RUN_ID}.json"
+          aws s3api put-object \
+            --bucket "$B2_BUCKET_NAME" \
+            --key "$key" \
+            --body artifacts/gate-history-run-manifest.json \
+            --content-type application/json \
+            --endpoint-url "${{ steps.endpoint.outputs.url }}"
+
+      - name: Upload consolidated evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-history-run-manifest-${{ github.run_id }}
+          path: artifacts/gate-history-run-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce complete supported-route transfer
+        shell: bash
+        run: |
+          if [ -f artifacts/incomplete.flag ]; then
+            echo "One or more Gate full-history routes are incomplete or misclassified." >&2
+            exit 1
+          fi

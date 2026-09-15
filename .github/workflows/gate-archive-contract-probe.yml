@@ -1,0 +1,66 @@
+name: Gate Historical Archive Contract Probe
+
+on:
+  push:
+    branches: ["gate-universe-b2-full-history"]
+    paths:
+      - ".github/workflows/gate-archive-contract-probe.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe public Gate archive object contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          urls = {
+              "spot_btc_monthly_202401": "https://download.gatedata.org/spot/candlesticks_5m/202401/BTC_USDT-202401.csv.gz",
+              "spot_btc_daily_20240101": "https://download.gatedata.org/spot/candlesticks_5m/202401/BTC_USDT-20240101.csv.gz",
+              "spot_dogs_monthly_202409": "https://download.gatedata.org/spot/candlesticks_5m/202409/DOGS_USDT-202409.csv.gz",
+              "spot_dogs_daily_20240901": "https://download.gatedata.org/spot/candlesticks_5m/202409/DOGS_USDT-20240901.csv.gz",
+              "futures_btc_monthly_202401": "https://download.gatedata.org/futures_usdt/candlesticks_5m/202401/BTC_USDT-202401.csv.gz",
+              "futures_btc_daily_20240101": "https://download.gatedata.org/futures_usdt/candlesticks_5m/202401/BTC_USDT-20240101.csv.gz",
+          }
+          results = {}
+          for name, url in urls.items():
+              process = subprocess.run(
+                  [
+                      "curl", "-L", "-sS", "--range", "0-0", "--max-time", "30",
+                      "-o", "/dev/null", "-w", "%{http_code}", url,
+                  ],
+                  check=False,
+                  capture_output=True,
+                  text=True,
+              )
+              results[name] = {
+                  "url": url,
+                  "http_status": process.stdout.strip(),
+                  "curl_exit": process.returncode,
+                  "stderr": process.stderr.strip(),
+              }
+              print(name, results[name])
+          Path("artifacts/gate-archive-contract-probe.json").write_text(
+              json.dumps(results, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload probe evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-archive-contract-probe-${{ github.run_id }}
+          path: artifacts/gate-archive-contract-probe.json
+          if-no-files-found: error
+          retention-days: 90
