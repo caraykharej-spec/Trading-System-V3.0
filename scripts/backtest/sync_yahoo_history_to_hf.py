@@ -138,7 +138,12 @@ def _max_chart_url(symbol: str, interval: str) -> str:
     return f"{_API_BASE}/{urllib.parse.quote(symbol, safe='')}?{query}"
 
 
-def parse_chart(payload: object, route: YahooRoute) -> list[YahooCandle]:
+def parse_chart(
+    payload: object,
+    route: YahooRoute,
+    *,
+    quality: dict[str, int] | None = None,
+) -> list[YahooCandle]:
     if not isinstance(payload, dict):
         raise ProviderError("Yahoo chart response is not an object")
     chart = payload.get("chart")
@@ -182,7 +187,11 @@ def parse_chart(payload: object, route: YahooRoute) -> list[YahooCandle]:
         except (InvalidOperation, OverflowError, TypeError, ValueError) as exc:
             raise ProviderError("Yahoo chart contains an invalid numeric value") from exc
         if low > high or open_ < low or open_ > high or close < low or close > high:
-            raise ProviderError(f"Yahoo OHLC invariant violation at {timestamp.isoformat()}")
+            if quality is not None:
+                quality["ohlc_invariant_rows_dropped"] = (
+                    quality.get("ohlc_invariant_rows_dropped", 0) + 1
+                )
+            continue
         candle = YahooCandle(timestamp, open_, high, low, close, adjusted_close, volume)
         prior = rows.get(timestamp)
         if prior is not None and prior != candle:
@@ -192,15 +201,25 @@ def parse_chart(payload: object, route: YahooRoute) -> list[YahooCandle]:
 
 
 def fetch_history(
-    route: YahooRoute, interval: str, *, start: datetime, end: datetime
+    route: YahooRoute,
+    interval: str,
+    *,
+    start: datetime,
+    end: datetime,
+    quality: dict[str, int] | None = None,
 ) -> list[YahooCandle]:
     payload = _request_json(_chart_url(route.provider_symbol, interval, start, end))
-    return parse_chart(payload, route)
+    return parse_chart(payload, route, quality=quality)
 
 
-def fetch_max_history(route: YahooRoute, interval: str) -> list[YahooCandle]:
+def fetch_max_history(
+    route: YahooRoute,
+    interval: str,
+    *,
+    quality: dict[str, int] | None = None,
+) -> list[YahooCandle]:
     payload = _request_json(_max_chart_url(route.provider_symbol, interval))
-    return parse_chart(payload, route)
+    return parse_chart(payload, route, quality=quality)
 
 
 def aggregate_four_hour(rows: list[YahooCandle]) -> list[YahooCandle]:
@@ -392,9 +411,18 @@ def _put_json(payload: object, key: str) -> None:
 
 def sync_route(route: YahooRoute, *, end: datetime, force: bool = False) -> dict[str, object]:
     intraday_start = end - timedelta(days=_INTRADAY_DAYS)
-    fifteen = fetch_history(route, "15m", start=intraday_start, end=end)
-    hourly = fetch_history(route, "1h", start=intraday_start, end=end)
-    daily = fetch_max_history(route, "1d")
+    source_quality = {
+        "15m": {"ohlc_invariant_rows_dropped": 0},
+        "1h": {"ohlc_invariant_rows_dropped": 0},
+        "1d": {"ohlc_invariant_rows_dropped": 0},
+    }
+    fifteen = fetch_history(
+        route, "15m", start=intraday_start, end=end, quality=source_quality["15m"]
+    )
+    hourly = fetch_history(
+        route, "1h", start=intraday_start, end=end, quality=source_quality["1h"]
+    )
+    daily = fetch_max_history(route, "1d", quality=source_quality["1d"])
     datasets = {"15m": fifteen, "1h": hourly, "4h": aggregate_four_hour(hourly), "1d": daily}
     if any(not rows for rows in datasets.values()):
         missing = [timeframe for timeframe, rows in datasets.items() if not rows]
@@ -406,6 +434,9 @@ def sync_route(route: YahooRoute, *, end: datetime, force: bool = False) -> dict
             "rows": len(rows),
             "first_timestamp": rows[0].timestamp.isoformat(),
             "last_timestamp": rows[-1].timestamp.isoformat(),
+            "source_ohlc_invariant_rows_dropped": (
+                source_quality.get(timeframe, {}).get("ohlc_invariant_rows_dropped", 0)
+            ),
         }
         for year, year_rows in _year_groups(rows):
             partitions.append(_store_partition(route, timeframe, year, year_rows, force=force))
@@ -421,6 +452,10 @@ def sync_route(route: YahooRoute, *, end: datetime, force: bool = False) -> dict
         "daily_history_policy": "maximum_available_range",
         "price_policy": "raw_ohlc_plus_separate_adjusted_close",
         "gap_policy": "preserve_source_market_sessions_no_fill",
+        "invalid_source_row_policy": "drop_and_record_never_clamp",
+        "source_ohlc_invariant_rows_dropped": sum(
+            item["ohlc_invariant_rows_dropped"] for item in source_quality.values()
+        ),
         "integrity_policy": "sha256_manifest_compare_upload_verify_downloaded_bytes",
         "coverage": coverage,
         "total_rows": sum(len(rows) for rows in datasets.values()),
