@@ -1,6 +1,16 @@
 name: Gate Universe Full History to HF
 
 on:
+  push:
+    branches: [hf-gate-transfer]
+    paths:
+      - .github/workflows/gate-universe-full-history-to-hf.yml
+      - scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py
+      - scripts/backtest/sync_gate_universe_monthly_archive_to_b2.py
+      - scripts/backtest/sync_gate_universe_history_to_b2.py
+      - scripts/operations/diagnose_hf_s3_access.py
+      - config/universe.json
+      - config/market_data/source_registry.json
   workflow_dispatch:
     inputs:
       start:
