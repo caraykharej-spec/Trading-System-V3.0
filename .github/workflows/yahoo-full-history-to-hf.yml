@@ -1,6 +1,13 @@
 name: Yahoo Fallback Full History to HF
 
 on:
+  push:
+    branches: [hf-yahoo-transfer]
+    paths:
+      - .github/workflows/yahoo-full-history-to-hf.yml
+      - scripts/backtest/sync_yahoo_history_to_hf.py
+      - scripts/operations/diagnose_hf_s3_access.py
+      - config/market_data/source_registry.json
   workflow_dispatch:
     inputs:
       end:
