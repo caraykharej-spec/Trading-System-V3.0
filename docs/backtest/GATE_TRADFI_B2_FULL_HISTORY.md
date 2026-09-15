@@ -20,7 +20,7 @@ The collector discovers the actual earliest timestamp returned by Gate. It does 
 
 Every candle is normalized to UTC and mapped back to the canonical project symbol. Route-specific price multipliers are applied explicitly. The collector rejects:
 
-- timestamps not aligned to the requested interval;
+- timestamps not aligned to the source grid (15 minutes for 15m; one hour for session-anchored 1h/4h/1d bars);
 - invalid or inconsistent OHLC values;
 - conflicting duplicate timestamps;
 - pagination that does not move backward;
@@ -61,7 +61,7 @@ Consolidated run manifests:
 manifests/gate-history/v2/runs/<github-run-id>-tradfi.json
 ```
 
-Partitions are Parquet with ZSTD compression. Every object is rebuilt deterministically and hashed with SHA-256. Existing B2 objects are reused only when their stored SHA-256 metadata matches the newly generated artifact. New or changed objects are uploaded and then verified again through B2 object metadata.
+Partitions are Parquet with ZSTD compression. Every object is rebuilt deterministically and hashed with SHA-256. Existing B2 objects are reused only when SHA-256 of their downloaded bytes matches the newly generated artifact. New or changed objects are uploaded and then downloaded for SHA-256 verification. Only explicit 404/NoSuchKey/NotFound responses mean absence; authorization, quota and transport failures stop the route without uploading over an unverified object.
 
 ## Resumability and rate limiting
 
@@ -79,3 +79,11 @@ A Gate TradFi run is accepted only when:
 6. the consolidated run manifest is published to B2.
 
 A successful GitHub Actions job alone is not sufficient evidence if the consolidated manifest or B2 integrity checks are absent.
+
+## Access incident: 2026-09-15
+
+Run [34963241075](https://github.com/caraykharej-spec/Trading-System-V3.0/actions/runs/34963241075) verified the actual GitHub secret-backed key via B2 Native API v4. Authorization, readFiles/writeFiles/deleteFiles capabilities, bucket scope, endpoint, region and unrestricted project prefixes all matched. PUT and DELETE succeeded; S3 HEAD/COPY returned 403 and GET returned AccessDenied. Native download identified the cause as **download_cap_exceeded**. Recreating application keys does not address that account cap.
+
+The account owner must inspect **B2 Cloud Storage → Caps & Alerts → Edit Caps**, including download and applicable read/transaction limits, and choose a suitable daily budget. This repository does not change spending caps or disable integrity verification. Changes may take up to ten minutes; re-run B2 Access Diagnostics before resuming Gate TradFi from main with end empty and force false. Do not start the subsequent yfinance mission stage before Gate's consolidated transfer manifest passes.
+
+References: [B2 download errors](https://www.backblaze.com/apidocs/b2-download-file-by-name), [manage caps](https://www.backblaze.com/docs/cloud-storage-create-and-manage-caps-and-alerts).

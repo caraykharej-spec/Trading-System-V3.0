@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -559,6 +560,21 @@ def _aws(*args: str, check: bool = True, quiet: bool = False) -> subprocess.Comp
     )
 
 
+def _object_missing(result: subprocess.CompletedProcess[str]) -> bool:
+    """Only an explicit missing-object response permits an upload/rebuild."""
+    if result.returncode == 0:
+        return False
+    match = re.search(r"An error occurred \(([^)]+)\)", result.stderr or "")
+    code = match.group(1) if match else "unclassified"
+    if code in {"404", "NoSuchKey", "NotFound"}:
+        return True
+    raise RuntimeError(
+        f"B2 object lookup failed (rc={result.returncode}, code={code}); "
+        "this is not a missing object. Run B2 Access Diagnostics; "
+        "403 can also indicate an account download/transaction cap."
+    )
+
+
 def _object_exists(key: str) -> bool:
     result = _aws(
         "s3api",
@@ -568,9 +584,9 @@ def _object_exists(key: str) -> bool:
         "--key",
         key,
         check=False,
-        quiet=True,
+        quiet=False,
     )
-    return result.returncode == 0
+    return not _object_missing(result)
 
 
 def _put_file(path: Path, key: str, sha256: str, content_type: str) -> None:

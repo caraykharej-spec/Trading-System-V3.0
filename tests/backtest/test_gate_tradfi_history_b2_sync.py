@@ -119,3 +119,55 @@ def test_fetch_all_history_paginates_backward_until_empty(monkeypatch: pytest.Mo
     assert "end_time=10799" in calls[0]
     assert "end_time=3599" in calls[1]
     assert "end_time=-1" in calls[2]
+
+
+@pytest.mark.parametrize("timeframe", ["4h", "1d"])
+def test_session_anchored_bars_preserve_native_timestamp(timeframe: str) -> None:
+    rows = _parse_kline_rows(
+        [{"t": 3600, "o": "1", "c": "1", "h": "1", "l": "1"}], _route(), timeframe,
+    )
+    assert int(rows[0].timestamp.timestamp()) == 3600
+
+
+def test_remote_hash_reads_bytes_and_only_explicit_absence_is_missing(monkeypatch) -> None:
+    import hashlib
+    import subprocess
+    from pathlib import Path
+
+    from scripts.backtest import sync_gate_tradfi_history_to_b2 as module
+
+    def fake_aws(*args, **kwargs):
+        assert args[:2] == ("s3api", "get-object")
+        Path(args[-1]).write_bytes(b"actual object bytes")
+        return subprocess.CompletedProcess(args, 0, "{}", "")
+
+    monkeypatch.setattr(module, "_bucket", lambda: "test-bucket")
+    monkeypatch.setattr(module, "_aws", fake_aws)
+    assert module._remote_sha256("test-key") == hashlib.sha256(b"actual object bytes").hexdigest()
+    monkeypatch.setattr(module, "_aws", lambda *a, **k: subprocess.CompletedProcess(a, 254, "", "An error occurred (NoSuchKey)"))
+    assert module._remote_sha256("test-key") is None
+
+
+def test_partition_first_upload_reuse_and_mismatch(monkeypatch) -> None:
+    from scripts.backtest import sync_gate_tradfi_history_to_b2 as module
+
+    rows = _parse_kline_rows(
+        [{"t": 900, "o": "1", "c": "1", "h": "1", "l": "1"}], _route(), "15m",
+    )
+    uploads = []
+    monkeypatch.setattr(module, "_write_parquet", lambda path, *a: path.write_bytes(b"parquet"))
+    monkeypatch.setattr(module, "_sha256", lambda path: "expected")
+    monkeypatch.setattr(module, "_put_file", lambda *a: uploads.append(a))
+    responses = iter([None, "expected"])
+    monkeypatch.setattr(module, "_remote_sha256", lambda key: next(responses))
+    result = module._store_partition(_route(), "15m", 1970, 1, rows, force=False)
+    assert len(uploads) == 1
+    assert not result.reused_verified
+    monkeypatch.setattr(module, "_remote_sha256", lambda key: "expected")
+    result = module._store_partition(_route(), "15m", 1970, 1, rows, force=False)
+    assert result.reused_verified
+    assert len(uploads) == 1
+    responses = iter([None, "corrupt"])
+    monkeypatch.setattr(module, "_remote_sha256", lambda key: next(responses))
+    with pytest.raises(RuntimeError, match="content verification failed"):
+        module._store_partition(_route(), "15m", 1970, 1, rows, force=False)

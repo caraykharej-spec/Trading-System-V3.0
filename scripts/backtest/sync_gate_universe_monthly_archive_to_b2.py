@@ -230,7 +230,7 @@ def _head_object_state(key: str) -> tuple[bool, str | None]:
         check=False,
         quiet=False,
     )
-    if result.returncode != 0:
+    if core._object_missing(result):
         return False, None
     try:
         payload = json.loads(result.stdout or "{}")

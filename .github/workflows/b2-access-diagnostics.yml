@@ -1,0 +1,38 @@
+name: B2 Access Diagnostics
+on:
+  push:
+    branches: [b2-access-diagnostics]
+    paths:
+      - scripts/operations/diagnose_b2_access.py
+      - .github/workflows/b2-access-diagnostics.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: b2-access-diagnostics
+  cancel-in-progress: false
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
+      AWS_DEFAULT_REGION: eu-central-003
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compare native key scope and S3 read/write integrity
+        run: python scripts/operations/diagnose_b2_access.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: b2-access-diagnostics-${{ github.run_id }}
+          path: artifacts/b2-access-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 14

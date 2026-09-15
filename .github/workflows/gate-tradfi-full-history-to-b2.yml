@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/gate-tradfi-full-history-to-b2.yml"
       - "scripts/backtest/sync_gate_tradfi_history_to_b2.py"
+      - "scripts/operations/diagnose_b2_access.py"
       - "scripts/backtest/sync_gate_universe_history_to_b2.py"
       - "config/universe.json"
       - "config/market_data/source_registry.json"
@@ -64,28 +65,16 @@ jobs:
           python -m pip install -e ".[research-data]"
       - name: Run focused unit tests
         run: python -m pytest -q tests/backtest/test_gate_tradfi_history_b2_sync.py
-      - name: Verify B2 write/read/delete integrity before matrix
-        shell: bash
-        run: |
-          set -euo pipefail
-          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME; do
-            if [ -z "${!name:-}" ]; then echo "Missing required secret-backed environment variable: $name" >&2; exit 1; fi
-          done
-          endpoint="$B2_S3_ENDPOINT"
-          case "$endpoint" in http://*|https://*) ;; *) endpoint="https://$endpoint" ;; esac
-          mkdir -p artifacts/b2-preflight
-          key="_connectivity/gate-tradfi/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
-          printf 'run=%s\nattempt=%s\nsha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" > artifacts/b2-preflight/source.txt
-          expected="$(sha256sum artifacts/b2-preflight/source.txt | awk '{print $1}')"
-          aws s3api put-object --bucket "$B2_BUCKET_NAME" --key "$key" --body artifacts/b2-preflight/source.txt --metadata "sha256=$expected" --endpoint-url "$endpoint" >/dev/null
-          if ! aws s3 cp "s3://$B2_BUCKET_NAME/$key" artifacts/b2-preflight/readback.txt --endpoint-url "$endpoint"; then
-            echo "B2 preflight read-back failed for key=$key endpoint=$endpoint" >&2
-            exit 1
-          fi
-          actual="$(sha256sum artifacts/b2-preflight/readback.txt | awk '{print $1}')"
-          if [ "$actual" != "$expected" ]; then echo "B2 preflight SHA-256 mismatch: $actual != $expected" >&2; exit 1; fi
-          aws s3api delete-object --bucket "$B2_BUCKET_NAME" --key "$key" --endpoint-url "$endpoint" >/dev/null
-          echo "B2 preflight PASS sha256=$actual"
+      - name: Diagnose B2 access and verify read-back before matrix
+        run: python scripts/operations/diagnose_b2_access.py
+      - name: Preserve B2 diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b2-tradfi-preflight-${{ github.run_id }}
+          path: artifacts/b2-access-diagnostics.json
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Discover Gate TradFi routes
         run: >-
           python -m scripts.backtest.sync_gate_tradfi_history_to_b2
@@ -160,33 +149,7 @@ jobs:
           args=(--canonical "$ROUTE_CANONICAL" --base-asset "$ROUTE_BASE" --asset-class "$ROUTE_ASSET_CLASS" --provider-symbol "$ROUTE_PROVIDER_SYMBOL" --price-multiplier "$ROUTE_PRICE_MULTIPLIER" --route-origin "$ROUTE_ORIGIN" --output artifacts/route-summary.json)
           if [ -n "${INPUT_END:-}" ]; then args+=(--end "$INPUT_END"); fi
           if [ "${INPUT_FORCE:-false}" = "true" ]; then args+=(--force); fi
-          python - "${args[@]}" <<'PY'
-          import sys
-          import tempfile
-          from pathlib import Path
-          from scripts.backtest import sync_gate_tradfi_history_to_b2 as module
-
-          # Gate TradFi native 4h/1d bars are session anchored; preserve provider timestamps.
-          module._SECONDS["4h"] = 3600
-          module._SECONDS["1d"] = 3600
-
-          # Verify the exact object bytes through the S3 high-level copy command. This avoids
-          # relying on custom HEAD metadata and avoids get-object positional-argument ambiguity.
-          def content_sha256(key: str):
-              with tempfile.TemporaryDirectory(prefix="b2-verify-") as temp_dir:
-                  target = Path(temp_dir) / "object.bin"
-                  result = module._aws("s3", "cp", f"s3://{module._bucket()}/{key}", str(target), check=False, quiet=False)
-                  if result.returncode != 0:
-                      detail = (result.stderr or result.stdout or "unknown aws-cli error").strip()
-                      raise RuntimeError(f"B2 read-back failed for {key}: rc={result.returncode}; {detail}")
-                  if not target.exists():
-                      raise RuntimeError(f"B2 read-back reported success but produced no file for {key}")
-                  return module._sha256(target)
-
-          module._head_sha256 = content_sha256
-          sys.argv = ["sync_gate_tradfi_history_to_b2.py", *sys.argv[1:]]
-          raise SystemExit(module.main())
-          PY
+          python -m scripts.backtest.sync_gate_tradfi_history_to_b2 "${args[@]}"
       - name: Upload route evidence
         if: always()
         uses: actions/upload-artifact@v4
