@@ -99,6 +99,31 @@ def test_four_hour_aggregation_is_utc_aligned() -> None:
     assert aggregated[0].volume == Decimal("4")
 
 
+def test_daily_aggregation_is_utc_aligned_and_preserves_bounds() -> None:
+    rows = [
+        subject.YahooCandle(
+            datetime(2026, 1, 1, hour, tzinfo=timezone.utc),
+            Decimal(str(hour + 2)),
+            Decimal(str(hour + 5)),
+            Decimal(str(hour + 1)),
+            Decimal(str(hour + 3)),
+            Decimal(str(hour + 3)),
+            Decimal("2"),
+        )
+        for hour in (0, 12)
+    ]
+
+    aggregated = subject.aggregate_daily(rows)
+
+    assert len(aggregated) == 1
+    assert aggregated[0].timestamp == datetime(2026, 1, 1, tzinfo=timezone.utc)
+    assert aggregated[0].open == Decimal("2")
+    assert aggregated[0].high == Decimal("17")
+    assert aggregated[0].low == Decimal("1")
+    assert aggregated[0].close == Decimal("15")
+    assert aggregated[0].volume == Decimal("4")
+
+
 def test_partition_key_is_year_bounded_and_sanitized() -> None:
     route = subject.YahooRoute("SPX", "SPX", "index", "^GSPC")
     assert subject._partition_key(route, "1d", 2026) == (
