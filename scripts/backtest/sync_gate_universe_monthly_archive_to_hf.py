@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 
-from scripts.backtest import sync_gate_universe_history_to_b2 as core
-from scripts.backtest import sync_gate_universe_monthly_archive_to_b2 as monthly
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.backtest import sync_gate_universe_history_to_b2 as core  # noqa: E402
+from scripts.backtest import sync_gate_universe_monthly_archive_to_b2 as monthly  # noqa: E402
 
 
 def _configure_hf_storage() -> None:
