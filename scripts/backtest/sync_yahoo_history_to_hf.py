@@ -247,6 +247,32 @@ def aggregate_four_hour(rows: list[YahooCandle]) -> list[YahooCandle]:
     return output
 
 
+def aggregate_daily(rows: list[YahooCandle]) -> list[YahooCandle]:
+    buckets: dict[int, list[YahooCandle]] = {}
+    for row in rows:
+        epoch = int(row.timestamp.timestamp())
+        buckets.setdefault(epoch - epoch % 86_400, []).append(row)
+    output: list[YahooCandle] = []
+    for epoch, group in sorted(buckets.items()):
+        ordered = sorted(group, key=lambda item: item.timestamp)
+        volumes = [item.volume for item in ordered]
+        output.append(
+            YahooCandle(
+                timestamp=datetime.fromtimestamp(epoch, tz=timezone.utc),
+                open=ordered[0].open,
+                high=max(item.high for item in ordered),
+                low=min(item.low for item in ordered),
+                close=ordered[-1].close,
+                adjusted_close=ordered[-1].adjusted_close,
+                volume=sum(
+                    (item for item in volumes if item is not None),
+                    Decimal("0"),
+                ),
+            )
+        )
+    return output
+
+
 def _year_groups(rows: list[YahooCandle]) -> Iterable[tuple[int, list[YahooCandle]]]:
     groups: dict[int, list[YahooCandle]] = {}
     for row in rows:
@@ -423,6 +449,9 @@ def sync_route(route: YahooRoute, *, end: datetime, force: bool = False) -> dict
         route, "1h", start=intraday_start, end=end, quality=source_quality["1h"]
     )
     daily = fetch_max_history(route, "1d", quality=source_quality["1d"])
+    daily_derived_from_hourly = not daily and bool(hourly)
+    if daily_derived_from_hourly:
+        daily = aggregate_daily(hourly)
     datasets = {"15m": fifteen, "1h": hourly, "4h": aggregate_four_hour(hourly), "1d": daily}
     if any(not rows for rows in datasets.values()):
         missing = [timeframe for timeframe, rows in datasets.items() if not rows]
@@ -437,6 +466,9 @@ def sync_route(route: YahooRoute, *, end: datetime, force: bool = False) -> dict
             "source_ohlc_invariant_rows_dropped": (
                 source_quality.get(timeframe, {}).get("ohlc_invariant_rows_dropped", 0)
             ),
+            "derived_from_hourly_due_to_empty_valid_daily_source": (
+                timeframe == "1d" and daily_derived_from_hourly
+            ),
         }
         for year, year_rows in _year_groups(rows):
             partitions.append(_store_partition(route, timeframe, year, year_rows, force=force))
@@ -449,7 +481,8 @@ def sync_route(route: YahooRoute, *, end: datetime, force: bool = False) -> dict
         "source_kind": "yahoo_public_chart_api_personal_research",
         "usage_policy": "private_personal_research_not_public_redistribution",
         "intraday_history_policy": f"last_{_INTRADAY_DAYS}_days",
-        "daily_history_policy": "maximum_available_range",
+        "daily_history_policy": "maximum_available_range_else_recent_hourly_derived",
+        "daily_derived_from_hourly_due_to_empty_valid_source": daily_derived_from_hourly,
         "price_policy": "raw_ohlc_plus_separate_adjusted_close",
         "gap_policy": "preserve_source_market_sessions_no_fill",
         "invalid_source_row_policy": "drop_and_record_never_clamp",
