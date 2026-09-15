@@ -46,6 +46,38 @@ def test_parse_chart_preserves_raw_and_adjusted_values() -> None:
     assert rows[0].volume == Decimal("7")
 
 
+def test_parse_chart_drops_and_records_source_ohlc_invariant_violation() -> None:
+    payload = {
+        "chart": {
+            "error": None,
+            "result": [
+                {
+                    "timestamp": [1_704_067_200, 1_704_153_600],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [1.1055831909179688, 1.10],
+                                "high": [1.1053388118743896, 1.11],
+                                "low": [1.1039965152740479, 1.09],
+                                "close": [1.1055831909179688, 1.105],
+                                "volume": [0, 0],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [1.1055831909179688, 1.105]}],
+                    },
+                }
+            ],
+        }
+    }
+    quality: dict[str, int] = {}
+
+    rows = subject.parse_chart(payload, _route(), quality=quality)
+
+    assert len(rows) == 1
+    assert rows[0].close == Decimal("11.050")
+    assert quality == {"ohlc_invariant_rows_dropped": 1}
+
+
 def test_four_hour_aggregation_is_utc_aligned() -> None:
     rows = [
         subject.YahooCandle(
