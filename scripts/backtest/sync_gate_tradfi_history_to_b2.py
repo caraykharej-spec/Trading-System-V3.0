@@ -19,7 +19,6 @@ from scripts.backtest.sync_gate_universe_history_to_b2 import (
     GateHistoryRoute,
     _aws,
     _bucket,
-    _endpoint,
     _put_file,
     _put_json,
     _route_manifest_key,
