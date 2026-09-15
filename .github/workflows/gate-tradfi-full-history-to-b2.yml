@@ -43,6 +43,11 @@ jobs:
     name: Discover Gate TradFi project routes
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.B2_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+      B2_S3_ENDPOINT: ${{ secrets.B2_S3_ENDPOINT }}
+      B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       route_count: ${{ steps.matrix.outputs.route_count }}
@@ -58,6 +63,28 @@ jobs:
           python -m pip install -e ".[research-data]"
       - name: Run focused unit tests
         run: python -m pytest -q tests/backtest/test_gate_tradfi_history_b2_sync.py
+      - name: Verify B2 write/read/delete integrity before matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME; do
+            if [ -z "${!name:-}" ]; then echo "Missing required secret-backed environment variable: $name" >&2; exit 1; fi
+          done
+          endpoint="$B2_S3_ENDPOINT"
+          case "$endpoint" in http://*|https://*) ;; *) endpoint="https://$endpoint" ;; esac
+          mkdir -p artifacts/b2-preflight
+          key="_connectivity/gate-tradfi/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.txt"
+          printf 'run=%s\nattempt=%s\nsha=%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_SHA" > artifacts/b2-preflight/source.txt
+          expected="$(sha256sum artifacts/b2-preflight/source.txt | awk '{print $1}')"
+          aws s3api put-object --bucket "$B2_BUCKET_NAME" --key "$key" --body artifacts/b2-preflight/source.txt --metadata "sha256=$expected" --endpoint-url "$endpoint" >/dev/null
+          if ! aws s3 cp "s3://$B2_BUCKET_NAME/$key" artifacts/b2-preflight/readback.txt --endpoint-url "$endpoint"; then
+            echo "B2 preflight read-back failed for key=$key endpoint=$endpoint" >&2
+            exit 1
+          fi
+          actual="$(sha256sum artifacts/b2-preflight/readback.txt | awk '{print $1}')"
+          if [ "$actual" != "$expected" ]; then echo "B2 preflight SHA-256 mismatch: $actual != $expected" >&2; exit 1; fi
+          aws s3api delete-object --bucket "$B2_BUCKET_NAME" --key "$key" --endpoint-url "$endpoint" >/dev/null
+          echo "B2 preflight PASS sha256=$actual"
       - name: Discover Gate TradFi routes
         run: >-
           python -m scripts.backtest.sync_gate_tradfi_history_to_b2
@@ -73,10 +100,8 @@ jobs:
           from pathlib import Path
           payload = json.loads(Path("artifacts/gate-tradfi-discovery.json").read_text(encoding="utf-8"))
           routes = payload["routes"]
-          if not routes:
-              raise SystemExit("Gate TradFi discovery returned no routes")
-          if len(routes) > 256:
-              raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
+          if not routes: raise SystemExit("Gate TradFi discovery returned no routes")
+          if len(routes) > 256: raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
           print("matrix=" + json.dumps({"route": routes}, separators=(",", ":")))
           print(f"route_count={len(routes)}")
           PY
@@ -123,10 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY B2_S3_ENDPOINT B2_BUCKET_NAME; do
-            if [ -z "${!name:-}" ]; then
-              echo "Missing required secret-backed environment variable: $name" >&2
-              exit 1
-            fi
+            if [ -z "${!name:-}" ]; then echo "Missing required secret-backed environment variable: $name" >&2; exit 1; fi
           done
           aws --version
       - name: Sync complete Gate TradFi history for route
@@ -134,15 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          args=(
-            --canonical "$ROUTE_CANONICAL"
-            --base-asset "$ROUTE_BASE"
-            --asset-class "$ROUTE_ASSET_CLASS"
-            --provider-symbol "$ROUTE_PROVIDER_SYMBOL"
-            --price-multiplier "$ROUTE_PRICE_MULTIPLIER"
-            --route-origin "$ROUTE_ORIGIN"
-            --output artifacts/route-summary.json
-          )
+          args=(--canonical "$ROUTE_CANONICAL" --base-asset "$ROUTE_BASE" --asset-class "$ROUTE_ASSET_CLASS" --provider-symbol "$ROUTE_PROVIDER_SYMBOL" --price-multiplier "$ROUTE_PRICE_MULTIPLIER" --route-origin "$ROUTE_ORIGIN" --output artifacts/route-summary.json)
           if [ -n "${INPUT_END:-}" ]; then args+=(--end "$INPUT_END"); fi
           if [ "${INPUT_FORCE:-false}" = "true" ]; then args+=(--force); fi
           python - "${args[@]}" <<'PY'
@@ -151,25 +165,21 @@ jobs:
           from pathlib import Path
           from scripts.backtest import sync_gate_tradfi_history_to_b2 as module
 
-          # Gate TradFi native 4h/1d bars are session anchored. Preserve provider timestamps.
+          # Gate TradFi native 4h/1d bars are session anchored; preserve provider timestamps.
           module._SECONDS["4h"] = 3600
           module._SECONDS["1d"] = 3600
 
-          # Backblaze's S3-compatible HEAD response does not reliably expose the custom
-          # sha256 metadata written by put-object. Verify integrity from object bytes instead.
+          # Verify the exact object bytes through the S3 high-level copy command. This avoids
+          # relying on custom HEAD metadata and avoids get-object positional-argument ambiguity.
           def content_sha256(key: str):
               with tempfile.TemporaryDirectory(prefix="b2-verify-") as temp_dir:
                   target = Path(temp_dir) / "object.bin"
-                  result = module._aws(
-                      "s3api", "get-object",
-                      "--bucket", module._bucket(),
-                      "--key", key,
-                      str(target),
-                      check=False,
-                      quiet=True,
-                  )
-                  if result.returncode != 0 or not target.exists():
-                      return None
+                  result = module._aws("s3", "cp", f"s3://{module._bucket()}/{key}", str(target), check=False, quiet=False)
+                  if result.returncode != 0:
+                      detail = (result.stderr or result.stdout or "unknown aws-cli error").strip()
+                      raise RuntimeError(f"B2 read-back failed for {key}: rc={result.returncode}; {detail}")
+                  if not target.exists():
+                      raise RuntimeError(f"B2 read-back reported success but produced no file for {key}")
                   return module._sha256(target)
 
           module._head_sha256 = content_sha256
@@ -227,28 +237,10 @@ jobs:
           unexpected = sum(item.get("status") not in {"COMPLETE", "ERROR"} for item in summaries)
           missing = max(0, expected - len(summaries))
           failed = bool(sync_result != "success" or complete != expected or errors or unexpected or missing)
-          payload = {
-              "schema_version": 3,
-              "generated_at": datetime.now(timezone.utc).isoformat(),
-              "github_run_id": os.environ.get("GITHUB_RUN_ID"),
-              "github_sha": os.environ.get("GITHUB_SHA"),
-              "status": "FAIL_INCOMPLETE_GATE_TRADFI_TRANSFER" if failed else "PASS_COMPLETE_GATE_TRADFI_TRANSFER",
-              "sync_job_result": sync_result,
-              "expected_routes": expected,
-              "received_route_summaries": len(summaries),
-              "completed_routes": complete,
-              "error_routes": errors,
-              "unexpected_status_routes": unexpected,
-              "missing_route_summaries": missing,
-              "total_rows": sum(int(item.get("total_rows", 0)) for item in summaries),
-              "partition_objects_recorded": sum(int(item.get("partition_objects_recorded", 0)) for item in summaries),
-              "reused_verified_partition_objects": sum(int(item.get("reused_verified_partition_objects", 0)) for item in summaries),
-              "uploaded_or_replaced_partition_objects": sum(int(item.get("uploaded_or_replaced_partition_objects", 0)) for item in summaries),
-              "route_summaries": summaries,
-          }
+          payload = {"schema_version":3,"generated_at":datetime.now(timezone.utc).isoformat(),"github_run_id":os.environ.get("GITHUB_RUN_ID"),"github_sha":os.environ.get("GITHUB_SHA"),"status":"FAIL_INCOMPLETE_GATE_TRADFI_TRANSFER" if failed else "PASS_COMPLETE_GATE_TRADFI_TRANSFER","sync_job_result":sync_result,"expected_routes":expected,"received_route_summaries":len(summaries),"completed_routes":complete,"error_routes":errors,"unexpected_status_routes":unexpected,"missing_route_summaries":missing,"total_rows":sum(int(item.get("total_rows",0)) for item in summaries),"partition_objects_recorded":sum(int(item.get("partition_objects_recorded",0)) for item in summaries),"reused_verified_partition_objects":sum(int(item.get("reused_verified_partition_objects",0)) for item in summaries),"uploaded_or_replaced_partition_objects":sum(int(item.get("uploaded_or_replaced_partition_objects",0)) for item in summaries),"route_summaries":summaries}
           Path("artifacts").mkdir(exist_ok=True)
-          Path("artifacts/gate-tradfi-run-manifest.json").write_text(json.dumps(payload, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-          print(json.dumps({k: payload[k] for k in ("status", "expected_routes", "received_route_summaries", "completed_routes", "error_routes", "missing_route_summaries", "total_rows", "partition_objects_recorded")}, sort_keys=True))
+          Path("artifacts/gate-tradfi-run-manifest.json").write_text(json.dumps(payload,sort_keys=True,indent=2)+"\n",encoding="utf-8")
+          print(json.dumps({k:payload[k] for k in ("status","expected_routes","received_route_summaries","completed_routes","error_routes","missing_route_summaries","total_rows","partition_objects_recorded")},sort_keys=True))
           if failed: raise SystemExit("Gate TradFi transfer is incomplete")
           PY
       - name: Publish consolidated run manifest to B2
