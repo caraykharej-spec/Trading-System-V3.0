@@ -165,6 +165,13 @@ jobs:
           import time
           from scripts.backtest import sync_gate_tradfi_history_to_b2 as module
 
+          # Gate TradFi higher-timeframe bars are anchored to the instrument's
+          # trading session rather than Unix-epoch 4h/1d boundaries. Keep the
+          # provider timestamp unchanged and require only whole-hour alignment
+          # for these native bars. 15m and 1h retain their strict native grids.
+          module._SECONDS["4h"] = 3600
+          module._SECONDS["1d"] = 3600
+
           original_put_file = module._put_file
 
           def put_file_with_visibility_wait(path, key, sha256, content_type):
