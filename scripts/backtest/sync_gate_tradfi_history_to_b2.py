@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -19,6 +20,7 @@ from scripts.backtest.sync_gate_universe_history_to_b2 import (
     GateHistoryRoute,
     _aws,
     _bucket,
+    _object_missing,
     _put_file,
     _put_json,
     _route_manifest_key,
@@ -29,7 +31,8 @@ from scripts.backtest.sync_gate_universe_history_to_b2 import (
 
 _API_BASE = "https://api.gateio.ws/api/v4"
 _TIMEFRAMES = ("15m", "1h", "4h", "1d")
-_SECONDS = {"15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+# Native 4h/1d bars follow market sessions, not UTC midnight boundaries.
+_ALIGNMENT_SECONDS = {"15m": 900, "1h": 3600, "4h": 3600, "1d": 3600}
 _SCHEMA_VERSION = 3
 _NAMESPACE = "bronze/gate-history/v2"
 _MANIFEST_NAMESPACE = "manifests/gate-history/v2"
@@ -84,7 +87,7 @@ def _parse_kline_rows(
     timeframe: str,
 ) -> list[Candle]:
     multiplier = Decimal(route.price_multiplier)
-    interval = _SECONDS[timeframe]
+    interval = _ALIGNMENT_SECONDS[timeframe]
     output: dict[datetime, Candle] = {}
     for raw in _extract_rows(payload):
         try:
@@ -220,29 +223,19 @@ def _partition_key(route: GateHistoryRoute, timeframe: str, year: int, month: in
     )
 
 
-def _head_sha256(key: str) -> str | None:
-    result = _aws(
-        "s3api",
-        "head-object",
-        "--bucket",
-        _bucket(),
-        "--key",
-        key,
-        "--output",
-        "json",
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return None
-    metadata = payload.get("Metadata") or payload.get("metadata") or {}
-    if not isinstance(metadata, dict):
-        return None
-    value = metadata.get("sha256") or metadata.get("Sha256")
-    return str(value) if value else None
+def _remote_sha256(key: str) -> str | None:
+    """Hash actual remote bytes; absence permits upload, access failures do not."""
+    with tempfile.TemporaryDirectory(prefix="b2-verify-") as temp_dir:
+        target = Path(temp_dir) / "object.bin"
+        result = _aws(
+            "s3api", "get-object", "--bucket", _bucket(), "--key", key,
+            str(target), check=False,
+        )
+        if _object_missing(result):
+            return None
+        if not target.is_file():
+            raise RuntimeError("B2 read-back succeeded without producing an object file")
+        return _sha256(target)
 
 
 def _write_parquet(path: Path, route: GateHistoryRoute, timeframe: str, candles: list[Candle]) -> None:
@@ -282,21 +275,19 @@ def _store_partition(
     *,
     force: bool,
 ) -> TradFiPartition:
-    import tempfile
-
     key = _partition_key(route, timeframe, year, month)
     with tempfile.TemporaryDirectory(prefix="gate-tradfi-") as temp_dir:
         path = Path(temp_dir) / "part-000.parquet"
         _write_parquet(path, route, timeframe, candles)
         digest = _sha256(path)
-        existing = _head_sha256(key)
+        existing = _remote_sha256(key)
         reused = existing == digest and not force
         if not reused:
             _put_file(path, key, digest, "application/vnd.apache.parquet")
-            verified = _head_sha256(key)
+            verified = _remote_sha256(key)
             if verified != digest:
                 raise RuntimeError(
-                    f"B2 SHA-256 metadata verification failed for {key}: {verified!r} != {digest!r}"
+                    f"B2 SHA-256 content verification failed for {key}: {verified!r} != {digest!r}"
                 )
     return TradFiPartition(
         timeframe=timeframe,
@@ -364,7 +355,7 @@ def sync_route(route: GateHistoryRoute, *, end: datetime, force: bool = False) -
         "native_timeframes": list(_TIMEFRAMES),
         "gap_policy": "preserve_source_native_market_sessions_no_fill",
         "volume_policy": "not_provided_by_gate_tradfi_kline",
-        "integrity_policy": "sha256_rebuild_compare_upload_verify_metadata",
+        "integrity_policy": "sha256_rebuild_compare_upload_verify_downloaded_bytes",
         "observed_first": observed_first,
         "observed_last": observed_last,
         "total_rows": total_rows,
