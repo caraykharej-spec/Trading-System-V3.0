@@ -16,8 +16,9 @@ on:
   workflow_dispatch:
     inputs:
       end:
-        description: "UTC exclusive upper bound (ISO-8601); defaults to now"
+        description: "UTC exclusive upper bound (ISO-8601); leave empty to use current UTC time"
         required: false
+        default: ""
         type: string
       force:
         description: "Replace monthly objects even when SHA verification matches"
