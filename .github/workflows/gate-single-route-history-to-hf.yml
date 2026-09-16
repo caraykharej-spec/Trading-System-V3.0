@@ -1,0 +1,230 @@
+name: Gate Single Route History to HF
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Exact Gate provider"
+        required: true
+        default: "gateio"
+        type: choice
+        options:
+          - gateio
+          - gateio_futures
+      provider_symbol:
+        description: "Exact Gate provider symbol, e.g. XMR_USDT"
+        required: true
+        type: string
+      start:
+        description: "Optional UTC inclusive start; otherwise provider/listing policy applies"
+        required: false
+        type: string
+      end:
+        description: "Optional UTC exclusive end; defaults to current UTC day"
+        required: false
+        type: string
+      force:
+        description: "Replace existing monthly objects"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-single-route-history-to-hf
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: ${{ secrets.HF_S3_REGION }}
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "5"
+  HF_S3_MAX_ATTEMPTS: "10"
+  HF_S3_RETRY_BASE_SECONDS: "5"
+  HF_S3_RETRY_MAX_SECONDS: "300"
+  HF_S3_MIN_REQUEST_INTERVAL_SECONDS: "0.25"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      REQUESTED_PROVIDER: ${{ inputs.provider }}
+      REQUESTED_SYMBOL: ${{ inputs.provider_symbol }}
+    outputs:
+      route: ${{ steps.route.outputs.route }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - name: Verify HF storage
+        run: python scripts/operations/diagnose_hf_s3_access.py
+      - name: Discover live Storm universe and Gate routes
+        run: >-
+          python scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py
+          --discover-only --output artifacts/gate-history-discovery.json
+      - name: Select exact provider and symbol
+        id: route
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          payload = json.loads(Path("artifacts/gate-history-discovery.json").read_text())
+          provider = os.environ["REQUESTED_PROVIDER"].strip().lower()
+          symbol = os.environ["REQUESTED_SYMBOL"].strip().upper()
+          matches = [
+              route for route in payload.get("routes", [])
+              if str(route.get("provider", "")).strip().lower() == provider
+              and str(route.get("provider_symbol", "")).strip().upper() == symbol
+          ]
+          if len(matches) != 1:
+              raise SystemExit(
+                  f"Expected exactly one discovered route for {provider}:{symbol}; found {len(matches)}"
+              )
+          print("route=" + json.dumps(matches[0], separators=(",", ":")))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gate-single-discovery-${{ github.run_id }}
+          path: artifacts/gate-history-discovery.json
+          retention-days: 30
+
+  sync:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      ROUTE_JSON: ${{ needs.discover.outputs.route }}
+      INPUT_START: ${{ inputs.start }}
+      INPUT_END: ${{ inputs.end }}
+      INPUT_FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - name: Sync exact Gate route with idempotent whole-route retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          eval "$(python - <<'PY'
+          import json, os, shlex
+          route = json.loads(os.environ['ROUTE_JSON'])
+          for env_name, key in (
+              ('ROUTE_CANONICAL','canonical_symbol'),
+              ('ROUTE_BASE','base_asset'),
+              ('ROUTE_ASSET_CLASS','asset_class'),
+              ('ROUTE_PROVIDER','provider'),
+              ('ROUTE_PROVIDER_SYMBOL','provider_symbol'),
+              ('ROUTE_PRICE_MULTIPLIER','price_multiplier'),
+              ('ROUTE_ORIGIN','route_origin'),
+          ):
+              print(f"export {env_name}={shlex.quote(str(route.get(key, '')))}")
+          PY
+          )"
+          args=(--canonical "$ROUTE_CANONICAL" --base-asset "$ROUTE_BASE" --asset-class "$ROUTE_ASSET_CLASS" --provider "$ROUTE_PROVIDER" --provider-symbol "$ROUTE_PROVIDER_SYMBOL" --price-multiplier "$ROUTE_PRICE_MULTIPLIER" --route-origin "$ROUTE_ORIGIN" --output artifacts/route-summary.json)
+          if [ -n "${INPUT_START:-}" ]; then args+=(--start "$INPUT_START"); fi
+          if [ -n "${INPUT_END:-}" ]; then args+=(--end "$INPUT_END"); fi
+          if [ "${INPUT_FORCE:-false}" = "true" ]; then args+=(--force); fi
+          delays=(0 15 60 300)
+          for attempt in 1 2 3 4; do
+            delay="${delays[$((attempt-1))]}"
+            if [ "$delay" -gt 0 ]; then sleep "$delay"; fi
+            if python scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py "${args[@]}"; then
+              exit 0
+            fi
+          done
+          exit 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-single-route-${{ github.run_id }}
+          path: artifacts/route-summary.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  summarize:
+    needs: [discover, sync]
+    if: always() && needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      SYNC_RESULT: ${{ needs.sync.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: gate-single-route-${{ github.run_id }}
+          path: artifacts/route
+      - name: Build and publish exact-route run manifest
+        run: |
+          python - <<'PY'
+          import json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from scripts.backtest import hf_s3
+          summary = json.loads(Path("artifacts/route/route-summary.json").read_text())
+          complete = summary.get("status") in {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
+          failed = os.environ.get("SYNC_RESULT") != "success" or not complete
+          payload = {
+              "schema_version": 2,
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "github_run_id": os.environ["GITHUB_RUN_ID"],
+              "github_sha": os.environ.get("GITHUB_SHA"),
+              "status": "FAIL_INCOMPLETE_GATE_HISTORY_TRANSFER" if failed else "PASS_SINGLE_ROUTE_GATE_HISTORY_TRANSFER",
+              "expected_routes": 1,
+              "expected_full_history_routes": 1,
+              "expected_blocked_routes": 0,
+              "received_route_summaries": 1,
+              "completed_routes": 1 if complete else 0,
+              "blocked_full_history_routes": 0,
+              "no_history_routes": 1 if summary.get("status") == "NO_HISTORY_RETURNED" else 0,
+              "error_routes": 1 if summary.get("status") == "ERROR" else 0,
+              "missing_route_summaries": 0,
+              "route_summaries": [summary],
+          }
+          Path("artifacts/gate-run-manifest.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+          hf_s3.aws(
+              "s3api", "put-object",
+              "--bucket", os.environ["HF_S3_BUCKET"],
+              "--key", f"manifests/gate-history/v2/runs/{os.environ['GITHUB_RUN_ID']}.json",
+              "--body", "artifacts/gate-run-manifest.json",
+              "--content-type", "application/json",
+          )
+          if failed:
+              Path("artifacts/incomplete.flag").write_text("1\n")
+          print(json.dumps({"status": payload["status"], "completed_routes": payload["completed_routes"]}))
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gate-single-run-manifest-${{ github.run_id }}
+          path: artifacts/gate-run-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce complete route transfer
+        run: |
+          if [ -f artifacts/incomplete.flag ]; then exit 1; fi
