@@ -14,11 +14,12 @@ def _route(base_asset: str, provider_symbol: str) -> dict[str, object]:
     }
 
 
-def test_filter_keeps_tradfi_and_yahoo_only_routes() -> None:
+def test_filter_keeps_tradfi_and_primary_yahoo_only_routes() -> None:
     payload = {
         "routes": [
             _route("AAPL", "AAPL"),
             _route("SPX", "^GSPC"),
+            _route("SPX", "ES=F"),
             _route("TON", "TON11419-USD"),
             _route("1000PEPE", "PEPE24478-USD"),
         ]
@@ -26,14 +27,19 @@ def test_filter_keeps_tradfi_and_yahoo_only_routes() -> None:
 
     filtered = subject.filter_fallback_routes(payload)
 
-    assert [route["base_asset"] for route in filtered["routes"]] == ["AAPL", "SPX"]
-    assert filtered["discovered_route_count"] == 4
+    assert [(route["base_asset"], route["provider_symbol"]) for route in filtered["routes"]] == [
+        ("AAPL", "AAPL"),
+        ("SPX", "^GSPC"),
+    ]
+    assert filtered["discovered_route_count"] == 5
     assert filtered["fallback_route_count"] == 2
+    assert filtered["excluded_route_count"] == 3
     assert filtered["excluded_full_gate_route_count"] == 2
-    assert {item["base_asset"] for item in filtered["excluded_routes"]} == {
-        "TON",
-        "1000PEPE",
-    }
+    assert filtered["excluded_secondary_yahoo_route_count"] == 1
+    reasons = {(item["base_asset"], item["provider_symbol"]): item["reason"] for item in filtered["excluded_routes"]}
+    assert reasons[("TON", "TON11419-USD")] == "explicit_full_history_gate_route_available"
+    assert reasons[("1000PEPE", "PEPE24478-USD")] == "explicit_full_history_gate_route_available"
+    assert reasons[("SPX", "ES=F")] == "secondary_yahoo_route_not_selected_for_historical_archive"
 
 
 def test_project_registry_yahoo_fallback_count_is_26() -> None:
@@ -42,8 +48,9 @@ def test_project_registry_yahoo_fallback_count_is_26() -> None:
     payload = {"routes": [route.__dict__ for route in discover_routes()]}
     filtered = subject.filter_fallback_routes(payload)
 
-    bases = {route["base_asset"] for route in filtered["routes"]}
+    selected = {(route["base_asset"], route["provider_symbol"]) for route in filtered["routes"]}
     assert filtered["fallback_route_count"] == 26
-    assert "SPX" in bases
-    assert "TON" not in bases
-    assert "1000PEPE" not in bases
+    assert ("SPX", "^GSPC") in selected
+    assert ("SPX", "ES=F") not in selected
+    assert all(base != "TON" for base, _ in selected)
+    assert all(base != "1000PEPE" for base, _ in selected)
