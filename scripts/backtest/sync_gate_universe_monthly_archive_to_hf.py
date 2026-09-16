@@ -14,6 +14,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.data.providers.http import ProviderError  # noqa: E402
+from scripts.backtest import hf_s3  # noqa: E402
 from scripts.backtest import sync_gate_universe_history_to_b2 as core  # noqa: E402
 from scripts.backtest import sync_gate_universe_monthly_archive_to_b2 as monthly  # noqa: E402
 
@@ -184,6 +185,9 @@ def _apply_spot_listing_floor(argv: list[str]) -> datetime | None:
 
 def main() -> int:
     _configure_hf_storage()
+    # Install the shared Hugging Face transport before any S3 call. The
+    # existing Gate writer remains the owner of idempotency/checksum logic.
+    core._aws = hf_s3.aws
     args = sys.argv[1:]
     _apply_spot_listing_floor(args)
     sys.argv[1:] = args
