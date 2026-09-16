@@ -19,6 +19,19 @@ def _candle(timestamp: datetime) -> legacy.YahooCandle:
     )
 
 
+def _partition(route, timeframe, year, rows, force):
+    return legacy.YahooPartition(
+        timeframe=timeframe,
+        year=year,
+        rows=len(rows),
+        object_key=f"{timeframe}/{year}",
+        sha256="abc",
+        first_timestamp=rows[0].timestamp.isoformat(),
+        last_timestamp=rows[-1].timestamp.isoformat(),
+        reused_verified=True,
+    )
+
+
 def test_sync_uses_distinct_15m_hourly_and_daily_windows(monkeypatch) -> None:
     end = datetime(2026, 9, 16, tzinfo=timezone.utc)
     route = legacy.YahooRoute(
@@ -38,20 +51,7 @@ def test_sync_uses_distinct_15m_hourly_and_daily_windows(monkeypatch) -> None:
 
     monkeypatch.setattr(legacy, "fetch_history", fake_fetch)
     monkeypatch.setattr(legacy, "aggregate_four_hour", lambda rows: list(rows))
-    monkeypatch.setattr(
-        legacy,
-        "_store_partition",
-        lambda route, timeframe, year, rows, force: legacy.YahooPartition(
-            timeframe=timeframe,
-            year=year,
-            rows=len(rows),
-            object_key=f"{timeframe}/{year}",
-            sha256="abc",
-            first_timestamp=rows[0].timestamp.isoformat(),
-            last_timestamp=rows[-1].timestamp.isoformat(),
-            reused_verified=True,
-        ),
-    )
+    monkeypatch.setattr(legacy, "_store_partition", _partition)
     monkeypatch.setattr(legacy, "_put_json", lambda payload, key: None)
 
     payload = subject.sync_route(route, end=end)
@@ -66,6 +66,61 @@ def test_sync_uses_distinct_15m_hourly_and_daily_windows(monkeypatch) -> None:
         "4h": "derived_from_last_729_days_of_1h",
         "1d": "explicit_last_36159_days",
     }
+    assert payload["daily_derived_from_hourly_due_to_empty_valid_source"] is False
+    assert (
+        payload["coverage"]["1d"][
+            "derived_from_hourly_due_to_empty_valid_daily_source"
+        ]
+        is False
+    )
+
+
+def test_sync_derives_daily_from_hourly_when_native_daily_is_empty(monkeypatch) -> None:
+    end = datetime(2026, 9, 16, tzinfo=timezone.utc)
+    route = legacy.YahooRoute(
+        canonical_symbol="TON",
+        base_asset="TON",
+        asset_class="crypto",
+        provider_symbol="TON11419-USD",
+    )
+    hourly = [_candle(end - timedelta(days=2)), _candle(end - timedelta(days=1))]
+    derived_daily = [_candle(end - timedelta(days=2)), _candle(end - timedelta(days=1))]
+    aggregate_daily_calls: list[list[legacy.YahooCandle]] = []
+
+    def fake_fetch(route_arg, interval, *, start, end, quality=None):
+        assert route_arg == route
+        if quality is not None:
+            quality.setdefault("ohlc_invariant_rows_dropped", 0)
+        if interval == "1d":
+            return []
+        if interval == "1h":
+            return list(hourly)
+        return [_candle(end - timedelta(hours=1)), _candle(end)]
+
+    def fake_daily(rows):
+        aggregate_daily_calls.append(list(rows))
+        return list(derived_daily)
+
+    monkeypatch.setattr(legacy, "fetch_history", fake_fetch)
+    monkeypatch.setattr(legacy, "aggregate_four_hour", lambda rows: list(rows))
+    monkeypatch.setattr(legacy, "aggregate_daily", fake_daily)
+    monkeypatch.setattr(legacy, "_store_partition", _partition)
+    monkeypatch.setattr(legacy, "_put_json", lambda payload, key: None)
+
+    payload = subject.sync_route(route, end=end)
+
+    assert payload["status"] == "COMPLETE"
+    assert aggregate_daily_calls == [hourly]
+    assert payload["daily_derived_from_hourly_due_to_empty_valid_source"] is True
+    assert payload["history_policy"]["1d"] == (
+        "derived_from_last_729_days_of_1h_due_to_empty_valid_daily_source"
+    )
+    assert (
+        payload["coverage"]["1d"][
+            "derived_from_hourly_due_to_empty_valid_daily_source"
+        ]
+        is True
+    )
 
 
 def test_main_installs_shared_hf_transport(monkeypatch, tmp_path) -> None:

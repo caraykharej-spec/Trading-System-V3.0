@@ -6,6 +6,11 @@ backtest baseline. This writer keeps 15m inside Yahoo's short intraday window,
 uses the materially longer hourly window for 1h/4h, and requests daily data
 with explicit period1/period2 bounds to avoid long-range auto-downsampling.
 
+If Yahoo returns no valid native daily rows for an otherwise valid route, the
+writer deterministically derives 1d candles from the already-fetched hourly
+history and records that provenance explicitly. This preserves the hard
+backtest coverage gate without silently fabricating or forward-filling data.
+
 Storage keys remain compatible with the v1 Yahoo namespace. Existing objects
 are content-address verified before replacement, so reruns are idempotent.
 """
@@ -25,7 +30,7 @@ from scripts.backtest import sync_yahoo_history_to_hf as legacy
 _FIFTEEN_MINUTE_DAYS = 59
 _HOURLY_DAYS = 729
 _DAILY_DAYS = 36_159  # 99 years, matching the conservative yfinance max policy.
-_POLICY_VERSION = 2
+_POLICY_VERSION = 3
 
 
 def discover_routes() -> list[legacy.YahooRoute]:
@@ -68,6 +73,9 @@ def sync_route(
         end=end,
         quality=source_quality["1d"],
     )
+    daily_derived_from_hourly = not daily and bool(hourly)
+    if daily_derived_from_hourly:
+        daily = legacy.aggregate_daily(hourly)
 
     datasets = {
         "15m": fifteen,
@@ -89,12 +97,20 @@ def sync_route(
             "source_ohlc_invariant_rows_dropped": (
                 source_quality.get(timeframe, {}).get("ohlc_invariant_rows_dropped", 0)
             ),
+            "derived_from_hourly_due_to_empty_valid_daily_source": (
+                timeframe == "1d" and daily_derived_from_hourly
+            ),
         }
         for year, year_rows in legacy._year_groups(rows):
             partitions.append(
                 legacy._store_partition(route, timeframe, year, year_rows, force=force)
             )
 
+    daily_policy = (
+        f"derived_from_last_{_HOURLY_DAYS}_days_of_1h_due_to_empty_valid_daily_source"
+        if daily_derived_from_hourly
+        else f"explicit_last_{_DAILY_DAYS}_days"
+    )
     manifest: dict[str, object] = {
         "schema_version": _POLICY_VERSION,
         "status": "COMPLETE",
@@ -107,8 +123,9 @@ def sync_route(
             "15m": f"last_{_FIFTEEN_MINUTE_DAYS}_days",
             "1h": f"last_{_HOURLY_DAYS}_days",
             "4h": f"derived_from_last_{_HOURLY_DAYS}_days_of_1h",
-            "1d": f"explicit_last_{_DAILY_DAYS}_days",
+            "1d": daily_policy,
         },
+        "daily_derived_from_hourly_due_to_empty_valid_source": daily_derived_from_hourly,
         "price_policy": "raw_ohlc_plus_separate_adjusted_close",
         "gap_policy": "preserve_source_market_sessions_no_fill",
         "invalid_source_row_policy": "drop_and_record_never_clamp",
