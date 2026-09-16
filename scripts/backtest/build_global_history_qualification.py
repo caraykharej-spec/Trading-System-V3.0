@@ -26,6 +26,8 @@ _SCHEMA_VERSION = 1
 _COMPLETE_GATE = {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
 _COMPLETE_YAHOO = {"COMPLETE"}
 _GATE_FULL_PROVIDERS = {"gateio", "gateio_futures"}
+_REQUIRED_BACKTEST_TIMEFRAMES = ("15m", "1h", "4h", "1d")
+_MINIMUM_STRATEGY_HISTORY = 200
 
 
 def _bucket() -> str:
@@ -146,8 +148,6 @@ def _preferred_summary(
             )
         return None, None, rejected
 
-    # Registry order is authoritative. It captures reviewed aliases and scaling,
-    # e.g. TON -> GRAM_USDT and 1000PEPE -> PEPE_USDT * 1000.
     for source in mapping.routes:
         if source.provider in _GATE_FULL_PROVIDERS:
             matches = [
@@ -254,6 +254,32 @@ def _coverage(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _coverage_deficiencies(
+    coverage: dict[str, Any], mapping: SourceMapping | None
+) -> tuple[int, list[dict[str, Any]]]:
+    minimum = max(
+        _MINIMUM_STRATEGY_HISTORY,
+        mapping.minimum_candles if mapping is not None else _MINIMUM_STRATEGY_HISTORY,
+    )
+    by_timeframe = coverage.get("coverage_by_timeframe") or {}
+    if not isinstance(by_timeframe, dict):
+        by_timeframe = {}
+    deficiencies: list[dict[str, Any]] = []
+    for timeframe in _REQUIRED_BACKTEST_TIMEFRAMES:
+        raw = by_timeframe.get(timeframe)
+        rows = int(raw.get("rows") or 0) if isinstance(raw, dict) else 0
+        if rows < minimum:
+            deficiencies.append(
+                {
+                    "timeframe": timeframe,
+                    "required_rows": minimum,
+                    "available_rows": rows,
+                    "missing_rows": minimum - rows,
+                }
+            )
+    return minimum, deficiencies
+
+
 def _storm_fingerprint(storm_assets: Iterable[StormReferenceAsset]) -> str:
     payload = [
         {
@@ -278,6 +304,7 @@ def qualify(
     storm = tuple(sorted(storm_assets, key=lambda item: item.base_asset.upper()))
     assets: list[dict[str, Any]] = []
     missing: list[str] = []
+    insufficient: list[str] = []
     source_counts: dict[str, int] = {}
     rejected_count = 0
 
@@ -300,6 +327,11 @@ def qualify(
                     "qualification_status": "MISSING_HISTORICAL_SOURCE",
                     "identity_policy": None,
                     "historical_source": None,
+                    "minimum_candles_per_required_timeframe": max(
+                        _MINIMUM_STRATEGY_HISTORY,
+                        mapping.minimum_candles if mapping else _MINIMUM_STRATEGY_HISTORY,
+                    ),
+                    "history_deficiencies": [],
                     "rejected_candidates": rejected,
                     "coverage": {},
                 }
@@ -309,6 +341,13 @@ def qualify(
         route = _route(selected)
         provider = str(route.get("provider") or "yahoo").lower()
         source_counts[provider] = source_counts.get(provider, 0) + 1
+        coverage = _coverage(selected)
+        minimum, deficiencies = _coverage_deficiencies(coverage, mapping)
+        qualification_status = "QUALIFIED"
+        if deficiencies:
+            qualification_status = "INSUFFICIENT_BACKTEST_HISTORY"
+            insufficient.append(base)
+
         assets.append(
             {
                 "base_asset": base,
@@ -316,7 +355,7 @@ def qualify(
                 "storm_provider_symbol": reference.provider_symbol,
                 "storm_as_of": reference.as_of.isoformat(),
                 "asset_class": mapping.asset_class if mapping else str(route.get("asset_class") or "storm"),
-                "qualification_status": "QUALIFIED",
+                "qualification_status": qualification_status,
                 "identity_policy": identity_policy,
                 "historical_source": {
                     "provider": provider,
@@ -327,23 +366,33 @@ def qualify(
                     "source_kind": selected.get("source_kind"),
                     "manifest_object_key": selected.get("manifest_object_key"),
                 },
+                "minimum_candles_per_required_timeframe": minimum,
+                "history_deficiencies": deficiencies,
                 "rejected_candidates": rejected,
-                "coverage": _coverage(selected),
+                "coverage": coverage,
             }
         )
 
-    qualified = len(storm) - len(missing)
+    qualified = len(storm) - len(missing) - len(insufficient)
+    failed = bool(missing or insufficient)
     return {
         "schema_version": _SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "status": "PASS_GLOBAL_HISTORY_QUALIFICATION" if not missing else "FAIL_GLOBAL_HISTORY_QUALIFICATION",
+        "status": "FAIL_GLOBAL_HISTORY_QUALIFICATION" if failed else "PASS_GLOBAL_HISTORY_QUALIFICATION",
         "authority": "live_storm_reference_universe",
         "identity_policy": "storm_base_asset_plus_reviewed_source_registry_aliases_and_multipliers",
+        "backtest_history_policy": {
+            "required_timeframes": list(_REQUIRED_BACKTEST_TIMEFRAMES),
+            "baseline_minimum_candles": _MINIMUM_STRATEGY_HISTORY,
+            "per_asset_minimum": "max(baseline_minimum_candles, source_registry.minimum_candles)",
+        },
         "storm_universe_fingerprint_sha256": _storm_fingerprint(storm),
         "storm_asset_count": len(storm),
         "qualified_asset_count": qualified,
         "missing_asset_count": len(missing),
         "missing_assets": missing,
+        "insufficient_history_asset_count": len(insufficient),
+        "insufficient_history_assets": insufficient,
         "source_counts": dict(sorted(source_counts.items())),
         "rejected_identity_candidate_count": rejected_count,
         "source_manifest_keys": source_manifest_keys or [],
@@ -359,7 +408,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
         f"- Authority: `{payload['authority']}`",
         f"- Storm assets: **{payload['storm_asset_count']}**",
         f"- Qualified assets: **{payload['qualified_asset_count']}**",
-        f"- Missing assets: **{payload['missing_asset_count']}**",
+        f"- Missing-source assets: **{payload['missing_asset_count']}**",
+        f"- Insufficient-history assets: **{payload['insufficient_history_asset_count']}**",
         f"- Rejected identity candidates: **{payload['rejected_identity_candidate_count']}**",
         f"- Storm universe fingerprint: `{payload['storm_universe_fingerprint_sha256']}`",
         "",
@@ -395,6 +445,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
             f"Source: `{source.get('provider') or '-'} / {source.get('provider_symbol') or '-'}`; "
             f"multiplier `{source.get('price_multiplier') or '-'}`; identity `{item.get('identity_policy') or '-'}`."
         )
+        lines.append(
+            "Required rows per backtest timeframe: "
+            f"**{item.get('minimum_candles_per_required_timeframe') or 0}**."
+        )
         coverage = item.get("coverage") or {}
         by_tf = coverage.get("coverage_by_timeframe") or {}
         if not by_tf:
@@ -410,13 +464,26 @@ def render_markdown(payload: dict[str, Any]) -> str:
                     f"{record.get('last_timestamp') or '-'} | {record.get('rows') or 0} | "
                     f"{record.get('partition_objects') or 0} |"
                 )
+        deficiencies = item.get("history_deficiencies") or []
+        if deficiencies:
+            lines.append("")
+            lines.append(
+                "Backtest history deficiencies: "
+                + "; ".join(
+                    f"{entry['timeframe']} {entry['available_rows']}/{entry['required_rows']} rows"
+                    for entry in deficiencies
+                )
+            )
         rejected = item.get("rejected_candidates") or []
         if rejected:
             lines.append("")
-            lines.append("Rejected candidates: " + "; ".join(
-                f"{entry.get('provider')}:{entry.get('provider_symbol')} ({entry.get('reason')})"
-                for entry in rejected
-            ))
+            lines.append(
+                "Rejected candidates: "
+                + "; ".join(
+                    f"{entry.get('provider')}:{entry.get('provider_symbol')} ({entry.get('reason')})"
+                    for entry in rejected
+                )
+            )
         months = coverage.get("source_months_without_rows") or []
         if months:
             lines.append("")
@@ -435,7 +502,8 @@ def render_markdown(payload: dict[str, Any]) -> str:
             "- Reviewed aliases and price multipliers come from `config/market_data/source_registry.json`.",
             "- Dynamic Gate spot routes are accepted only for exact Storm base-asset identity with multiplier 1.",
             "- A same-looking ticker is not enough. Unapproved identity candidates are rejected and reported.",
-            "- Yahoo intraday history is source-limited; the report therefore records coverage per timeframe rather than pretending all timeframes have the daily-history range.",
+            "- Backtest readiness requires 15m, 1h, 4h, and 1d coverage at max(200, per-asset minimum_candles).",
+            "- Yahoo intraday history is source-limited; transfer success does not imply backtest readiness.",
             "- Missing source periods and recorded gaps are preserved; they are never silently filled.",
             "",
         ]
@@ -495,6 +563,7 @@ def main() -> int:
                     "storm_asset_count",
                     "qualified_asset_count",
                     "missing_asset_count",
+                    "insufficient_history_asset_count",
                     "source_counts",
                     "rejected_identity_candidate_count",
                 )
