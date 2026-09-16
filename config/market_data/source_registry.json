@@ -1,5 +1,5 @@
 {
-  "version": "47.2.1",
+  "version": "47.2.2",
   "policy": "first healthy qualified route; Storm remains price authority",
   "mappings": {
     "1000PEPE": {"asset_class":"crypto","routes":[{"provider":"gateio_futures","symbol":"PEPE_USDT","price_multiplier":1000},{"provider":"yahoo","symbol":"PEPE24478-USD","price_multiplier":1000}]},
@@ -8,10 +8,8 @@
     "AMZN": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"AMZN"},{"provider":"gateio_tradfi","symbol":"AMZN","requires_volume":false}]},
     "AUD": {"asset_class":"forex","routes":[{"provider":"yahoo","symbol":"AUDUSD=X","requires_volume":false},{"provider":"gateio_tradfi","symbol":"AUDUSD","requires_volume":false}]},
     "AVGO": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"AVGO"},{"provider":"gateio_tradfi","symbol":"AVGO","requires_volume":false}]},
-    "BTCDEGEN": {"asset_class":"crypto","routes":[{"provider":"gateio","symbol":"BTC_USDT"}]},
     "COIN": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"COIN"},{"provider":"gateio_tradfi","symbol":"COIN","requires_volume":false}]},
     "CRCL": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"CRCL"},{"provider":"gateio_tradfi","symbol":"CRCL","requires_volume":false}]},
-    "ETHDEGEN": {"asset_class":"crypto","routes":[{"provider":"gateio","symbol":"ETH_USDT"}]},
     "EUR": {"asset_class":"forex","routes":[{"provider":"yahoo","symbol":"EURUSD=X","requires_volume":false},{"provider":"gateio_tradfi","symbol":"EURUSD","requires_volume":false}]},
     "GBP": {"asset_class":"forex","routes":[{"provider":"yahoo","symbol":"GBPUSD=X","requires_volume":false},{"provider":"gateio_tradfi","symbol":"GBPUSD","requires_volume":false}]},
     "GOOG": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"GOOG"},{"provider":"gateio_tradfi","symbol":"GOOG","requires_volume":false}]},
@@ -24,7 +22,6 @@
     "NVDA": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"NVDA"},{"provider":"gateio_tradfi","symbol":"NVDA","requires_volume":false}]},
     "NZD": {"asset_class":"forex","routes":[{"provider":"yahoo","symbol":"NZDUSD=X","requires_volume":false},{"provider":"gateio_tradfi","symbol":"NZDUSD","requires_volume":false}]},
     "PLTR": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"PLTR"},{"provider":"gateio_tradfi","symbol":"PLTR","requires_volume":false}]},
-    "SOLDEGEN": {"asset_class":"crypto","routes":[{"provider":"gateio","symbol":"SOL_USDT"}]},
     "SPX": {"asset_class":"index","routes":[{"provider":"yahoo","symbol":"^GSPC","requires_volume":false},{"provider":"yahoo","symbol":"ES=F"}]},
     "TON": {"asset_class":"crypto","routes":[{"provider":"gateio","symbol":"GRAM_USDT"},{"provider":"gateio_futures","symbol":"GRAM_USDT"},{"provider":"yahoo","symbol":"TON11419-USD"}]},
     "TSLA": {"asset_class":"equity","routes":[{"provider":"yahoo","symbol":"TSLA"},{"provider":"gateio_tradfi","symbol":"TSLA","requires_volume":false}]},
@@ -32,7 +29,6 @@
     "USDCAD": {"asset_class":"forex","routes":[{"provider":"yahoo","symbol":"CAD=X","requires_volume":false},{"provider":"gateio_tradfi","symbol":"USDCAD","requires_volume":false}]},
     "USDCHF": {"asset_class":"forex","routes":[{"provider":"yahoo","symbol":"CHF=X","requires_volume":false},{"provider":"gateio_tradfi","symbol":"USDCHF","requires_volume":false}]},
     "XAG": {"asset_class":"commodity","routes":[{"provider":"yahoo","symbol":"SI=F"},{"provider":"gateio_tradfi","symbol":"XAGUSD","requires_volume":false}]},
-    "XAU": {"asset_class":"commodity","routes":[{"provider":"yahoo","symbol":"GC=F"},{"provider":"gateio_tradfi","symbol":"XAUUSD","requires_volume":false}]},
-    "XMR": {"asset_class":"crypto","routes":[{"provider":"gateio","symbol":"XMR_USDT"},{"provider":"gateio_futures","symbol":"XMR_USDT"}]}
+    "XAU": {"asset_class":"commodity","routes":[{"provider":"yahoo","symbol":"GC=F"},{"provider":"gateio_tradfi","symbol":"XAUUSD","requires_volume":false}]}
   }
 }

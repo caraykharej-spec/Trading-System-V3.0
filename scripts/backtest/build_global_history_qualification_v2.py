@@ -3,9 +3,6 @@
 This module keeps the report/output contract from v1 but changes route
 selection from "first transferred route" to "first reviewed route that is
 both identity-valid and deep enough for the project's required timeframes".
-It also permits explicit source-registry aliases to reuse a verified provider
-series whose stored canonical base differs from the Storm market name, e.g.
-BTCDEGEN using the reviewed BTC_USDT price series.
 """
 
 from __future__ import annotations
@@ -112,9 +109,8 @@ def preferred_summary_backtest_ready(
     for source in mapping.routes:
         matches: list[dict[str, Any]]
         if source.provider in legacy._GATE_FULL_PROVIDERS:
-            # Search all Gate summaries rather than only same-base summaries.
-            # Explicit registry aliases are allowed to reuse an underlying
-            # verified price series (e.g. BTCDEGEN -> BTC_USDT).
+            # Search all Gate summaries because reviewed aliases such as
+            # TON -> GRAM_USDT intentionally use a different provider base.
             matches = [item for item in gate if _explicit_gate_matches(item, source)]
         elif source.provider == "yahoo":
             matches = [item for item in yahoo if _explicit_yahoo_matches(item, source)]

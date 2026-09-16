@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/global-history-qualification.yml"
       - "scripts/backtest/build_global_history_qualification.py"
+      - "scripts/backtest/build_global_history_qualification_v2.py"
       - "scripts/backtest/hf_s3.py"
       - "scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py"
       - "scripts/backtest/sync_yahoo_history_to_hf.py"
@@ -72,6 +73,7 @@ jobs:
           python -m pytest -q
           tests/backtest/test_hf_s3.py
           tests/backtest/test_global_history_qualification.py
+          tests/backtest/test_global_history_qualification_v2.py
           tests/backtest/test_gate_history_hf_sync.py
           tests/backtest/test_yahoo_fallback_route_filter.py
 
@@ -81,7 +83,7 @@ jobs:
       - name: Build Storm-authoritative global qualification
         run: |
           mkdir -p artifacts
-          python -m scripts.backtest.build_global_history_qualification \
+          python -m scripts.backtest.build_global_history_qualification_v2 \
             --gate-run-ids "$GATE_RUN_IDS" \
             --yahoo-run-id "$YAHOO_RUN_ID" \
             --output-json artifacts/global-history-qualification.json \

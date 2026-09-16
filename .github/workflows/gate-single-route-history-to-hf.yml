@@ -12,7 +12,7 @@ on:
           - gateio
           - gateio_futures
       provider_symbol:
-        description: "Exact Gate provider symbol, e.g. XMR_USDT"
+        description: "Exact Gate provider symbol, e.g. BTC_USDT"
         required: true
         type: string
       start:

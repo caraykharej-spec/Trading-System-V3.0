@@ -70,29 +70,29 @@ def _yahoo(base: str, symbol: str, *, rows: int = 250) -> dict[str, object]:
     }
 
 
-def test_explicit_degen_alias_can_reuse_underlying_verified_gate_series(monkeypatch) -> None:
+def test_explicit_reviewed_alias_can_reuse_underlying_verified_gate_series(monkeypatch) -> None:
     registry = SourceMappingRegistry(
         (
             SourceMapping(
-                base_asset="BTCDEGEN",
+                base_asset="TON",
                 asset_class="crypto",
-                routes=(SourceRoute(provider="gateio", symbol="BTC_USDT"),),
+                routes=(SourceRoute(provider="gateio", symbol="GRAM_USDT"),),
             ),
         )
     )
     monkeypatch.setattr(legacy, "_preferred_summary", subject.preferred_summary_backtest_ready)
 
     payload = legacy.qualify(
-        [_storm("BTCDEGEN")],
+        [_storm("TON")],
         registry,
-        [_gate("BTC", "BTC_USDT")],
+        [_gate("GRAM", "GRAM_USDT")],
         [],
     )
 
     assert payload["status"] == "PASS_GLOBAL_HISTORY_QUALIFICATION"
     source = payload["assets"][0]["historical_source"]
     assert source["provider"] == "gateio"
-    assert source["provider_symbol"] == "BTC_USDT"
+    assert source["provider_symbol"] == "GRAM_USDT"
     assert payload["assets"][0]["identity_policy"] == "source_registry_backtest_ready"
 
 

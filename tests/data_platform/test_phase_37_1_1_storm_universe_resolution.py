@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.data.providers.gateio import GateIOProvider
 from app.data.providers.storm import StormProvider
 from app.data.providers.yahoo import YahooFinanceProvider
+from app.data.source_registry import SourceMappingRegistry
 from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
 from app.universe.market_data_resolution import (
     ResolutionSource,
@@ -55,6 +56,18 @@ class StormHttpClient:
                     },
                     "amm": {"indexPrice": "50000000000"},
                 },
+                *[
+                    {
+                        "config": {
+                            "ticker": f"{base}/USDT",
+                            "baseAsset": base,
+                            "type": "base",
+                            "settlementToken": "USDT",
+                        },
+                        "amm": {"indexPrice": "1000000000"},
+                    }
+                    for base in ("BTCDEGEN", "ETHDEGEN", "SOLDEGEN", "XMR")
+                ],
                 {
                     "config": {
                         "ticker": "XRP/USDT",
@@ -181,6 +194,23 @@ def test_storm_nested_schema_filters_reference_universe_and_scales_price() -> No
     btc = next(asset for asset in assets if asset.base_asset == "BTC")
     assert btc.provider_symbol == "BTC/USDT"
     assert btc.reference_price == Decimal("100")
+
+
+def test_project_exclusions_cannot_reenter_through_storm_refresh() -> None:
+    storm = StormProvider(client=StormHttpClient())  # type: ignore[arg-type]
+
+    discovered = {asset.base_asset for asset in StormReferenceUniverseProvider(provider=storm).discover()}
+
+    assert discovered.isdisjoint({"BTCDEGEN", "ETHDEGEN", "SOLDEGEN", "XMR"})
+
+
+def test_project_exclusions_have_no_historical_source_routes() -> None:
+    registry = SourceMappingRegistry.load()
+
+    assert all(
+        registry.get(base) is None
+        for base in ("BTCDEGEN", "ETHDEGEN", "SOLDEGEN", "XMR")
+    )
 
 
 def test_storm_live_price_prefers_base_usdt_market_over_coin_margined_market() -> None:

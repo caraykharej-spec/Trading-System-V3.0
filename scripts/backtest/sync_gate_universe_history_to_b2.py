@@ -24,6 +24,7 @@ from app.data.providers.gateio_futures import GateIOFuturesProvider
 from app.data.providers.http import ProviderError, to_decimal
 from app.data.source_registry import SourceMappingRegistry
 from app.universe.gateio_discovery import GateIOSpotDiscoveryProvider
+from app.universe.scope import is_project_base_asset
 from app.universe.storm_discovery import StormReferenceUniverseProvider
 
 _TIMEFRAMES = ("15m", "1h", "4h", "1d")
@@ -147,7 +148,7 @@ def _load_static_universe() -> dict[str, tuple[str, str]]:
         base = str(raw.get("base_asset") or "").upper()
         symbol = str(raw.get("symbol") or "").upper()
         asset_class = str(raw.get("asset_class") or "unknown").lower()
-        if base and symbol:
+        if base and symbol and is_project_base_asset(base):
             output[base] = (symbol, asset_class)
     return output
 
@@ -172,6 +173,8 @@ def discover_gate_routes() -> list[GateHistoryRoute]:
 
     registry = SourceMappingRegistry.load()
     for mapping in registry.all():
+        if not is_project_base_asset(mapping.base_asset):
+            continue
         canonical_by_base.setdefault(mapping.base_asset, f"{mapping.base_asset}/USDT")
         asset_class_by_base[mapping.base_asset] = mapping.asset_class
 
