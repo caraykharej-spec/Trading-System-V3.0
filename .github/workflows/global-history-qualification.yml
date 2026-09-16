@@ -12,6 +12,7 @@ on:
       - "scripts/backtest/sync_yahoo_history_to_hf.py"
       - "scripts/backtest/filter_yahoo_fallback_routes.py"
       - "config/market_data/source_registry.json"
+      - "config/market_data/listing_limited_history.json"
   workflow_dispatch:
     inputs:
       gate_run_ids:
