@@ -1,6 +1,16 @@
 name: Global Historical Data Qualification
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/global-history-qualification.yml"
+      - "scripts/backtest/build_global_history_qualification.py"
+      - "scripts/backtest/hf_s3.py"
+      - "scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py"
+      - "scripts/backtest/sync_yahoo_history_to_hf.py"
+      - "scripts/backtest/filter_yahoo_fallback_routes.py"
+      - "config/market_data/source_registry.json"
   workflow_dispatch:
     inputs:
       gate_run_ids:
@@ -44,8 +54,8 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
       HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
-      GATE_RUN_IDS: ${{ inputs.gate_run_ids }}
-      YAHOO_RUN_ID: ${{ inputs.yahoo_run_id }}
+      GATE_RUN_IDS: ${{ inputs.gate_run_ids || '35016283516,35057123312' }}
+      YAHOO_RUN_ID: ${{ inputs.yahoo_run_id || '35059588578' }}
     steps:
       - uses: actions/checkout@v4
 
