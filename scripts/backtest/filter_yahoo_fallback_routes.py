@@ -9,6 +9,11 @@ from pathlib import Path
 from app.data.source_registry import SourceMappingRegistry
 
 _FULL_HISTORY_GATE_PROVIDERS = {"gateio", "gateio_futures"}
+# Some reviewed aliases can have a technically complete Gate route whose
+# available history is too young for the backtest minimum. Keep the primary
+# Yahoo route archived as a redundant candidate so global qualification can
+# choose the first identity-valid route that is also deep enough.
+_REDUNDANT_YAHOO_BACKTEST_BASES = {"TON"}
 
 
 def filter_fallback_routes(payload: dict[str, object]) -> dict[str, object]:
@@ -34,22 +39,6 @@ def filter_fallback_routes(payload: dict[str, object]) -> dict[str, object]:
         if mapping is None:
             raise ValueError(f"Yahoo route has no source-registry mapping: {base}")
 
-        explicit_full_gate = [
-            route.provider
-            for route in mapping.routes
-            if route.provider in _FULL_HISTORY_GATE_PROVIDERS
-        ]
-        if explicit_full_gate:
-            excluded.append(
-                {
-                    "base_asset": base,
-                    "provider_symbol": provider_symbol,
-                    "reason": "explicit_full_history_gate_route_available",
-                    "gate_providers": sorted(set(explicit_full_gate)),
-                }
-            )
-            continue
-
         primary_yahoo = next(
             (route for route in mapping.routes if route.provider == "yahoo"),
             None,
@@ -67,6 +56,22 @@ def filter_fallback_routes(payload: dict[str, object]) -> dict[str, object]:
             )
             continue
 
+        explicit_full_gate = [
+            route.provider
+            for route in mapping.routes
+            if route.provider in _FULL_HISTORY_GATE_PROVIDERS
+        ]
+        if explicit_full_gate and base not in _REDUNDANT_YAHOO_BACKTEST_BASES:
+            excluded.append(
+                {
+                    "base_asset": base,
+                    "provider_symbol": provider_symbol,
+                    "reason": "explicit_full_history_gate_route_available",
+                    "gate_providers": sorted(set(explicit_full_gate)),
+                }
+            )
+            continue
+
         selected.append(raw)
 
     full_gate_excluded = sum(
@@ -77,11 +82,12 @@ def filter_fallback_routes(payload: dict[str, object]) -> dict[str, object]:
         for item in excluded
     )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "selection_policy": (
-            "primary_explicit_yahoo_route_per_asset_when_no_explicit_"
-            "gateio_or_gateio_futures_history_route_exists"
+            "primary_explicit_yahoo_route_per_asset_when_no_explicit_gate_history_"
+            "exists_plus_reviewed_redundant_backtest_fallbacks"
         ),
+        "redundant_yahoo_backtest_bases": sorted(_REDUNDANT_YAHOO_BACKTEST_BASES),
         "discovered_route_count": len(raw_routes),
         "fallback_route_count": len(selected),
         "excluded_route_count": len(excluded),
