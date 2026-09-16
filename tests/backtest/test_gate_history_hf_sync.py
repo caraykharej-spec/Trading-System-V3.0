@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import io
+from datetime import datetime, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
 
@@ -70,3 +72,92 @@ def test_head_returns_downloaded_hash_not_custom_metadata(
     monkeypatch.setattr(subject, "_downloaded_sha256", lambda key: expected)
 
     assert subject._head_object_state("prefix/object") == (True, expected)
+
+
+class _FakeResponse:
+    status = 200
+
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self._payload
+
+
+def test_spot_listing_start_uses_earliest_positive_gate_start_and_floors_to_5m(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b'{"buy_start": 1737281237, "sell_start": 1737281299}'
+    monkeypatch.setattr(
+        subject.urllib.request,
+        "urlopen",
+        lambda request, timeout: _FakeResponse(payload),
+    )
+
+    result = subject._spot_listing_start("TRUMP_USDT")
+
+    assert result == datetime.fromtimestamp(1737281100, tz=timezone.utc)
+
+
+def test_apply_spot_listing_floor_replaces_default_archive_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = datetime(2025, 1, 19, 8, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(subject, "_spot_listing_start", lambda symbol: listing)
+    argv = [
+        "--canonical",
+        "TRUMP/USDT",
+        "--provider",
+        "gateio",
+        "--provider-symbol",
+        "TRUMP_USDT",
+    ]
+
+    result = subject._apply_spot_listing_floor(argv)
+
+    assert result == listing
+    assert subject._option_value(argv, "--start") == listing.isoformat()
+
+
+def test_apply_spot_listing_floor_preserves_later_explicit_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    listing = datetime(2025, 1, 19, 8, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(subject, "_spot_listing_start", lambda symbol: listing)
+    argv = [
+        "--provider",
+        "gateio",
+        "--provider-symbol",
+        "TRUMP_USDT",
+        "--start",
+        "2025-02-01T00:00:00+00:00",
+    ]
+
+    subject._apply_spot_listing_floor(argv)
+
+    assert subject._option_value(argv, "--start") == "2025-02-01T00:00:00+00:00"
+
+
+def test_apply_spot_listing_floor_does_not_touch_futures_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        subject,
+        "_spot_listing_start",
+        lambda symbol: pytest.fail("spot listing lookup should not run for futures"),
+    )
+    argv = [
+        "--provider",
+        "gateio_futures",
+        "--provider-symbol",
+        "BTC_USDT",
+    ]
+
+    assert subject._apply_spot_listing_floor(argv) is None
+    assert subject._option_value(argv, "--start") is None
