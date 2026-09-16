@@ -184,7 +184,9 @@ def _apply_spot_listing_floor(argv: list[str]) -> datetime | None:
 
 def main() -> int:
     _configure_hf_storage()
-    _apply_spot_listing_floor(sys.argv[1:])
+    args = sys.argv[1:]
+    _apply_spot_listing_floor(args)
+    sys.argv[1:] = args
     monthly._head_object_state = _head_object_state
     core._put_file = _put_file_verified
     return monthly.main()
