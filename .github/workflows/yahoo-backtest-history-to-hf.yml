@@ -13,6 +13,16 @@ on:
         required: false
         default: false
         type: boolean
+      provider_symbol:
+        description: "Optional exact Yahoo provider symbol for targeted repair, e.g. TON11419-USD"
+        required: false
+        default: ""
+        type: string
+      repair_base_run_id:
+        description: "Prior Yahoo run manifest to repair; required with provider_symbol"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -43,6 +53,8 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
       HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      REPAIR_PROVIDER_SYMBOL: ${{ inputs.provider_symbol }}
+      REPAIR_BASE_RUN_ID: ${{ inputs.repair_base_run_id }}
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       route_count: ${{ steps.matrix.outputs.route_count }}
@@ -60,6 +72,7 @@ jobs:
           tests/backtest/test_hf_s3.py
           tests/backtest/test_yahoo_backtest_history_hf_sync.py
           tests/backtest/test_yahoo_fallback_route_filter.py
+          tests/backtest/test_merge_yahoo_repair_manifest.py
       - name: Verify HF storage before discovery
         run: python scripts/operations/diagnose_hf_s3_access.py
       - name: Discover explicit Yahoo routes
@@ -76,11 +89,36 @@ jobs:
         run: |
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           from pathlib import Path
+
           payload = json.loads(Path("artifacts/yahoo-fallback-discovery.json").read_text())
           routes = payload["routes"]
           if not routes:
               raise SystemExit("No Yahoo backtest routes found")
+
+          requested = os.environ.get("REPAIR_PROVIDER_SYMBOL", "").strip().upper()
+          base_run_id = os.environ.get("REPAIR_BASE_RUN_ID", "").strip()
+          if bool(requested) != bool(base_run_id):
+              raise SystemExit(
+                  "provider_symbol and repair_base_run_id must be supplied together for targeted repair"
+              )
+          if base_run_id and not base_run_id.isdigit():
+              raise SystemExit("repair_base_run_id must be numeric")
+          if requested:
+              matches = [
+                  route
+                  for route in routes
+                  if str(route.get("provider_symbol", "")).strip().upper() == requested
+              ]
+              if not matches:
+                  raise SystemExit(f"Targeted Yahoo repair route not found: {requested}")
+              if len(matches) != 1:
+                  raise SystemExit(
+                      f"Targeted Yahoo repair route is ambiguous: {requested} ({len(matches)} matches)"
+                  )
+              routes = matches
+
           if len(routes) > 256:
               raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
           print("matrix=" + json.dumps({"route": routes}, separators=(",", ":")))
@@ -150,7 +188,7 @@ jobs:
     needs: [discover, sync]
     if: always() && needs.discover.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
@@ -158,15 +196,41 @@ jobs:
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
       EXPECTED_ROUTES: ${{ needs.discover.outputs.route_count }}
       SYNC_RESULT: ${{ needs.sync.result }}
+      REPAIR_PROVIDER_SYMBOL: ${{ inputs.provider_symbol }}
+      REPAIR_BASE_RUN_ID: ${{ inputs.repair_base_run_id }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: yahoo-backtest-route-*
           path: artifacts/routes
-      - name: Validate complete backtest transfer
+      - name: Build full or repaired run manifest
         run: |
-          python - <<'PY'
+          set -euo pipefail
+          if [ -n "${REPAIR_BASE_RUN_ID:-}" ]; then
+            python - <<'PY'
+          import os
+          from scripts.backtest import hf_s3
+          hf_s3.aws(
+              "s3api", "get-object",
+              "--bucket", os.environ["HF_S3_BUCKET"],
+              "--key", f"manifests/yahoo-history/v1/runs/{os.environ['REPAIR_BASE_RUN_ID']}.json",
+              "artifacts/base-yahoo-run-manifest.json",
+          )
+          PY
+            python -m scripts.backtest.merge_yahoo_repair_manifest \
+              --base-manifest artifacts/base-yahoo-run-manifest.json \
+              --repair-dir artifacts/routes \
+              --base-run-id "$REPAIR_BASE_RUN_ID" \
+              --sync-result "$SYNC_RESULT" \
+              --github-run-id "$GITHUB_RUN_ID" \
+              --github-sha "$GITHUB_SHA" \
+              --output artifacts/yahoo-run-manifest.json
+            if [ -f artifacts/yahoo-run-manifest.json.failed ]; then
+              cp artifacts/yahoo-run-manifest.json.failed artifacts/incomplete.flag
+            fi
+          else
+            python - <<'PY'
           import json, os
           from datetime import datetime, timezone
           from pathlib import Path
@@ -197,6 +261,7 @@ jobs:
           if failed:
               Path("artifacts/incomplete.flag").write_text("1\n")
           PY
+          fi
       - name: Publish Yahoo run manifest with resilient HF transport
         run: |
           python - <<'PY'
