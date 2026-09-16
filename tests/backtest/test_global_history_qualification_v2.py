@@ -151,3 +151,102 @@ def test_spx_collision_is_reported_even_when_yahoo_is_selected(monkeypatch) -> N
             "reason": "not_an_authorized_registry_route",
         }
     ]
+
+
+def _listing_asset(base: str, symbol: str, first: str) -> dict[str, object]:
+    return {
+        "base_asset": base,
+        "qualification_status": "INSUFFICIENT_BACKTEST_HISTORY",
+        "historical_source": {
+            "provider": "gateio",
+            "provider_symbol": symbol,
+        },
+        "history_deficiencies": [
+            {
+                "timeframe": "1d",
+                "required_rows": 200,
+                "available_rows": 60,
+                "missing_rows": 140,
+            }
+        ],
+        "coverage": {
+            "overall_first_timestamp": first,
+            "coverage_by_timeframe": {
+                timeframe: {
+                    "rows": 60,
+                    "first_timestamp": first,
+                    "last_timestamp": "2026-09-15T00:00:00+00:00",
+                }
+                for timeframe in ("15m", "1h", "4h", "1d")
+            },
+        },
+    }
+
+
+def test_reviewed_listing_limited_asset_qualifies_dataset_but_keeps_warmup_blocked() -> None:
+    payload = {
+        "storm_asset_count": 2,
+        "qualified_asset_count": 0,
+        "missing_assets": [],
+        "insufficient_history_assets": ["SPCX", "TON"],
+        "insufficient_history_asset_count": 2,
+        "status": "FAIL_GLOBAL_HISTORY_QUALIFICATION",
+        "backtest_history_policy": {},
+        "assets": [
+            _listing_asset("SPCX", "SPCX_USDT", "2026-04-24T10:00:00+00:00"),
+            _listing_asset("TON", "GRAM_USDT", "2026-06-16T00:00:00+00:00"),
+        ],
+    }
+    policy = {
+        "SPCX": {
+            "provider": "gateio",
+            "provider_symbol": "SPCX_USDT",
+            "reviewed_history_start": "2026-04-24T10:00:00+00:00",
+            "start_tolerance_seconds": 3600,
+            "reason": "newly listed",
+        }
+    }
+
+    result = subject.apply_listing_limited_policy(payload, policy)
+
+    assert result["qualified_asset_count"] == 1
+    assert result["listing_limited_assets"] == ["SPCX"]
+    assert result["insufficient_history_assets"] == ["TON"]
+    assert result["status"] == "FAIL_GLOBAL_HISTORY_QUALIFICATION"
+    spcx = result["assets"][0]
+    assert spcx["qualification_status"] == "QUALIFIED_LISTING_LIMITED_HISTORY"
+    assert spcx["history_deficiencies"] == []
+    assert spcx["strategy_warmup_status"] == "PENDING_MINIMUM_CANDLES"
+    assert spcx["warmup_deficiencies"][0]["timeframe"] == "1d"
+    assert result["assets"][1]["qualification_status"] == "INSUFFICIENT_BACKTEST_HISTORY"
+
+
+def test_listing_limited_policy_fails_closed_when_history_start_does_not_match() -> None:
+    payload = {
+        "storm_asset_count": 1,
+        "qualified_asset_count": 0,
+        "missing_assets": [],
+        "insufficient_history_assets": ["SKY"],
+        "insufficient_history_asset_count": 1,
+        "status": "FAIL_GLOBAL_HISTORY_QUALIFICATION",
+        "backtest_history_policy": {},
+        "assets": [
+            _listing_asset("SKY", "SKY_USDT", "2025-10-01T00:00:00+00:00")
+        ],
+    }
+    policy = {
+        "SKY": {
+            "provider": "gateio",
+            "provider_symbol": "SKY_USDT",
+            "reviewed_history_start": "2025-09-17T13:00:00+00:00",
+            "start_tolerance_seconds": 3600,
+            "reason": "reviewed September listing",
+        }
+    }
+
+    result = subject.apply_listing_limited_policy(payload, policy)
+
+    assert result["listing_limited_asset_count"] == 0
+    assert result["qualified_asset_count"] == 0
+    assert result["insufficient_history_assets"] == ["SKY"]
+    assert result["status"] == "FAIL_GLOBAL_HISTORY_QUALIFICATION"
