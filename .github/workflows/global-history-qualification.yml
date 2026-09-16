@@ -23,7 +23,7 @@ on:
       yahoo_run_id:
         description: "Yahoo fallback manifest run ID"
         required: true
-        default: "35059588578"
+        default: "35105834121"
         type: string
 
 permissions:
@@ -57,7 +57,7 @@ jobs:
       HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
       GATE_RUN_IDS: ${{ inputs.gate_run_ids || '35016283516,35057123312' }}
-      YAHOO_RUN_ID: ${{ inputs.yahoo_run_id || '35059588578' }}
+      YAHOO_RUN_ID: ${{ inputs.yahoo_run_id || '35105834121' }}
     steps:
       - uses: actions/checkout@v4
 
