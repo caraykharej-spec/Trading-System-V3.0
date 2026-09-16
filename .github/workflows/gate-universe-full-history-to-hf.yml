@@ -16,6 +16,10 @@ on:
         required: false
         default: false
         type: boolean
+      provider_symbol:
+        description: "Optional exact Gate provider symbol for single-route repair, e.g. TRUMP_USDT"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -40,6 +44,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
       HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      REPAIR_PROVIDER_SYMBOL: ${{ inputs.provider_symbol }}
     timeout-minutes: 15
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -73,6 +78,7 @@ jobs:
           set -euo pipefail
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           from pathlib import Path
 
           payload = json.loads(
@@ -81,12 +87,40 @@ jobs:
           routes = payload["routes"]
           if not routes:
               raise SystemExit("Gate route discovery returned an empty matrix")
+
+          requested = os.environ.get("REPAIR_PROVIDER_SYMBOL", "").strip().upper()
+          if requested:
+              matches = [
+                  route
+                  for route in routes
+                  if str(route.get("provider_symbol", "")).strip().upper() == requested
+              ]
+              if not matches:
+                  raise SystemExit(
+                      f"Single-route repair symbol was not discovered: {requested}"
+                  )
+              if len(matches) != 1:
+                  providers = ", ".join(
+                      sorted(str(route.get("provider", "unknown")) for route in matches)
+                  )
+                  raise SystemExit(
+                      f"Single-route repair symbol is ambiguous: {requested} ({providers})"
+                  )
+              routes = matches
+
           if len(routes) > 256:
               raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
+
+          full_history = sum(
+              str(route.get("provider", "")) in {"gateio", "gateio_futures"}
+              for route in routes
+          )
+          blocked = len(routes) - full_history
+
           print("matrix=" + json.dumps({"route": routes}, separators=(",", ":")))
-          print(f"route_count={payload['route_count']}")
-          print(f"full_history_route_count={payload['full_history_route_count']}")
-          print(f"blocked_route_count={payload['blocked_route_count']}")
+          print(f"route_count={len(routes)}")
+          print(f"full_history_route_count={full_history}")
+          print(f"blocked_route_count={blocked}")
           PY
 
       - name: Upload discovery evidence
