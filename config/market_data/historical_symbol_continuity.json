@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "assets": {
+    "TON": {
+      "provider": "gateio",
+      "target_provider_symbol": "GRAM_USDT",
+      "canonical_symbol": "TON/USDT",
+      "asset_class": "crypto",
+      "price_multiplier": "1",
+      "reason": "Gate renamed The Open Network trading symbol from TON to GRAM on 2026-06-16 without token swap, blockchain migration, or asset replacement. Historical quotation segments must therefore be stitched as one continuous asset identity.",
+      "identity_evidence": "https://www.gate.com/announcements/article/100181",
+      "segments": [
+        {
+          "source_provider_symbol": "TON_USDT",
+          "start": "2023-01-01T00:00:00+00:00",
+          "end": "2026-06-16T14:00:00+00:00"
+        },
+        {
+          "source_provider_symbol": "GRAM_USDT",
+          "start": "2026-06-16T14:00:00+00:00",
+          "end": null
+        }
+      ]
+    }
+  }
+}
