@@ -20,14 +20,18 @@ def _storm(base: str) -> StormReferenceAsset:
     )
 
 
-def _partition(timeframe: str = "1d") -> dict[str, object]:
+def _partition(timeframe: str, rows: int = 250) -> dict[str, object]:
     return {
         "timeframe": timeframe,
-        "rows": 10,
+        "rows": rows,
         "first_timestamp": "2025-01-01T00:00:00+00:00",
         "last_timestamp": "2026-09-15T00:00:00+00:00",
         "object_key": "x",
     }
+
+
+def _partitions(rows: int = 250) -> list[dict[str, object]]:
+    return [_partition(timeframe, rows) for timeframe in ("15m", "1h", "4h", "1d")]
 
 
 def _gate(
@@ -37,6 +41,7 @@ def _gate(
     provider: str = "gateio",
     multiplier: str = "1",
     origin: str = "source_registry",
+    rows: int = 250,
 ) -> dict[str, object]:
     return {
         "status": "COMPLETE",
@@ -48,12 +53,14 @@ def _gate(
             "route_origin": origin,
             "asset_class": "storm",
         },
-        "total_5m_rows": 100,
-        "partitions": [_partition()],
+        "total_5m_rows": rows,
+        "partitions": _partitions(rows),
     }
 
 
-def _yahoo(base: str, symbol: str, *, multiplier: str = "1") -> dict[str, object]:
+def _yahoo(
+    base: str, symbol: str, *, multiplier: str = "1", rows: int = 250
+) -> dict[str, object]:
     return {
         "status": "COMPLETE",
         "route": {
@@ -62,8 +69,8 @@ def _yahoo(base: str, symbol: str, *, multiplier: str = "1") -> dict[str, object
             "price_multiplier": multiplier,
             "asset_class": "index",
         },
-        "total_rows": 10,
-        "partitions": [_partition()],
+        "total_rows": rows * 4,
+        "partitions": _partitions(rows),
     }
 
 
@@ -140,3 +147,33 @@ def test_missing_storm_asset_fails_global_qualification() -> None:
     )
     assert payload["status"] == "FAIL_GLOBAL_HISTORY_QUALIFICATION"
     assert payload["missing_assets"] == ["BTC"]
+
+
+def test_insufficient_history_fails_even_when_source_sync_is_complete() -> None:
+    registry = SourceMappingRegistry(
+        (
+            SourceMapping(
+                base_asset="SPX",
+                asset_class="index",
+                routes=(SourceRoute(provider="yahoo", symbol="^GSPC"),),
+                minimum_candles=220,
+            ),
+        )
+    )
+    payload = subject.qualify(
+        [_storm("SPX")],
+        registry,
+        [],
+        [_yahoo("SPX", "^GSPC", rows=219)],
+    )
+
+    assert payload["status"] == "FAIL_GLOBAL_HISTORY_QUALIFICATION"
+    assert payload["insufficient_history_assets"] == ["SPX"]
+    asset = payload["assets"][0]
+    assert asset["qualification_status"] == "INSUFFICIENT_BACKTEST_HISTORY"
+    assert {item["timeframe"] for item in asset["history_deficiencies"]} == {
+        "15m",
+        "1h",
+        "4h",
+        "1d",
+    }
