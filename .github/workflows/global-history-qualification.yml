@@ -1,0 +1,171 @@
+name: Global Historical Data Qualification
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/global-history-qualification.yml"
+      - "scripts/backtest/build_global_history_qualification.py"
+      - "scripts/backtest/hf_s3.py"
+      - "scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py"
+      - "scripts/backtest/sync_yahoo_history_to_hf.py"
+      - "scripts/backtest/filter_yahoo_fallback_routes.py"
+      - "config/market_data/source_registry.json"
+  workflow_dispatch:
+    inputs:
+      gate_run_ids:
+        description: "Comma-separated Gate manifest run IDs, oldest to newest; later repair runs override earlier route evidence"
+        required: true
+        default: "35016283516,35057123312"
+        type: string
+      yahoo_run_id:
+        description: "Yahoo fallback manifest run ID"
+        required: true
+        default: "35059588578"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: global-history-qualification
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: ${{ secrets.HF_S3_REGION }}
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "5"
+  HF_S3_MAX_ATTEMPTS: "10"
+  HF_S3_RETRY_BASE_SECONDS: "5"
+  HF_S3_RETRY_MAX_SECONDS: "300"
+  HF_S3_MIN_REQUEST_INTERVAL_SECONDS: "0.25"
+
+jobs:
+  qualify:
+    name: Qualify historical data against live Storm universe
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      GATE_RUN_IDS: ${{ inputs.gate_run_ids || '35016283516,35057123312' }}
+      YAHOO_RUN_ID: ${{ inputs.yahoo_run_id || '35059588578' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project and research-data dependencies
+        run: python -m pip install -e ".[dev,research-data]"
+
+      - name: Run focused qualification tests
+        run: >-
+          python -m pytest -q
+          tests/backtest/test_hf_s3.py
+          tests/backtest/test_global_history_qualification.py
+          tests/backtest/test_gate_history_hf_sync.py
+          tests/backtest/test_yahoo_fallback_route_filter.py
+
+      - name: Verify HF S3 access
+        run: python scripts/operations/diagnose_hf_s3_access.py
+
+      - name: Build Storm-authoritative global qualification
+        run: |
+          mkdir -p artifacts
+          python -m scripts.backtest.build_global_history_qualification \
+            --gate-run-ids "$GATE_RUN_IDS" \
+            --yahoo-run-id "$YAHOO_RUN_ID" \
+            --output-json artifacts/global-history-qualification.json \
+            --output-md artifacts/global-history-qualification.md
+
+      - name: Publish immutable run report to HF with resilient transport
+        env:
+          QUALIFICATION_RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import os
+          from scripts.backtest import hf_s3
+
+          bucket = os.environ["HF_S3_BUCKET"]
+          run_id = os.environ["QUALIFICATION_RUN_ID"]
+          objects = [
+              (
+                  "artifacts/global-history-qualification.json",
+                  f"manifests/global-history/v1/runs/{run_id}.json",
+                  "application/json",
+              ),
+              (
+                  "artifacts/global-history-qualification.md",
+                  f"reports/global-history/v1/runs/{run_id}.md",
+                  "text/markdown",
+              ),
+          ]
+          for path, key, content_type in objects:
+              hf_s3.aws(
+                  "s3api", "put-object",
+                  "--bucket", bucket,
+                  "--key", key,
+                  "--body", path,
+                  "--content-type", content_type,
+              )
+          PY
+
+      - name: Publish latest qualified pre-backtest contract
+        run: |
+          if [ -f artifacts/global-history-qualification.json.failed ]; then
+            echo "Global historical qualification failed; latest qualified manifest will not be replaced."
+            exit 0
+          fi
+          python - <<'PY'
+          import os
+          from scripts.backtest import hf_s3
+
+          bucket = os.environ["HF_S3_BUCKET"]
+          objects = [
+              (
+                  "artifacts/global-history-qualification.json",
+                  "manifests/global-history/v1/latest.json",
+                  "application/json",
+              ),
+              (
+                  "artifacts/global-history-qualification.md",
+                  "reports/global-history/v1/latest.md",
+                  "text/markdown",
+              ),
+          ]
+          for path, key, content_type in objects:
+              hf_s3.aws(
+                  "s3api", "put-object",
+                  "--bucket", bucket,
+                  "--key", key,
+                  "--body", path,
+                  "--content-type", content_type,
+              )
+          PY
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: global-history-qualification-${{ github.run_id }}
+          path: |
+            artifacts/global-history-qualification.json
+            artifacts/global-history-qualification.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce complete Storm-universe qualification
+        run: |
+          if [ -f artifacts/global-history-qualification.json.failed ]; then
+            echo "Historical data is not qualified for the full live Storm universe." >&2
+            exit 1
+          fi
