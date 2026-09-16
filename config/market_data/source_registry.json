@@ -1,5 +1,5 @@
 {
-  "version": "47.2.0",
+  "version": "47.2.2",
   "policy": "first healthy qualified route; Storm remains price authority",
   "mappings": {
     "1000PEPE": {"asset_class":"crypto","routes":[{"provider":"gateio_futures","symbol":"PEPE_USDT","price_multiplier":1000},{"provider":"yahoo","symbol":"PEPE24478-USD","price_multiplier":1000}]},

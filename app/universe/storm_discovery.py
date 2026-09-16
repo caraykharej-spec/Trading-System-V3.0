@@ -7,6 +7,7 @@ from typing import Any
 
 from app.data.providers.http import ProviderError, utc_now
 from app.data.providers.storm import StormProvider
+from app.universe.scope import is_project_base_asset
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ class StormReferenceUniverseProvider:
                 continue
 
             base = self._extract_base_asset(record, settlement)
-            if not base or base in seen:
+            if not base or base in seen or not is_project_base_asset(base):
                 continue
             price = self.provider._extract_price(record)
             if price <= 0:
