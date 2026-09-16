@@ -1,4 +1,4 @@
-"""Filter explicit Yahoo routes to assets without an explicit full-history Gate route."""
+"""Filter Yahoo history discovery to the canonical historical fallback route per asset."""
 
 from __future__ import annotations
 
@@ -24,8 +24,12 @@ def filter_fallback_routes(payload: dict[str, object]) -> dict[str, object]:
         if not isinstance(raw, dict):
             raise ValueError("Yahoo discovery route must be an object")
         base = str(raw.get("base_asset") or "").strip().upper()
+        provider_symbol = str(raw.get("provider_symbol") or "").strip()
         if not base:
             raise ValueError("Yahoo discovery route is missing base_asset")
+        if not provider_symbol:
+            raise ValueError("Yahoo discovery route is missing provider_symbol")
+
         mapping = registry.get(base)
         if mapping is None:
             raise ValueError(f"Yahoo route has no source-registry mapping: {base}")
@@ -39,22 +43,50 @@ def filter_fallback_routes(payload: dict[str, object]) -> dict[str, object]:
             excluded.append(
                 {
                     "base_asset": base,
-                    "provider_symbol": raw.get("provider_symbol"),
+                    "provider_symbol": provider_symbol,
                     "reason": "explicit_full_history_gate_route_available",
                     "gate_providers": sorted(set(explicit_full_gate)),
                 }
             )
             continue
+
+        primary_yahoo = next(
+            (route for route in mapping.routes if route.provider == "yahoo"),
+            None,
+        )
+        if primary_yahoo is None:
+            raise ValueError(f"Yahoo discovery route has no Yahoo registry route: {base}")
+        if provider_symbol != primary_yahoo.symbol:
+            excluded.append(
+                {
+                    "base_asset": base,
+                    "provider_symbol": provider_symbol,
+                    "reason": "secondary_yahoo_route_not_selected_for_historical_archive",
+                    "primary_yahoo_symbol": primary_yahoo.symbol,
+                }
+            )
+            continue
+
         selected.append(raw)
 
+    full_gate_excluded = sum(
+        item["reason"] == "explicit_full_history_gate_route_available" for item in excluded
+    )
+    secondary_yahoo_excluded = sum(
+        item["reason"] == "secondary_yahoo_route_not_selected_for_historical_archive"
+        for item in excluded
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "selection_policy": (
-            "explicit_yahoo_routes_without_explicit_gateio_or_gateio_futures_history_route"
+            "primary_explicit_yahoo_route_per_asset_when_no_explicit_"
+            "gateio_or_gateio_futures_history_route_exists"
         ),
         "discovered_route_count": len(raw_routes),
         "fallback_route_count": len(selected),
-        "excluded_full_gate_route_count": len(excluded),
+        "excluded_route_count": len(excluded),
+        "excluded_full_gate_route_count": full_gate_excluded,
+        "excluded_secondary_yahoo_route_count": secondary_yahoo_excluded,
         "excluded_routes": excluded,
         "routes": selected,
     }
@@ -82,8 +114,12 @@ def main() -> int:
             {
                 "discovered_route_count": filtered["discovered_route_count"],
                 "fallback_route_count": filtered["fallback_route_count"],
+                "excluded_route_count": filtered["excluded_route_count"],
                 "excluded_full_gate_route_count": filtered[
                     "excluded_full_gate_route_count"
+                ],
+                "excluded_secondary_yahoo_route_count": filtered[
+                    "excluded_secondary_yahoo_route_count"
                 ],
             },
             sort_keys=True,
