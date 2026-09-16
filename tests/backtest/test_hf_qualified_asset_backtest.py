@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from scripts.backtest.run_hf_qualified_asset_backtest import select_source_summary
+import json
+from decimal import Decimal
+
+import pytest
+
+from scripts.backtest.run_hf_qualified_asset_backtest import (
+    _json_dumps,
+    select_source_summary,
+)
 
 
 def test_later_repair_manifest_overrides_older_route_summary() -> None:
@@ -67,3 +75,15 @@ def test_yahoo_manifest_without_provider_field_is_supported() -> None:
     }
 
     assert select_source_summary(asset, [manifest]) is manifest["route_summaries"][0]
+
+
+def test_json_dumps_serializes_decimal_deterministically() -> None:
+    encoded = _json_dumps({"z": Decimal("1.2300"), "a": Decimal("0.01")})
+
+    assert encoded == '{"a": "0.01", "z": "1.2300"}'
+    assert json.loads(encoded) == {"a": "0.01", "z": "1.2300"}
+
+
+def test_json_dumps_still_rejects_unknown_objects() -> None:
+    with pytest.raises(TypeError, match="not JSON serializable"):
+        _json_dumps({"bad": object()})

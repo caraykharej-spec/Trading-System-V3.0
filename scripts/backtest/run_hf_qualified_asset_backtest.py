@@ -24,6 +24,21 @@ _REQUIRED_TIMEFRAMES = ("15m", "1h", "4h", "1d")
 _COMPLETE_GATE = {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
 
 
+def _json_default(value: object) -> object:
+    if isinstance(value, Decimal):
+        return str(value)
+    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+
+
+def _json_dumps(payload: object, *, indent: int | None = None) -> str:
+    return json.dumps(
+        payload,
+        indent=indent,
+        sort_keys=True,
+        default=_json_default,
+    )
+
+
 def _bucket() -> str:
     value = os.environ.get("HF_S3_BUCKET", "").strip()
     if not value:
@@ -257,16 +272,15 @@ def main() -> int:
     )
     target = Path(args.output)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target.write_text(_json_dumps(report, indent=2) + "\n", encoding="utf-8")
     print(
-        json.dumps(
+        _json_dumps(
             {
                 "base_asset": report["base_asset"],
                 "symbol": report["symbol"],
                 "status": "COMPLETE",
                 "evidence_fingerprint": report["evidence_fingerprint"],
-            },
-            sort_keys=True,
+            }
         )
     )
     return 0
