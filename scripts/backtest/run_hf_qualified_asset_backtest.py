@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterable
@@ -29,6 +29,25 @@ def _bucket() -> str:
     if not value:
         raise RuntimeError("HF_S3_BUCKET is required")
     return value
+
+
+def _json_ready(value: Any) -> Any:
+    """Convert report values to deterministic JSON-compatible primitives."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat() if value.tzinfo else value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+    return value
+
+
+def _json_dumps(payload: object, *, indent: int | None = None) -> str:
+    return json.dumps(_json_ready(payload), indent=indent, sort_keys=True)
 
 
 def _download(key: str, target: Path) -> None:
@@ -237,7 +256,7 @@ def run_asset(
             "A successful run does not authorize live trading or imply future profitability.",
         ),
     }
-    report["evidence_fingerprint"] = _fingerprint(report)
+    report["evidence_fingerprint"] = _fingerprint(_json_ready(report))
     return report
 
 
@@ -257,7 +276,9 @@ def main() -> int:
     )
     target = Path(args.output)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    target.write_text(
+        _json_dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
     print(
         json.dumps(
             {
