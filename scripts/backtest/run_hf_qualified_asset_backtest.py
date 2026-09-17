@@ -22,6 +22,7 @@ from scripts.backtest import hf_s3
 
 _REQUIRED_TIMEFRAMES = ("15m", "1h", "4h", "1d")
 _COMPLETE_GATE = {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
+_QUALIFIED_STATUSES = {"QUALIFIED", "QUALIFIED_LISTING_LIMITED_HISTORY"}
 
 
 def _bucket() -> str:
@@ -84,6 +85,22 @@ def _decimal_equal(left: object, right: object) -> bool:
         return Decimal(str(left if left is not None else "1")) == Decimal(str(right))
     except Exception:
         return False
+
+
+def _asset_execution_status(asset: dict[str, Any]) -> str:
+    """Map qualification semantics to an honest backtest execution disposition."""
+    qualification_status = str(asset.get("qualification_status") or "")
+    if qualification_status not in _QUALIFIED_STATUSES:
+        base_asset = str(asset.get("base_asset") or "UNKNOWN")
+        raise ValueError(f"asset is not qualified: {base_asset}")
+
+    warmup_status = str(asset.get("strategy_warmup_status") or "READY")
+    if qualification_status == "QUALIFIED_LISTING_LIMITED_HISTORY":
+        if warmup_status == "PENDING_MINIMUM_CANDLES":
+            return "WARMUP_PENDING"
+        if warmup_status != "READY":
+            raise ValueError(f"unsupported strategy warm-up status: {warmup_status}")
+    return "COMPLETE"
 
 
 def select_source_summary(
@@ -203,6 +220,41 @@ def load_candles(
     return output, evidence
 
 
+def _warmup_pending_report(
+    *,
+    asset: dict[str, Any],
+    qualification_key: str,
+    qualification: dict[str, Any],
+    code_revision: str,
+) -> dict[str, Any]:
+    canonical = str(asset["storm_canonical_symbol"])
+    report: dict[str, Any] = {
+        "schema": "hf-qualified-asset-backtest-v2",
+        "run_type": "GLOBAL_81_ASSET_HF_QUALIFIED_BACKTEST",
+        "mode": "RESEARCH_PAPER_ONLY",
+        "execution_status": "WARMUP_PENDING",
+        "base_asset": str(asset["base_asset"]).upper(),
+        "symbol": canonical,
+        "qualification_status": asset.get("qualification_status"),
+        "strategy_warmup_status": asset.get("strategy_warmup_status"),
+        "warmup_deficiencies": asset.get("warmup_deficiencies", []),
+        "qualification_object_key": qualification_key,
+        "qualification_generated_at": qualification.get("generated_at"),
+        "qualification_source_manifest_keys": qualification.get("source_manifest_keys", []),
+        "source": asset["historical_source"],
+        "coverage": asset["coverage"],
+        "code_revision": code_revision,
+        "result": None,
+        "limitations": (
+            "Dataset qualification passed, but strategy backtest execution is intentionally withheld until actual minimum warm-up candles exist.",
+            "No pre-listing candles, forward fill, synthetic prices, or synthetic zero-return result is introduced.",
+            "This pending record is qualification evidence, not a completed asset backtest.",
+        ),
+    }
+    report["evidence_fingerprint"] = _fingerprint(_json_ready(report))
+    return report
+
+
 def run_asset(
     *, base_asset: str, qualification_key: str, code_revision: str
 ) -> dict[str, Any]:
@@ -223,8 +275,18 @@ def run_asset(
         ),
         None,
     )
-    if asset is None or asset.get("qualification_status") != "QUALIFIED":
+    if asset is None:
         raise ValueError(f"asset is not qualified: {base_asset}")
+
+    execution_status = _asset_execution_status(asset)
+    if execution_status == "WARMUP_PENDING":
+        return _warmup_pending_report(
+            asset=asset,
+            qualification_key=qualification_key,
+            qualification=qualification,
+            code_revision=code_revision,
+        )
+
     manifest_keys = qualification.get("source_manifest_keys")
     if not isinstance(manifest_keys, list) or not manifest_keys:
         raise ValueError("qualification contract has no source manifests")
@@ -235,11 +297,15 @@ def run_asset(
     config, cost_evidence = _cost_config(StormCostService(), canonical)
     result = BacktestEngine(config).run(canonical, candles)
     report: dict[str, Any] = {
-        "schema": "hf-qualified-asset-backtest-v1",
+        "schema": "hf-qualified-asset-backtest-v2",
         "run_type": "GLOBAL_81_ASSET_HF_QUALIFIED_BACKTEST",
         "mode": "RESEARCH_PAPER_ONLY",
+        "execution_status": "COMPLETE",
         "base_asset": base_asset.upper(),
         "symbol": canonical,
+        "qualification_status": asset.get("qualification_status"),
+        "strategy_warmup_status": asset.get("strategy_warmup_status", "READY"),
+        "warmup_deficiencies": asset.get("warmup_deficiencies", []),
         "qualification_object_key": qualification_key,
         "qualification_generated_at": qualification.get("generated_at"),
         "qualification_source_manifest_keys": manifest_keys,
@@ -276,15 +342,13 @@ def main() -> int:
     )
     target = Path(args.output)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        _json_dumps(report, indent=2) + "\n", encoding="utf-8"
-    )
+    target.write_text(_json_dumps(report, indent=2) + "\n", encoding="utf-8")
     print(
         json.dumps(
             {
                 "base_asset": report["base_asset"],
                 "symbol": report["symbol"],
-                "status": "COMPLETE",
+                "status": report["execution_status"],
                 "evidence_fingerprint": report["evidence_fingerprint"],
             },
             sort_keys=True,
