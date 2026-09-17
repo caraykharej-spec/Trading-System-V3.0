@@ -27,6 +27,14 @@ on:
         required: false
         default: false
         type: boolean
+      provider:
+        description: "Optional exact provider filter for single-route repair (e.g. gateio or gateio_futures)"
+        required: false
+        type: string
+      provider_symbol:
+        description: "Optional exact provider symbol filter for single-route repair (e.g. GRAM_USDT)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -74,12 +82,26 @@ jobs:
           set -euo pipefail
           python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import os
           from pathlib import Path
 
           payload = json.loads(
               Path("artifacts/gate-history-discovery.json").read_text(encoding="utf-8")
           )
           routes = payload["routes"]
+          requested_provider = os.environ.get("REPAIR_PROVIDER", "").strip().lower()
+          requested_symbol = os.environ.get("REPAIR_PROVIDER_SYMBOL", "").strip().upper()
+          if requested_provider or requested_symbol:
+              routes = [
+                  route for route in routes
+                  if (not requested_provider or str(route.get("provider", "")).strip().lower() == requested_provider)
+                  and (not requested_symbol or str(route.get("provider_symbol", "")).strip().upper() == requested_symbol)
+              ]
+              if not routes:
+                  raise SystemExit(
+                      "Single-route repair route was not discovered: "
+                      f"provider={requested_provider or '*'}, symbol={requested_symbol or '*'}"
+                  )
           if not routes:
               raise SystemExit("Gate route discovery returned an empty matrix")
           if len(routes) > 256:
@@ -122,6 +144,8 @@ jobs:
       INPUT_START: ${{ inputs.start }}
       INPUT_END: ${{ inputs.end }}
       INPUT_FORCE: ${{ inputs.force }}
+      REPAIR_PROVIDER: ${{ inputs.provider }}
+      REPAIR_PROVIDER_SYMBOL: ${{ inputs.provider_symbol }}
     steps:
       - uses: actions/checkout@v4
 
