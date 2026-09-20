@@ -73,15 +73,40 @@ def _route_key(summary: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def _is_reviewed_continuity_summary(summary: dict[str, Any]) -> bool:
+    route = _route(summary)
+    continuity = summary.get("historical_symbol_continuity")
+    if not isinstance(continuity, dict):
+        return False
+    segments = continuity.get("segments")
+    return (
+        route.get("route_origin") == "source_registry_historical_symbol_continuity"
+        and isinstance(segments, list)
+        and len(segments) >= 2
+        and str(continuity.get("target_provider_symbol") or "").upper()
+        == str(route.get("provider_symbol") or "").upper()
+        and continuity.get("stitch_policy")
+        == "exact_timestamp_union_fail_on_conflict_no_synthetic_rows"
+    )
+
+
 def merge_gate_runs(manifests: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Merge full Gate run evidence with later repair runs; later wins."""
+    """Merge Gate evidence without allowing plain repairs to erase continuity."""
 
     merged: dict[tuple[str, str, str], dict[str, Any]] = {}
     for payload in manifests:
         for summary in _route_summary_list(payload):
             key = _route_key(summary)
-            if all(key):
-                merged[key] = summary
+            if not all(key):
+                continue
+            existing = merged.get(key)
+            if (
+                existing is not None
+                and _is_reviewed_continuity_summary(existing)
+                and not _is_reviewed_continuity_summary(summary)
+            ):
+                continue
+            merged[key] = summary
     return list(merged.values())
 
 

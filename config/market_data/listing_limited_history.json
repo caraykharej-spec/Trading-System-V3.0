@@ -14,13 +14,6 @@
       "reviewed_history_start": "2026-04-24T10:00:00+00:00",
       "start_tolerance_seconds": 3600,
       "reason": "Project-reviewed newly listed market. Gate full-history evidence begins in April 2026 and no older rows exist in the archived source evidence."
-    },
-    "TON": {
-      "provider": "gateio",
-      "provider_symbol": "GRAM_USDT",
-      "reviewed_history_start": "2026-06-16T00:00:00+00:00",
-      "start_tolerance_seconds": 3600,
-      "reason": "Project-reviewed listing-limited Gate market. Full-history repair run 35501671622 requested every month from 2023-01 through 2026-09; the first archived source rows begin on 2026-06-16 and no pre-listing rows exist."
     }
   }
 }
