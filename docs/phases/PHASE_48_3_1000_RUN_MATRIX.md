@@ -1,23 +1,66 @@
-# Phase 48.3 — 1000-Run Matrix & Reproducibility
+# Phase 48.3 — Real 1000-Run Matrix & Reproducibility
 
-Status: IMPLEMENTATION IN REVIEW
+Status: REAL EXECUTOR READY FOR SMOKE
 
-The qualification matrix is the exact Cartesian product of locked dataset
-versions, evidence splits, random seeds, strategy fingerprints, configuration
-fingerprints and cost scenarios. Its cardinality must equal 1,000; undersized or
-oversized matrices fail before execution.
+Phase 48.3 consumes one exact, successful Phase 48.2 full-summary artifact. It
+does not read a mutable `latest` result and it does not select assets from their
+observed OOS performance. The sealed Phase 48.2 evidence fingerprint controls
+the complete matrix plan.
 
-Every experiment receives a SHA-256 identity derived from all matrix dimensions.
-Storage labels are not evidence identity. Duplicate identities, unordered
-indexes and missing runs fail closed.
+## Matrix contract
 
-Executors return canonical bytes. Each result is content-fingerprinted, and the
-ordered matrix and complete evidence set receive separate SHA-256 fingerprints.
-Concurrency cannot change either fingerprint. Failed runs remain in evidence
-with their exception type and message; they are never silently dropped or
-replaced by successful runs.
+The matrix is the exact Cartesian product of:
 
-This phase proves the runner contract with 1,000 lightweight deterministic
-executions. It does not claim strategy profitability. Real backtest outcomes
-will be connected to this runner in subsequent robustness phases and evaluated
-by the statistical gate established in Phase 48.1.
+- one Phase 48.2 dataset-bundle fingerprint;
+- `LOCKED_OOS` and `WALK_FORWARD` evidence splits;
+- 500 deterministic seed labels;
+- one frozen strategy fingerprint;
+- one fingerprint of the per-asset locked configuration policy; and
+- the Phase 48.2 locked Storm baseline-cost scenario.
+
+This produces exactly 1,000 unique experiment identities. The 79 executable
+assets are assigned deterministically and as evenly as possible across those
+identities. `SKY` and `SPCX` remain evidence-only and performance-excluded until
+real warm-up history exists.
+
+Seeds in this phase are reproducibility labels and select a sealed pre-OOS
+walk-forward window. They do not pretend to create independent market samples.
+Trade shuffling, bootstrap and Monte Carlo begin in Phase 48.4.
+
+## Real execution
+
+Every matrix experiment invokes `BacktestEngine` over HF-backed candles whose
+partition, qualification, dataset, strategy and configuration fingerprints are
+rechecked against Phase 48.2. Locked OOS uses the original sealed OOS boundary.
+Walk-forward uses only the pre-OOS windows recorded by Phase 48.2.
+
+The 1,000 experiments are distributed over ten asset-stable shards. Each shard
+downloads an asset once and reuses its verified in-memory candles for that
+asset's assigned experiments. This keeps provider traffic bounded without
+changing experiment identity or evidence.
+
+## Checkpoint and resume
+
+Each experiment writes a JSONL attempt record immediately after execution.
+Successful experiments are skipped when an earlier Phase 48.3 run is supplied
+as `resume_run_id`. Failed attempts remain in the evidence and may be retried by
+a later workflow run; aggregation selects the latest attempt while retaining
+the total attempt count.
+
+Missing experiments, conflicting checkpoints, a changed Phase 48.2 fingerprint,
+an invalid plan, dataset drift, strategy drift or configuration drift fail
+closed.
+
+## Workflow sequence
+
+1. Run `Phase 48.3 Real 1000-Run Matrix` with `scope=smoke` and the exact Phase
+   48.2 full-summary run ID and artifact name.
+2. Verify all 10 real-engine smoke experiments and the aggregate artifact.
+3. Run the same workflow with `scope=full`.
+4. If a full run has infrastructure failures, start a new workflow with the
+   failed run ID in `resume_run_id`; do not use `Re-run all jobs` as a substitute
+   for checkpoint-aware resume.
+
+The successful aggregate status is `PASS_1000_RUN_EXECUTION_EVIDENCE`. It proves
+real-engine execution and reproducibility, not strategy profitability or live
+trading eligibility. Statistical qualification remains Phase 48.9.

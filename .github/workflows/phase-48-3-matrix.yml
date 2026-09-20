@@ -1,24 +1,244 @@
-name: Phase 48.3 1000-Run Matrix
+name: Phase 48.3 Real 1000-Run Matrix
 
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/phase-48-3-matrix.yml"
+      - "app/backtest/qualification_matrix.py"
+      - "scripts/backtest/run_phase_48_3_matrix.py"
+      - "tests/backtest/test_phase_48_3_qualification_matrix.py"
+      - "tests/backtest/test_phase_48_3_real_matrix.py"
   push:
     branches: [main, "phase-48-3-*"]
+    paths:
+      - ".github/workflows/phase-48-3-matrix.yml"
+      - "app/backtest/qualification_matrix.py"
+      - "scripts/backtest/run_phase_48_3_matrix.py"
+      - "tests/backtest/test_phase_48_3_qualification_matrix.py"
+      - "tests/backtest/test_phase_48_3_real_matrix.py"
   workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful Phase 48.2 full workflow run ID"
+        required: true
+        type: string
+      source_artifact_name:
+        description: "Exact Phase 48.2 full summary artifact name"
+        required: true
+        type: string
+      scope:
+        description: "Smoke executes 10 real runs; full executes the sealed 1,000-run matrix"
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, full]
+      resume_run_id:
+        description: "Optional earlier Phase 48.3 run ID whose successful checkpoints should be reused"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: phase-48-3-real-${{ github.ref }}-${{ inputs.scope || 'tests' }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: ${{ secrets.HF_S3_REGION }}
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "5"
+  HF_S3_MAX_ATTEMPTS: "10"
+  HF_S3_RETRY_BASE_SECONDS: "5"
+  HF_S3_RETRY_MAX_SECONDS: "300"
+  HF_S3_MIN_REQUEST_INTERVAL_SECONDS: "0.25"
 
 jobs:
-  matrix:
+  contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -q tests/backtest/test_phase_48_3_qualification_matrix.py
+      - run: python -m pip install -e ".[dev,research-data]"
+      - name: Validate Phase 48.3 contracts and real-matrix semantics
+        run: >-
+          python -m pytest -q
+          tests/backtest/test_phase_48_3_qualification_matrix.py
+          tests/backtest/test_phase_48_3_real_matrix.py
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - name: Validate workflow inputs
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          RESUME_RUN_ID: ${{ inputs.resume_run_id }}
+        run: |
+          python - <<'PY'
+          import os, re
+          if not re.fullmatch(r"[0-9]+", os.environ["SOURCE_RUN_ID"]):
+              raise SystemExit("source_run_id must be numeric")
+          resume = os.environ.get("RESUME_RUN_ID", "")
+          if resume and not re.fullmatch(r"[0-9]+", resume):
+              raise SystemExit("resume_run_id must be empty or numeric")
+          PY
+      - name: Download exact Phase 48.2 full evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-48-2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+      - name: Seal 1,000-run plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/phase-48-3
+          python -m scripts.backtest.run_phase_48_3_matrix plan \
+            --phase-48-2-root artifacts/source-48-2 \
+            --shard-count 10 \
+            --output artifacts/phase-48-3/plan.json
+          summary="$(find artifacts/source-48-2 -type f -name summary.json -print -quit)"
+          test -n "$summary"
+          cp "$summary" artifacts/phase-48-3/source-summary.json
+          echo 'shards={"shard":[0,1,2,3,4,5,6,7,8,9]}' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-3-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-3
+          if-no-files-found: error
+          retention-days: 90
+
+  matrix:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-3-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-3
+      - name: Download prior checkpoints for resume
+        if: inputs.resume_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-3-shard-*-${{ inputs.resume_run_id }}-*
+          path: artifacts/resume
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.resume_run_id }}
+      - name: Execute real-engine shard ${{ matrix.shard }}
+        shell: bash
+        run: |
+          set -u
+          resume_args=()
+          if [ -d artifacts/resume ]; then
+            resume_args+=(--resume-root artifacts/resume)
+          fi
+          python -m scripts.backtest.run_phase_48_3_matrix shard \
+            --plan artifacts/phase-48-3/plan.json \
+            --phase-48-2-summary artifacts/phase-48-3/source-summary.json \
+            --shard "${{ matrix.shard }}" \
+            --scope "${{ inputs.scope }}" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "artifacts/checkpoints/shard-${{ matrix.shard }}.jsonl" \
+            "${resume_args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-48-3-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/checkpoints/shard-${{ matrix.shard }}.jsonl
+          if-no-files-found: error
+          retention-days: 90
+
+  aggregate:
+    if: github.event_name == 'workflow_dispatch' && always() && needs.prepare.result == 'success'
+    needs: [prepare, matrix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-3-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-3
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-3-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/current
+      - name: Download prior checkpoints for aggregate
+        if: inputs.resume_run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-3-shard-*-${{ inputs.resume_run_id }}-*
+          path: artifacts/resume
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.resume_run_id }}
+      - name: Aggregate complete matrix evidence
+        shell: bash
+        run: |
+          set -u
+          roots=(--attempt-root artifacts/current)
+          if [ -d artifacts/resume ]; then
+            roots+=(--attempt-root artifacts/resume)
+          fi
+          python -m scripts.backtest.run_phase_48_3_matrix aggregate \
+            --plan artifacts/phase-48-3/plan.json \
+            --phase-48-2-summary artifacts/phase-48-3/source-summary.json \
+            --scope "${{ inputs.scope }}" \
+            "${roots[@]}" \
+            --output artifacts/phase-48-3/summary.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-48-3-summary-${{ inputs.scope }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/phase-48-3/plan.json
+            artifacts/phase-48-3/source-summary.json
+            artifacts/phase-48-3/summary.json
+          if-no-files-found: warn
+          retention-days: 90
