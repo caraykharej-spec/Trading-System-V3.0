@@ -53,6 +53,9 @@ jobs:
     name: Discover Gate-backed project universe
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      REPAIR_PROVIDER: ${{ inputs.provider }}
+      REPAIR_PROVIDER_SYMBOL: ${{ inputs.provider_symbol }}
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       route_count: ${{ steps.matrix.outputs.route_count }}
@@ -106,10 +109,15 @@ jobs:
               raise SystemExit("Gate route discovery returned an empty matrix")
           if len(routes) > 256:
               raise SystemExit(f"GitHub matrix limit exceeded: {len(routes)} > 256")
+          full_history = sum(
+              str(route.get("provider", "")) in {"gateio", "gateio_futures"}
+              for route in routes
+          )
+          blocked = len(routes) - full_history
           print("matrix=" + json.dumps({"route": routes}, separators=(",", ":")))
-          print(f"route_count={payload['route_count']}")
-          print(f"full_history_route_count={payload['full_history_route_count']}")
-          print(f"blocked_route_count={payload['blocked_route_count']}")
+          print(f"route_count={len(routes)}")
+          print(f"full_history_route_count={full_history}")
+          print(f"blocked_route_count={blocked}")
           PY
 
       - name: Upload discovery evidence
