@@ -185,7 +185,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: phase-48-2-${{ matrix.asset.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: phase-48-2-asset-${{ matrix.asset.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/phase-48-2/${{ matrix.asset.slug }}.json
           if-no-files-found: error
           retention-days: 90
@@ -204,7 +204,7 @@ jobs:
       - run: python -m pip install -e ".[research-data]"
       - uses: actions/download-artifact@v4
         with:
-          pattern: phase-48-2-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: phase-48-2-asset-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/asset-results
       - name: Build locked OOS evidence summary
         run: >-
