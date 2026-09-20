@@ -1,24 +1,148 @@
-name: Phase 48.4 Robustness Sampling
+name: Phase 48.4 Real Bootstrap Monte Carlo
 
 on:
   pull_request:
     branches: [main]
+    paths: [".github/workflows/phase-48-4-robustness.yml", "app/backtest/robustness_sampling.py", "scripts/backtest/run_phase_48_4_robustness.py", "tests/backtest/test_phase_48_4_robustness_sampling.py", "tests/backtest/test_phase_48_4_real_robustness.py"]
   push:
     branches: [main, "phase-48-4-*"]
+    paths: [".github/workflows/phase-48-4-robustness.yml", "app/backtest/robustness_sampling.py", "scripts/backtest/run_phase_48_4_robustness.py", "tests/backtest/test_phase_48_4_robustness_sampling.py", "tests/backtest/test_phase_48_4_real_robustness.py"]
   workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful full Phase 48.3 workflow run ID"
+        required: true
+        type: string
+      source_artifact_name:
+        description: "Exact Phase 48.3 full summary artifact name"
+        required: true
+        type: string
+      scope:
+        description: "Smoke runs 100 paths; full runs 10,000 paths"
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, full]
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: phase-48-4-real-${{ github.ref }}-${{ inputs.scope || 'tests' }}
+  cancel-in-progress: false
 
 jobs:
-  robustness:
+  contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
+        with: {python-version: "3.11", cache: pip}
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -q tests/backtest/test_phase_48_4_robustness_sampling.py
+      - run: python -m pytest -q tests/backtest/test_phase_48_4_robustness_sampling.py tests/backtest/test_phase_48_4_real_robustness.py
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-48-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+      - name: Seal robustness plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/phase-48-4
+          python -m scripts.backtest.run_phase_48_4_robustness plan --source-root artifacts/source-48-3 --simulations 10000 --shards 10 --output artifacts/phase-48-4/plan.json
+          summary="$(find artifacts/source-48-3 -type f -name summary.json -print -quit)"
+          test -n "$summary"
+          cp "$summary" artifacts/phase-48-4/source-summary.json
+          echo 'shards={"shard":[0,1,2,3,4,5,6,7,8,9]}' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-4-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-4
+          if-no-files-found: error
+          retention-days: 90
+
+  robustness:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-4-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-4
+      - name: Run robustness shard ${{ matrix.shard }}
+        run: >-
+          python -m scripts.backtest.run_phase_48_4_robustness shard
+          --plan artifacts/phase-48-4/plan.json
+          --source artifacts/phase-48-4/source-summary.json
+          --shard "${{ matrix.shard }}"
+          --scope "${{ inputs.scope }}"
+          --output "artifacts/results/shard-${{ matrix.shard }}.jsonl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-4-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results/shard-${{ matrix.shard }}.jsonl
+          if-no-files-found: error
+          retention-days: 90
+
+  aggregate:
+    if: github.event_name == 'workflow_dispatch' && always() && needs.robustness.result == 'success'
+    needs: [prepare, robustness]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-4-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-4-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results
+      - run: >-
+          python -m scripts.backtest.run_phase_48_4_robustness aggregate
+          --plan artifacts/phase-48-4/plan.json
+          --source artifacts/phase-48-4/source-summary.json
+          --result-root artifacts/results
+          --scope "${{ inputs.scope }}"
+          --output artifacts/phase-48-4/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-4-summary-${{ inputs.scope }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/phase-48-4/plan.json
+            artifacts/phase-48-4/source-summary.json
+            artifacts/phase-48-4/summary.json
+          if-no-files-found: error
+          retention-days: 90
