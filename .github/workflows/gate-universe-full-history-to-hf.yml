@@ -16,8 +16,12 @@ on:
         required: false
         default: false
         type: boolean
+      provider:
+        description: "Optional exact Gate provider for single-route repair, e.g. gateio or gateio_futures"
+        required: false
+        type: string
       provider_symbol:
-        description: "Optional exact Gate provider symbol for single-route repair, e.g. TRUMP_USDT"
+        description: "Optional exact Gate provider symbol for single-route repair, e.g. GRAM_USDT"
         required: false
         type: string
 
@@ -44,6 +48,7 @@ jobs:
       AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
       HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      REPAIR_PROVIDER: ${{ inputs.provider }}
       REPAIR_PROVIDER_SYMBOL: ${{ inputs.provider_symbol }}
     timeout-minutes: 15
     outputs:
@@ -88,23 +93,41 @@ jobs:
           if not routes:
               raise SystemExit("Gate route discovery returned an empty matrix")
 
-          requested = os.environ.get("REPAIR_PROVIDER_SYMBOL", "").strip().upper()
-          if requested:
+          requested_provider = os.environ.get("REPAIR_PROVIDER", "").strip().lower()
+          requested_symbol = os.environ.get("REPAIR_PROVIDER_SYMBOL", "").strip().upper()
+          if requested_provider or requested_symbol:
               matches = [
                   route
                   for route in routes
-                  if str(route.get("provider_symbol", "")).strip().upper() == requested
+                  if (
+                      not requested_provider
+                      or str(route.get("provider", "")).strip().lower()
+                      == requested_provider
+                  )
+                  and (
+                      not requested_symbol
+                      or str(route.get("provider_symbol", "")).strip().upper()
+                      == requested_symbol
+                  )
               ]
               if not matches:
                   raise SystemExit(
-                      f"Single-route repair symbol was not discovered: {requested}"
+                      "Single-route repair route was not discovered: "
+                      f"provider={requested_provider or '*'}, "
+                      f"symbol={requested_symbol or '*'}"
                   )
               if len(matches) != 1:
-                  providers = ", ".join(
-                      sorted(str(route.get("provider", "unknown")) for route in matches)
+                  identities = ", ".join(
+                      sorted(
+                          f"{route.get('provider', 'unknown')}/"
+                          f"{route.get('provider_symbol', 'unknown')}"
+                          for route in matches
+                      )
                   )
                   raise SystemExit(
-                      f"Single-route repair symbol is ambiguous: {requested} ({providers})"
+                      "Single-route repair route is ambiguous: "
+                      f"provider={requested_provider or '*'}, "
+                      f"symbol={requested_symbol or '*'} ({identities})"
                   )
               routes = matches
 
