@@ -3,22 +3,219 @@ name: Phase 48.2 Locked OOS
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/phase-48-2-locked-oos.yml"
+      - "app/backtest/locked_oos.py"
+      - "scripts/backtest/hf_s3.py"
+      - "scripts/backtest/hf_qualified_data.py"
+      - "scripts/backtest/run_phase_48_2_locked_oos.py"
+      - "scripts/backtest/aggregate_phase_48_2_locked_oos.py"
+      - "tests/backtest/test_phase_48_2_locked_oos.py"
+      - "tests/backtest/test_phase_48_2_real_runner.py"
   push:
     branches: [main, "phase-48-2-*"]
+    paths:
+      - ".github/workflows/phase-48-2-locked-oos.yml"
+      - "app/backtest/locked_oos.py"
+      - "scripts/backtest/hf_s3.py"
+      - "scripts/backtest/hf_qualified_data.py"
+      - "scripts/backtest/run_phase_48_2_locked_oos.py"
+      - "scripts/backtest/aggregate_phase_48_2_locked_oos.py"
+      - "tests/backtest/test_phase_48_2_locked_oos.py"
+      - "tests/backtest/test_phase_48_2_real_runner.py"
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "Research scope: smoke runs BTC/AAPL/TON; full runs the locked 81-asset qualification contract"
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, full]
+      walk_forward_windows:
+        description: "Pre-OOS walk-forward windows per executed asset"
+        required: true
+        default: "3"
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: phase-48-2-real-${{ github.ref }}-${{ github.event.inputs.scope || 'tests' }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: ${{ secrets.HF_S3_REGION }}
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "5"
+  HF_S3_MAX_ATTEMPTS: "10"
+  HF_S3_RETRY_BASE_SECONDS: "5"
+  HF_S3_RETRY_MAX_SECONDS: "300"
+  HF_S3_MIN_REQUEST_INTERVAL_SECONDS: "0.25"
+  QUALIFICATION_KEY: manifests/global-history/v1/latest.json
+
 jobs:
-  locked-oos:
+  contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -q tests/backtest/test_phase_48_2_locked_oos.py
+      - run: python -m pip install -e ".[dev,research-data]"
+      - name: Validate Phase 48.2 contracts and real-runner semantics
+        run: >-
+          python -m pytest -q
+          tests/backtest/test_phase_48_2_locked_oos.py
+          tests/backtest/test_phase_48_2_real_runner.py
+
+  prepare-research:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+    outputs:
+      matrix: ${{ steps.contract.outputs.matrix }}
+      expected_assets: ${{ steps.contract.outputs.expected_assets }}
+      expected_pending: ${{ steps.contract.outputs.expected_pending }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - name: Lock qualification and research matrix
+        id: contract
+        env:
+          RESEARCH_SCOPE: ${{ inputs.scope }}
+        run: |
+          mkdir -p artifacts
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          from pathlib import Path
+          from scripts.backtest import hf_s3
+
+          target = Path("artifacts/global-history-qualification.json")
+          hf_s3.aws(
+              "s3api", "get-object",
+              "--bucket", os.environ["HF_S3_BUCKET"],
+              "--key", os.environ["QUALIFICATION_KEY"],
+              str(target),
+          )
+          payload = json.loads(target.read_text())
+          if payload.get("status") != "PASS_GLOBAL_HISTORY_QUALIFICATION":
+              raise SystemExit("Latest qualification is not PASS")
+          if payload.get("storm_asset_count") != 81 or payload.get("qualified_asset_count") != 81:
+              raise SystemExit("Latest qualification is not 81/81")
+          assets = [item for item in payload.get("assets", []) if isinstance(item, dict)]
+          by_base = {str(item.get("base_asset") or "").upper(): item for item in assets}
+          scope = os.environ["RESEARCH_SCOPE"]
+          if scope == "smoke":
+              selected = ["BTC", "AAPL", "TON"]
+              missing = [base for base in selected if base not in by_base]
+              if missing:
+                  raise SystemExit(f"Smoke assets missing from qualification: {missing}")
+              expected_pending = 0
+          elif scope == "full":
+              selected = sorted(by_base)
+              if len(selected) != 81:
+                  raise SystemExit(f"Full matrix expected 81 assets, got {len(selected)}")
+              pending = sorted(
+                  base for base in selected
+                  if str(by_base[base].get("strategy_warmup_status") or "READY") == "PENDING_MINIMUM_CANDLES"
+              )
+              if pending != ["SKY", "SPCX"]:
+                  raise SystemExit(f"Full Phase 48.2 contract expects only SKY/SPCX pending, got {pending}")
+              expected_pending = 2
+          else:
+              raise SystemExit(f"Unsupported scope: {scope}")
+          matrix = {"asset": [{"base_asset": base, "slug": base.lower()} for base in selected]}
+          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+          print("expected_assets=" + str(len(selected)))
+          print("expected_pending=" + str(expected_pending))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-2-qualification-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/global-history-qualification.json
+          if-no-files-found: error
+          retention-days: 90
+
+  research:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare-research
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare-research.outputs.matrix) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - name: Run Phase 48.2 for ${{ matrix.asset.base_asset }}
+        run: >-
+          python -m scripts.backtest.run_phase_48_2_locked_oos
+          --base-asset "${{ matrix.asset.base_asset }}"
+          --qualification-key "$QUALIFICATION_KEY"
+          --git-revision "$GITHUB_SHA"
+          --walk-forward-windows "${{ inputs.walk_forward_windows }}"
+          --output "artifacts/phase-48-2/${{ matrix.asset.slug }}.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-48-2-${{ matrix.asset.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-2/${{ matrix.asset.slug }}.json
+          if-no-files-found: error
+          retention-days: 90
+
+  aggregate:
+    if: github.event_name == 'workflow_dispatch' && always() && needs.research.result == 'success'
+    needs: [prepare-research, research]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-2-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/asset-results
+      - name: Build locked OOS evidence summary
+        run: >-
+          python -m scripts.backtest.aggregate_phase_48_2_locked_oos
+          --input-root artifacts/asset-results
+          --expected-assets "${{ needs.prepare-research.outputs.expected_assets }}"
+          --expected-pending "${{ needs.prepare-research.outputs.expected_pending }}"
+          --output artifacts/phase-48-2/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-2-summary-${{ inputs.scope }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-2/summary.json
+          if-no-files-found: error
+          retention-days: 90
