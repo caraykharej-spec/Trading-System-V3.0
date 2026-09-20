@@ -250,30 +250,3 @@ def test_listing_limited_policy_fails_closed_when_history_start_does_not_match()
     assert result["qualified_asset_count"] == 0
     assert result["insufficient_history_assets"] == ["SKY"]
     assert result["status"] == "FAIL_GLOBAL_HISTORY_QUALIFICATION"
-
-def test_project_policy_qualifies_ton_gram_from_reviewed_listing_start() -> None:
-    payload = {
-        "storm_asset_count": 1,
-        "qualified_asset_count": 0,
-        "missing_assets": [],
-        "insufficient_history_assets": ["TON"],
-        "insufficient_history_asset_count": 1,
-        "status": "FAIL_GLOBAL_HISTORY_QUALIFICATION",
-        "backtest_history_policy": {},
-        "assets": [
-            _listing_asset("TON", "GRAM_USDT", "2026-06-16T00:00:00+00:00")
-        ],
-    }
-
-    result = subject.apply_listing_limited_policy(
-        payload, subject.load_listing_limited_policy()
-    )
-
-    assert result["status"] == "PASS_GLOBAL_HISTORY_QUALIFICATION"
-    assert result["qualified_asset_count"] == 1
-    assert result["listing_limited_assets"] == ["TON"]
-    assert result["insufficient_history_assets"] == []
-    ton = result["assets"][0]
-    assert ton["qualification_status"] == "QUALIFIED_LISTING_LIMITED_HISTORY"
-    assert ton["strategy_warmup_status"] == "PENDING_MINIMUM_CANDLES"
-    assert ton["warmup_deficiencies"][0]["timeframe"] == "1d"

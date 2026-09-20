@@ -177,3 +177,55 @@ def test_insufficient_history_fails_even_when_source_sync_is_complete() -> None:
         "4h",
         "1d",
     }
+
+def test_merge_gate_runs_preserves_continuity_against_later_plain_repair() -> None:
+    continuity = _gate(
+        "TON",
+        "GRAM_USDT",
+        origin="source_registry_historical_symbol_continuity",
+        rows=783,
+    )
+    continuity["historical_symbol_continuity"] = {
+        "target_provider_symbol": "GRAM_USDT",
+        "segments": [
+            {
+                "source_provider_symbol": "TON_USDT",
+                "start": "2023-01-01T00:00:00+00:00",
+                "end": "2026-06-16T14:00:00+00:00",
+            },
+            {
+                "source_provider_symbol": "GRAM_USDT",
+                "start": "2026-06-16T14:00:00+00:00",
+                "end": None,
+            },
+        ],
+        "stitch_policy": "exact_timestamp_union_fail_on_conflict_no_synthetic_rows",
+    }
+    plain_repair = _gate("TON", "GRAM_USDT", rows=80)
+
+    merged = subject.merge_gate_runs(
+        [
+            {"route_summaries": [continuity]},
+            {"route_summaries": [plain_repair]},
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["total_5m_rows"] == 783
+    assert (
+        merged[0]["route"]["route_origin"]
+        == "source_registry_historical_symbol_continuity"
+    )
+
+
+def test_merge_gate_runs_keeps_later_wins_for_plain_routes() -> None:
+    merged = subject.merge_gate_runs(
+        [
+            {"route_summaries": [_gate("BTC", "BTC_USDT", rows=250)]},
+            {"route_summaries": [_gate("BTC", "BTC_USDT", rows=300)]},
+        ]
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["total_5m_rows"] == 300
+
