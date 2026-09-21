@@ -1,24 +1,146 @@
-name: Phase 48.5 Synthetic Robustness
+name: Phase 48.5 Real Synthetic Noise Robustness
 
 on:
   pull_request:
     branches: [main]
+    paths: [".github/workflows/phase-48-5-synthetic.yml", "app/backtest/synthetic_robustness.py", "scripts/backtest/run_phase_48_5_synthetic.py", "tests/backtest/test_phase_48_5_synthetic_robustness.py", "tests/backtest/test_phase_48_5_real_synthetic.py"]
   push:
     branches: [main, "phase-48-5-*"]
+    paths: [".github/workflows/phase-48-5-synthetic.yml", "app/backtest/synthetic_robustness.py", "scripts/backtest/run_phase_48_5_synthetic.py", "tests/backtest/test_phase_48_5_synthetic_robustness.py", "tests/backtest/test_phase_48_5_real_synthetic.py"]
   workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful full Phase 48.4 workflow run ID"
+        required: true
+        type: string
+      source_artifact_name:
+        description: "Exact Phase 48.4 full summary artifact name"
+        required: true
+        type: string
+      scope:
+        description: "Smoke runs 100 scenarios; full runs 10,000 scenarios"
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, full]
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: phase-48-5-real-${{ github.ref }}-${{ inputs.scope || 'tests' }}
+  cancel-in-progress: false
 
 jobs:
-  synthetic:
+  contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
+        with: {python-version: "3.11", cache: pip}
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -q tests/backtest/test_phase_48_5_synthetic_robustness.py
+      - run: python -m pytest -q tests/backtest/test_phase_48_5_synthetic_robustness.py tests/backtest/test_phase_48_5_real_synthetic.py
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-48-4
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+      - name: Seal synthetic robustness plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/phase-48-5
+          python -m scripts.backtest.run_phase_48_5_synthetic plan --source-root artifacts/source-48-4 --scenarios 10000 --shards 10 --output artifacts/phase-48-5/plan.json
+          echo 'shards={"shard":[0,1,2,3,4,5,6,7,8,9]}' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-5-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-5/plan.json
+          if-no-files-found: error
+          retention-days: 90
+
+  robustness:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-5-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-5
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-48-4
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+      - name: Run synthetic robustness shard ${{ matrix.shard }}
+        run: |
+          mkdir -p artifacts/results
+          python -m scripts.backtest.run_phase_48_5_synthetic shard --bundle-root artifacts/source-48-4 --plan artifacts/phase-48-5/plan.json --shard "${{ matrix.shard }}" --scope "${{ inputs.scope }}" --output "artifacts/results/shard-${{ matrix.shard }}.jsonl"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-5-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results
+          if-no-files-found: error
+          retention-days: 90
+
+  aggregate:
+    if: github.event_name == 'workflow_dispatch'
+    needs: robustness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-5-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-5-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-48-4
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+      - run: python -m scripts.backtest.run_phase_48_5_synthetic aggregate --bundle-root artifacts/source-48-4 --plan artifacts/phase-48-5/plan.json --result-root artifacts/results --scope "${{ inputs.scope }}" --output artifacts/phase-48-5/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-5-summary-${{ inputs.scope }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/phase-48-5/plan.json
+            artifacts/phase-48-5/summary.json
+          if-no-files-found: error
+          retention-days: 90
