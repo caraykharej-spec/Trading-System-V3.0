@@ -1,24 +1,215 @@
-name: Phase 48.6 Parameter Stability
+name: Phase 48.6 Real Parameter Stability
 
 on:
   pull_request:
     branches: [main]
+    paths:
+      - ".github/workflows/phase-48-6-parameter-stability.yml"
+      - "app/backtest/parameter_stability.py"
+      - "scripts/backtest/run_phase_48_6_parameter_stability.py"
+      - "tests/backtest/test_phase_48_6_parameter_stability.py"
+      - "tests/backtest/test_phase_48_6_real_parameter_stability.py"
+      - "docs/phases/PHASE_48_6_PARAMETER_SENSITIVITY_STABILITY.md"
   push:
     branches: [main, "phase-48-6-*"]
+    paths:
+      - ".github/workflows/phase-48-6-parameter-stability.yml"
+      - "app/backtest/parameter_stability.py"
+      - "scripts/backtest/run_phase_48_6_parameter_stability.py"
+      - "tests/backtest/test_phase_48_6_parameter_stability.py"
+      - "tests/backtest/test_phase_48_6_real_parameter_stability.py"
+      - "docs/phases/PHASE_48_6_PARAMETER_SENSITIVITY_STABILITY.md"
   workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: "Successful full Phase 48.5 workflow run ID"
+        required: true
+        type: string
+      source_artifact_name:
+        description: "Exact Phase 48.5 full summary artifact name"
+        required: true
+        type: string
+      baseline_run_id:
+        description: "Successful full Phase 48.3 workflow run ID"
+        required: true
+        type: string
+      baseline_artifact_name:
+        description: "Exact Phase 48.3 full summary artifact name"
+        required: true
+        type: string
+      scope:
+        description: "Smoke replays 13 scenarios on 8 assets; full replays all locked ledgers"
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, full]
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: phase-48-6-real-${{ github.ref }}-${{ inputs.scope || 'tests' }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: ${{ secrets.HF_S3_REGION }}
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "5"
+  HF_S3_MAX_ATTEMPTS: "10"
+  HF_S3_RETRY_BASE_SECONDS: "5"
+  HF_S3_RETRY_MAX_SECONDS: "300"
+  HF_S3_MIN_REQUEST_INTERVAL_SECONDS: "0.25"
 
 jobs:
-  parameter-stability:
+  contracts:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[dev,research-data]"
+      - run: >-
+          python -m pytest -q
+          tests/backtest/test_phase_48_6_parameter_stability.py
+          tests/backtest/test_phase_48_6_real_parameter_stability.py
+
+  prepare:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[research-data]"
+      - name: Validate workflow inputs
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          BASELINE_RUN_ID: ${{ inputs.baseline_run_id }}
+        run: |
+          python - <<'PY'
+          import os, re
+          for name in ("SOURCE_RUN_ID", "BASELINE_RUN_ID"):
+              if not re.fullmatch(r"[0-9]+", os.environ[name]):
+                  raise SystemExit(f"{name.lower()} must be numeric")
+          PY
+      - name: Download exact Phase 48.5 full evidence
+        uses: actions/download-artifact@v4
         with:
-          python-version: "3.11"
-          cache: pip
-      - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest -q tests/backtest/test_phase_48_6_parameter_stability.py
+          name: ${{ inputs.source_artifact_name }}
+          path: artifacts/source-48-5
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.source_run_id }}
+      - name: Download exact Phase 48.3 locked baseline evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.baseline_artifact_name }}
+          path: artifacts/source-48-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.baseline_run_id }}
+      - name: Seal parameter stability plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/phase-48-6
+          python -m scripts.backtest.run_phase_48_6_parameter_stability plan \
+            --phase-48-5-root artifacts/source-48-5 \
+            --phase-48-3-root artifacts/source-48-3 \
+            --shards 10 \
+            --output artifacts/phase-48-6/plan.json
+          echo 'shards={"shard":[0,1,2,3,4,5,6,7,8,9]}' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-6-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-6/plan.json
+          if-no-files-found: error
+          retention-days: 90
+
+  stability:
+    if: github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[research-data]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-6-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-6
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.baseline_artifact_name }}
+          path: artifacts/source-48-3
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.baseline_run_id }}
+      - name: Run parameter stability shard ${{ matrix.shard }}
+        run: |
+          mkdir -p artifacts/results
+          python -m scripts.backtest.run_phase_48_6_parameter_stability shard \
+            --plan artifacts/phase-48-6/plan.json \
+            --phase-48-3-root artifacts/source-48-3 \
+            --shard "${{ matrix.shard }}" \
+            --scope "${{ inputs.scope }}" \
+            --output "artifacts/results/shard-${{ matrix.shard }}.jsonl"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: phase-48-6-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results/shard-${{ matrix.shard }}.jsonl
+          if-no-files-found: error
+          retention-days: 90
+
+  aggregate:
+    if: github.event_name == 'workflow_dispatch' && always() && needs.stability.result == 'success'
+    needs: [prepare, stability]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11", cache: pip}
+      - run: python -m pip install -e ".[research-data]"
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase-48-6-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/phase-48-6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: phase-48-6-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/results
+      - run: >-
+          python -m scripts.backtest.run_phase_48_6_parameter_stability aggregate
+          --plan artifacts/phase-48-6/plan.json
+          --result-root artifacts/results
+          --scope "${{ inputs.scope }}"
+          --output artifacts/phase-48-6/summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-48-6-summary-${{ inputs.scope }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/phase-48-6/plan.json
+            artifacts/phase-48-6/summary.json
+          if-no-files-found: error
+          retention-days: 90
