@@ -70,6 +70,29 @@ def _yahoo(base: str, symbol: str, *, rows: int = 250) -> dict[str, object]:
     }
 
 
+def _extended(
+    base: str,
+    provider: str,
+    symbol: str,
+    *,
+    rows: int = 250,
+    multiplier: str = "1",
+) -> dict[str, object]:
+    return {
+        "status": "COMPLETE",
+        "route": {
+            "base_asset": base,
+            "provider": provider,
+            "provider_symbol": symbol,
+            "price_multiplier": multiplier,
+            "route_origin": "historical_15m_repair_registry",
+            "asset_class": "test",
+        },
+        "total_rows": rows * 4,
+        "partitions": _parts(rows),
+    }
+
+
 def test_explicit_reviewed_alias_can_reuse_underlying_verified_gate_series(monkeypatch) -> None:
     registry = SourceMappingRegistry(
         (
@@ -151,6 +174,33 @@ def test_spx_collision_is_reported_even_when_yahoo_is_selected(monkeypatch) -> N
             "reason": "not_an_authorized_registry_route",
         }
     ]
+
+
+def test_ready_reviewed_15m_repair_replaces_short_yahoo_history(monkeypatch) -> None:
+    registry = SourceMappingRegistry(
+        (
+            SourceMapping(
+                base_asset="SPX",
+                asset_class="index",
+                routes=(SourceRoute(provider="yahoo", symbol="^GSPC"),),
+            ),
+        )
+    )
+    monkeypatch.setattr(legacy, "_preferred_summary", subject.preferred_summary_backtest_ready)
+
+    payload = legacy.qualify(
+        [_storm("SPX")],
+        registry,
+        [],
+        [_yahoo("SPX", "^GSPC", rows=100)],
+        [_extended("SPX", "dukascopy", "USA500IDXUSD")],
+    )
+
+    asset = payload["assets"][0]
+    assert payload["status"] == "PASS_GLOBAL_HISTORY_QUALIFICATION"
+    assert asset["historical_source"]["provider"] == "dukascopy"
+    assert asset["historical_source"]["provider_symbol"] == "USA500IDXUSD"
+    assert asset["identity_policy"] == "historical_15m_repair_backtest_ready"
 
 
 def _listing_asset(base: str, symbol: str, first: str) -> dict[str, object]:

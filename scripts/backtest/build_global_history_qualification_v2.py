@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.data.source_registry import SourceMapping, SourceMappingRegistry, SourceRoute
+from app.data.historical_15m_registry import Historical15mRegistry, Historical15mRoute
 from app.universe.storm_discovery import StormReferenceAsset
 from scripts.backtest import build_global_history_qualification as legacy
 
@@ -56,6 +57,22 @@ def _explicit_yahoo_matches(
     )
 
 
+def _explicit_extended_matches(
+    summary: dict[str, Any], source: Historical15mRoute
+) -> bool:
+    route = legacy._route(summary)
+    return (
+        summary.get("status") in legacy._COMPLETE_EXTENDED_15M
+        and str(route.get("base_asset") or "").upper() == source.base_asset
+        and str(route.get("provider") or "").lower() == source.provider
+        and str(route.get("provider_symbol") or "").upper() == source.symbol
+        and legacy._decimal_equal(
+            route.get("price_multiplier", "1"), source.price_multiplier
+        )
+        and str(route.get("route_origin") or "") == "historical_15m_repair_registry"
+    )
+
+
 def _is_ready(summary: dict[str, Any], mapping: SourceMapping | None) -> bool:
     coverage = legacy._coverage(summary)
     _, deficiencies = legacy._coverage_deficiencies(coverage, mapping)
@@ -67,6 +84,7 @@ def preferred_summary_backtest_ready(
     mapping: SourceMapping | None,
     gate: list[dict[str, Any]],
     yahoo: list[dict[str, Any]],
+    extended_15m: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, list[dict[str, str]]]:
     rejected: list[dict[str, str]] = []
 
@@ -124,6 +142,22 @@ def preferred_summary_backtest_ready(
             )
 
     first_insufficient: tuple[dict[str, Any], str] | None = None
+    repair_route = Historical15mRegistry.load().get(base)
+    if repair_route is not None:
+        matches = [
+            item
+            for item in (extended_15m or [])
+            if _explicit_extended_matches(item, repair_route)
+        ]
+        for item in matches:
+            if _is_ready(item, mapping):
+                return item, "historical_15m_repair_backtest_ready", rejected
+            if first_insufficient is None:
+                first_insufficient = (
+                    item,
+                    "historical_15m_repair_insufficient_history",
+                )
+
     for source in mapping.routes:
         matches: list[dict[str, Any]]
         if source.provider in legacy._GATE_FULL_PROVIDERS:
@@ -275,6 +309,7 @@ def qualify_backtest_ready(
     registry: SourceMappingRegistry,
     gate_summaries: list[dict[str, Any]],
     yahoo_summaries: list[dict[str, Any]],
+    extended_15m_summaries: list[dict[str, Any]] | None = None,
     *,
     source_manifest_keys: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -283,6 +318,7 @@ def qualify_backtest_ready(
         registry,
         gate_summaries,
         yahoo_summaries,
+        extended_15m_summaries or [],
         source_manifest_keys=source_manifest_keys,
     )
     return apply_listing_limited_policy(payload, load_listing_limited_policy())

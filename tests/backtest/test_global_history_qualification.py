@@ -8,6 +8,31 @@ from app.universe.storm_discovery import StormReferenceAsset
 from scripts.backtest import build_global_history_qualification as subject
 
 
+def test_extended_15m_manifest_requires_full_26_route_evidence() -> None:
+    subject._validate_extended_15m_run_manifest(
+        {
+            "status": "PASS_COMPLETE_15M_REPAIR",
+            "scope": "full",
+            "expected_routes": 26,
+            "completed_routes": 26,
+        }
+    )
+
+
+def test_targeted_extended_15m_manifest_is_rejected() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="complete repair run"):
+        subject._validate_extended_15m_run_manifest(
+            {
+                "status": "PASS_TARGETED_15M_REPAIR",
+                "scope": "targeted",
+                "expected_routes": 1,
+                "completed_routes": 1,
+            }
+        )
+
+
 def _storm(base: str) -> StormReferenceAsset:
     return StormReferenceAsset(
         base_asset=base,
@@ -228,4 +253,3 @@ def test_merge_gate_runs_keeps_later_wins_for_plain_routes() -> None:
 
     assert len(merged) == 1
     assert merged[0]["total_5m_rows"] == 300
-

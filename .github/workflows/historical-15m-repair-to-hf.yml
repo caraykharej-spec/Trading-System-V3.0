@@ -1,0 +1,245 @@
+name: Historical 15m Repair to HF
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "UTC inclusive lower bound; default is reviewed 2022-01-01 policy"
+        required: false
+        default: "2022-01-01T00:00:00Z"
+        type: string
+      end:
+        description: "UTC exclusive upper bound; leave empty for current UTC"
+        required: false
+        default: ""
+        type: string
+      base_asset:
+        description: "Optional single asset smoke/repair (not valid as a global manifest)"
+        required: false
+        default: ""
+        type: string
+      force:
+        description: "Replace yearly objects even when SHA-256 matches"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-15m-repair-to-hf
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+  AWS_DEFAULT_REGION: ${{ secrets.HF_S3_REGION }}
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_RETRY_MODE: adaptive
+  AWS_MAX_ATTEMPTS: "5"
+  HF_S3_MAX_ATTEMPTS: "10"
+  HF_S3_RETRY_BASE_SECONDS: "5"
+  HF_S3_RETRY_MAX_SECONDS: "300"
+  HF_S3_MIN_REQUEST_INTERVAL_SECONDS: "0.25"
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      route_count: ${{ steps.matrix.outputs.route_count }}
+      scope: ${{ steps.matrix.outputs.scope }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[dev,research-data]"
+      - name: Run focused offline tests
+        run: >-
+          python -m pytest -q
+          tests/backtest/test_historical_15m_repair_hf_sync.py
+          tests/backtest/test_global_history_qualification.py
+          tests/backtest/test_global_history_qualification_v2.py
+      - name: Discover reviewed 15m repair routes
+        run: >-
+          python -m scripts.backtest.sync_historical_15m_repair_to_hf
+          --discover-only --output artifacts/historical-15m-discovery.json
+      - name: Build bounded route matrix
+        id: matrix
+        env:
+          REQUESTED_BASE: ${{ inputs.base_asset }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("artifacts/historical-15m-discovery.json").read_text())
+          routes = payload["routes"]
+          requested = os.environ.get("REQUESTED_BASE", "").strip().upper()
+          if requested:
+              routes = [route for route in routes if route["base_asset"].upper() == requested]
+              if len(routes) != 1:
+                  raise SystemExit(f"Reviewed 15m repair route not found: {requested}")
+              scope = "targeted"
+          else:
+              if len(routes) != 26:
+                  raise SystemExit(f"Expected 26 reviewed repair routes, found {len(routes)}")
+              scope = "full"
+          print("matrix=" + json.dumps({"route": routes}, separators=(",", ":"), default=str))
+          print(f"route_count={len(routes)}")
+          print(f"scope={scope}")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: historical-15m-discovery-${{ github.run_id }}
+          path: artifacts/historical-15m-discovery.json
+          retention-days: 30
+
+  sync:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      INPUT_START: ${{ inputs.start }}
+      INPUT_END: ${{ inputs.end }}
+      INPUT_FORCE: ${{ inputs.force }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install -e ".[research-data]"
+      - name: Verify route credentials
+        if: matrix.route.provider == 'alpaca_sip'
+        run: |
+          if [ -z "${ALPACA_API_KEY_ID:-}" ] || [ -z "${ALPACA_API_SECRET_KEY:-}" ]; then
+            echo "Alpaca Basic API secrets are required for equity history." >&2
+            exit 1
+          fi
+      - name: Sync provider-backed 15m route
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          args=(--base-asset '${{ matrix.route.base_asset }}' --output artifacts/route-summary.json)
+          if [ -n "${INPUT_START:-}" ]; then args+=(--start "$INPUT_START"); fi
+          if [ -n "${INPUT_END:-}" ]; then args+=(--end "$INPUT_END"); fi
+          if [ "${INPUT_FORCE:-false}" = "true" ]; then args+=(--force); fi
+          python -m scripts.backtest.sync_historical_15m_repair_to_hf "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: historical-15m-route-${{ strategy.job-index }}
+          path: artifacts/route-summary.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  summarize:
+    needs: [discover, sync]
+    if: always() && needs.discover.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.HF_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HF_S3_SECRET_ACCESS_KEY }}
+      HF_S3_ENDPOINT: ${{ secrets.HF_S3_ENDPOINT }}
+      HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
+      EXPECTED_ROUTES: ${{ needs.discover.outputs.route_count }}
+      REPAIR_SCOPE: ${{ needs.discover.outputs.scope }}
+      SYNC_RESULT: ${{ needs.sync.result }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: historical-15m-route-*
+          path: artifacts/routes
+      - name: Build run manifest
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          summaries = [json.loads(path.read_text()) for path in Path("artifacts/routes").rglob("route-summary.json")]
+          expected = int(os.environ["EXPECTED_ROUTES"])
+          scope = os.environ["REPAIR_SCOPE"]
+          complete = sum(item.get("status") == "COMPLETE" for item in summaries)
+          errors = sum(item.get("status") == "ERROR" for item in summaries)
+          missing = max(0, expected - len(summaries))
+          failed = os.environ.get("SYNC_RESULT") != "success" or complete != expected or errors or missing
+          if failed:
+              status = "FAIL_INCOMPLETE_15M_REPAIR"
+          elif scope == "full" and expected == 26:
+              status = "PASS_COMPLETE_15M_REPAIR"
+          else:
+              status = "PASS_TARGETED_15M_REPAIR"
+          payload = {
+              "schema_version": 1,
+              "generated_at": datetime.now(timezone.utc).isoformat(),
+              "github_run_id": os.environ.get("GITHUB_RUN_ID"),
+              "github_sha": os.environ.get("GITHUB_SHA"),
+              "scope": scope,
+              "status": status,
+              "expected_routes": expected,
+              "received_route_summaries": len(summaries),
+              "completed_routes": complete,
+              "error_routes": errors,
+              "missing_route_summaries": missing,
+              "total_rows": sum(int(item.get("total_rows", 0)) for item in summaries),
+              "partition_objects_recorded": sum(int(item.get("partition_objects_recorded", 0)) for item in summaries),
+              "route_summaries": summaries,
+          }
+          Path("artifacts/historical-15m-run-manifest.json").write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n"
+          )
+          if failed:
+              Path("artifacts/incomplete.flag").write_text("1\n")
+          print(json.dumps({key: payload[key] for key in ("status", "scope", "expected_routes", "completed_routes", "error_routes", "missing_route_summaries", "total_rows")}))
+          PY
+      - name: Publish run manifest
+        run: |
+          python - <<'PY'
+          import os
+          from scripts.backtest import hf_s3
+
+          scope = os.environ["REPAIR_SCOPE"]
+          directory = "runs" if scope == "full" else "targeted-runs"
+          hf_s3.aws(
+              "s3api", "put-object",
+              "--bucket", os.environ["HF_S3_BUCKET"],
+              "--key", f"manifests/historical-15m-repair/v1/{directory}/{os.environ['GITHUB_RUN_ID']}.json",
+              "--body", "artifacts/historical-15m-run-manifest.json",
+              "--content-type", "application/json",
+          )
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: historical-15m-run-manifest-${{ github.run_id }}
+          path: artifacts/historical-15m-run-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce requested transfer
+        run: |
+          if [ -f artifacts/incomplete.flag ]; then
+            echo "Historical 15m repair is incomplete." >&2
+            exit 1
+          fi
