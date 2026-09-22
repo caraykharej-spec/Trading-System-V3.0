@@ -17,12 +17,15 @@ class RegimeTimeSlice:
     end_index: int
     score: Decimal
     sample_count: int = 1
+    series_id: str = "GLOBAL"
 
     def __post_init__(self) -> None:
         if not self.slice_id.strip():
             raise ValueError("slice_id must be non-empty")
         if not self.regime.strip():
             raise ValueError("regime must be non-empty")
+        if not self.series_id.strip():
+            raise ValueError("series_id must be non-empty")
         if self.start_index < 0:
             raise ValueError("start_index must be non-negative")
         if self.end_index <= self.start_index:
@@ -127,7 +130,11 @@ def _longest_weak_run(
     hundred = Decimal("100")
     current = 0
     longest = 0
+    previous_series: str | None = None
     for item in slices:
+        if item.series_id != previous_series:
+            current = 0
+            previous_series = item.series_id
         relative = item.score / overall_score * hundred
         if relative < floor_percent:
             current += 1
@@ -183,6 +190,7 @@ def _fingerprint(
         "slices": [
             {
                 "slice_id": item.slice_id,
+                "series_id": item.series_id,
                 "regime": item.regime,
                 "start_index": item.start_index,
                 "end_index": item.end_index,
@@ -230,11 +238,22 @@ def qualify_regime_time_robustness(
         raise ValueError("slice_id values must be unique")
 
     ordered = tuple(
-        sorted(slices, key=lambda item: (item.start_index, item.end_index, item.slice_id))
+        sorted(
+            slices,
+            key=lambda item: (
+                item.series_id,
+                item.start_index,
+                item.end_index,
+                item.slice_id,
+            ),
+        )
     )
     for previous, current in zip(ordered, ordered[1:]):
-        if current.start_index < previous.end_index:
-            raise ValueError("time slices must not overlap")
+        if (
+            current.series_id == previous.series_id
+            and current.start_index < previous.end_index
+        ):
+            raise ValueError("time slices within a series must not overlap")
 
     regimes: dict[str, list[RegimeTimeSlice]] = defaultdict(list)
     for item in ordered:

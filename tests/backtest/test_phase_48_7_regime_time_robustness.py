@@ -172,6 +172,40 @@ def test_overlapping_time_slices_are_rejected():
         qualify_regime_time_robustness(tuple(slices))
 
 
+def test_overlapping_slices_from_independent_series_are_allowed():
+    slices = (
+        RegimeTimeSlice("a-1", "TREND", 0, 10, Decimal("100"), series_id="A"),
+        RegimeTimeSlice("b-1", "RANGE", 0, 10, Decimal("100"), series_id="B"),
+        RegimeTimeSlice("a-2", "TREND", 10, 20, Decimal("100"), series_id="A"),
+        RegimeTimeSlice("b-2", "RANGE", 10, 20, Decimal("100"), series_id="B"),
+    )
+
+    report = qualify_regime_time_robustness(slices)
+
+    assert report.passed is True
+
+
+def test_consecutive_weak_run_resets_between_series():
+    thresholds = RegimeTimeThresholds(
+        min_regime_relative_score_percent=Decimal("0"),
+        max_regime_spread_percent=Decimal("100"),
+        weak_slice_floor_percent=Decimal("90"),
+        min_stable_time_fraction=Decimal("0"),
+        max_time_degradation_percent=Decimal("100"),
+        max_consecutive_weak_slices=1,
+    )
+    slices = (
+        RegimeTimeSlice("a-1", "TREND", 0, 10, Decimal("40"), series_id="A"),
+        RegimeTimeSlice("b-1", "RANGE", 0, 10, Decimal("40"), series_id="B"),
+        RegimeTimeSlice("a-2", "TREND", 10, 20, Decimal("100"), series_id="A"),
+        RegimeTimeSlice("b-2", "RANGE", 10, 20, Decimal("100"), series_id="B"),
+    )
+
+    report = qualify_regime_time_robustness(slices, thresholds=thresholds)
+
+    assert report.max_consecutive_weak_slices == 1
+
+
 def test_duplicate_slice_ids_are_rejected():
     slices = list(_balanced_slices())
     slices[1] = RegimeTimeSlice(
