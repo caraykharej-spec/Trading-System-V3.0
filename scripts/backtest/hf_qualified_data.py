@@ -17,6 +17,7 @@ from scripts.backtest import hf_s3
 
 REQUIRED_TIMEFRAMES = ("15m", "1h", "4h", "1d")
 COMPLETE_GATE = {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
+COMPLETE_RESEARCH_PROVIDERS = {"yahoo", "alpaca_sip", "dukascopy"}
 QUALIFIED_STATUSES = {"QUALIFIED", "QUALIFIED_LISTING_LIMITED_HISTORY"}
 
 
@@ -114,7 +115,7 @@ def select_source_summary(
             status = str(summary.get("status") or "")
             if provider.startswith("gateio") and status not in COMPLETE_GATE:
                 continue
-            if provider == "yahoo" and status != "COMPLETE":
+            if provider in COMPLETE_RESEARCH_PROVIDERS and status != "COMPLETE":
                 continue
             selected = summary
     if selected is None:

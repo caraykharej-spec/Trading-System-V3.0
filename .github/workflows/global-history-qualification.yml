@@ -10,8 +10,10 @@ on:
       - "scripts/backtest/hf_s3.py"
       - "scripts/backtest/sync_gate_universe_monthly_archive_to_hf.py"
       - "scripts/backtest/sync_yahoo_history_to_hf.py"
+      - "scripts/backtest/sync_historical_15m_repair_to_hf.py"
       - "scripts/backtest/filter_yahoo_fallback_routes.py"
       - "config/market_data/source_registry.json"
+      - "config/market_data/historical_15m_repair_sources.json"
       - "config/market_data/listing_limited_history.json"
   workflow_dispatch:
     inputs:
@@ -24,6 +26,11 @@ on:
         description: "Yahoo fallback manifest run ID"
         required: true
         default: "35105834121"
+        type: string
+      extended_15m_run_id:
+        description: "Full Historical 15m Repair run ID; leave empty to retain the prior Yahoo-only qualification path"
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -58,6 +65,7 @@ jobs:
       HF_S3_BUCKET: ${{ secrets.HF_S3_BUCKET }}
       GATE_RUN_IDS: ${{ inputs.gate_run_ids || '35016283516,35057123312' }}
       YAHOO_RUN_ID: ${{ inputs.yahoo_run_id || '35105834121' }}
+      EXTENDED_15M_RUN_ID: ${{ inputs.extended_15m_run_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,11 +92,16 @@ jobs:
       - name: Build Storm-authoritative global qualification
         run: |
           mkdir -p artifacts
-          python -m scripts.backtest.build_global_history_qualification_v2 \
-            --gate-run-ids "$GATE_RUN_IDS" \
-            --yahoo-run-id "$YAHOO_RUN_ID" \
-            --output-json artifacts/global-history-qualification.json \
+          args=(
+            --gate-run-ids "$GATE_RUN_IDS"
+            --yahoo-run-id "$YAHOO_RUN_ID"
+            --output-json artifacts/global-history-qualification.json
             --output-md artifacts/global-history-qualification.md
+          )
+          if [ -n "${EXTENDED_15M_RUN_ID:-}" ]; then
+            args+=(--extended-15m-run-id "$EXTENDED_15M_RUN_ID")
+          fi
+          python -m scripts.backtest.build_global_history_qualification_v2 "${args[@]}"
 
       - name: Publish immutable run report to HF with resilient transport
         env:

@@ -25,6 +25,7 @@ from scripts.backtest import hf_s3
 _SCHEMA_VERSION = 1
 _COMPLETE_GATE = {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
 _COMPLETE_YAHOO = {"COMPLETE"}
+_COMPLETE_EXTENDED_15M = {"COMPLETE"}
 _GATE_FULL_PROVIDERS = {"gateio", "gateio_futures"}
 _REQUIRED_BACKTEST_TIMEFRAMES = ("15m", "1h", "4h", "1d")
 _MINIMUM_STRATEGY_HISTORY = 200
@@ -60,6 +61,17 @@ def _route_summary_list(payload: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         raise ValueError("run manifest is missing route_summaries")
     return [item for item in raw if isinstance(item, dict)]
+
+
+def _validate_extended_15m_run_manifest(payload: dict[str, Any]) -> None:
+    if payload.get("status") != "PASS_COMPLETE_15M_REPAIR":
+        raise ValueError("extended 15m manifest is not a complete repair run")
+    if payload.get("scope") != "full":
+        raise ValueError("extended 15m manifest is not full-scope evidence")
+    if int(payload.get("expected_routes") or 0) != 26:
+        raise ValueError("extended 15m manifest does not contain the locked 26-route scope")
+    if int(payload.get("completed_routes") or 0) != 26:
+        raise ValueError("extended 15m manifest did not complete all 26 routes")
 
 
 def _route_key(summary: dict[str, Any]) -> tuple[str, str, str]:
@@ -149,6 +161,7 @@ def _preferred_summary(
     mapping: SourceMapping | None,
     gate: list[dict[str, Any]],
     yahoo: list[dict[str, Any]],
+    extended_15m: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None, list[dict[str, str]]]:
     rejected: list[dict[str, str]] = []
     gate_for_base = [item for item in gate if _route_key(item)[0] == base]
@@ -323,6 +336,7 @@ def qualify(
     registry: SourceMappingRegistry,
     gate_summaries: list[dict[str, Any]],
     yahoo_summaries: list[dict[str, Any]],
+    extended_15m_summaries: list[dict[str, Any]] | None = None,
     *,
     source_manifest_keys: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -337,7 +351,11 @@ def qualify(
         base = reference.base_asset.upper()
         mapping = registry.get(base)
         selected, identity_policy, rejected = _preferred_summary(
-            base, mapping, gate_summaries, yahoo_summaries
+            base,
+            mapping,
+            gate_summaries,
+            yahoo_summaries,
+            extended_15m_summaries or [],
         )
         rejected_count += len(rejected)
         if selected is None:
@@ -546,9 +564,12 @@ def _parse_run_ids(value: str) -> list[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Qualify Gate+Yahoo history against live Storm universe")
+    parser = argparse.ArgumentParser(
+        description="Qualify Gate, Yahoo and reviewed 15m repair history against live Storm universe"
+    )
     parser.add_argument("--gate-run-ids", required=True)
     parser.add_argument("--yahoo-run-id", required=True)
+    parser.add_argument("--extended-15m-run-id")
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--output-md", required=True)
     args = parser.parse_args()
@@ -558,10 +579,23 @@ def main() -> int:
         raise SystemExit("--yahoo-run-id must be numeric")
     gate_keys = [f"manifests/gate-history/v2/runs/{item}.json" for item in gate_ids]
     yahoo_key = f"manifests/yahoo-history/v1/runs/{args.yahoo_run_id}.json"
+    if args.extended_15m_run_id and not args.extended_15m_run_id.isdigit():
+        raise SystemExit("--extended-15m-run-id must be numeric")
+    extended_key = (
+        f"manifests/historical-15m-repair/v1/runs/{args.extended_15m_run_id}.json"
+        if args.extended_15m_run_id
+        else None
+    )
     gate_manifests = [_load_hf_json(key) for key in gate_keys]
     yahoo_manifest = _load_hf_json(yahoo_key)
+    extended_manifest = _load_hf_json(extended_key) if extended_key else None
+    if extended_manifest is not None:
+        _validate_extended_15m_run_manifest(extended_manifest)
     gate_summaries = merge_gate_runs(gate_manifests)
     yahoo_summaries = _route_summary_list(yahoo_manifest)
+    extended_summaries = (
+        _route_summary_list(extended_manifest) if extended_manifest is not None else []
+    )
     storm = StormReferenceUniverseProvider().discover()
     if not storm:
         raise SystemExit("live Storm reference universe is empty")
@@ -571,7 +605,8 @@ def main() -> int:
         SourceMappingRegistry.load(),
         gate_summaries,
         yahoo_summaries,
-        source_manifest_keys=[*gate_keys, yahoo_key],
+        extended_summaries,
+        source_manifest_keys=[*gate_keys, yahoo_key, *([extended_key] if extended_key else [])],
     )
     json_path = Path(args.output_json)
     md_path = Path(args.output_md)

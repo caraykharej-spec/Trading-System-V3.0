@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "purpose": "research-only replacement for source-limited Yahoo 15m history",
+  "default_start": "2022-01-01T00:00:00Z",
+  "minimum_history_days": 1095,
+  "routes": {
+    "AAPL": {"asset_class":"equity","provider":"alpaca_sip","symbol":"AAPL","session":"us_rth"},
+    "AMD": {"asset_class":"equity","provider":"alpaca_sip","symbol":"AMD","session":"us_rth"},
+    "AMZN": {"asset_class":"equity","provider":"alpaca_sip","symbol":"AMZN","session":"us_rth"},
+    "AVGO": {"asset_class":"equity","provider":"alpaca_sip","symbol":"AVGO","session":"us_rth"},
+    "COIN": {"asset_class":"equity","provider":"alpaca_sip","symbol":"COIN","session":"us_rth"},
+    "CRCL": {"asset_class":"equity","provider":"alpaca_sip","symbol":"CRCL","session":"us_rth","listing_limited":true},
+    "GOOG": {"asset_class":"equity","provider":"alpaca_sip","symbol":"GOOG","session":"us_rth"},
+    "HOOD": {"asset_class":"equity","provider":"alpaca_sip","symbol":"HOOD","session":"us_rth"},
+    "META": {"asset_class":"equity","provider":"alpaca_sip","symbol":"META","session":"us_rth"},
+    "MSFT": {"asset_class":"equity","provider":"alpaca_sip","symbol":"MSFT","session":"us_rth"},
+    "MSTR": {"asset_class":"equity","provider":"alpaca_sip","symbol":"MSTR","session":"us_rth"},
+    "MU": {"asset_class":"equity","provider":"alpaca_sip","symbol":"MU","session":"us_rth"},
+    "NFLX": {"asset_class":"equity","provider":"alpaca_sip","symbol":"NFLX","session":"us_rth","price_multiplier":"10"},
+    "NVDA": {"asset_class":"equity","provider":"alpaca_sip","symbol":"NVDA","session":"us_rth"},
+    "PLTR": {"asset_class":"equity","provider":"alpaca_sip","symbol":"PLTR","session":"us_rth"},
+    "TSLA": {"asset_class":"equity","provider":"alpaca_sip","symbol":"TSLA","session":"us_rth"},
+
+    "AUD": {"asset_class":"forex","provider":"dukascopy","symbol":"AUDUSD","price_divisor":"100000"},
+    "EUR": {"asset_class":"forex","provider":"dukascopy","symbol":"EURUSD","price_divisor":"100000"},
+    "GBP": {"asset_class":"forex","provider":"dukascopy","symbol":"GBPUSD","price_divisor":"100000"},
+    "NZD": {"asset_class":"forex","provider":"dukascopy","symbol":"NZDUSD","price_divisor":"100000"},
+    "USDCAD": {"asset_class":"forex","provider":"dukascopy","symbol":"USDCAD","price_divisor":"100000"},
+    "USDCHF": {"asset_class":"forex","provider":"dukascopy","symbol":"USDCHF","price_divisor":"100000"},
+    "UKOIL": {"asset_class":"commodity","provider":"dukascopy","symbol":"BRENTCMDUSD","price_divisor":"1000"},
+    "XAG": {"asset_class":"commodity","provider":"dukascopy","symbol":"XAGUSD","price_divisor":"1000"},
+    "XAU": {"asset_class":"commodity","provider":"dukascopy","symbol":"XAUUSD","price_divisor":"1000"},
+    "SPX": {"asset_class":"index","provider":"dukascopy","symbol":"USA500IDXUSD","price_divisor":"1000","proxy_for":"SPX"}
+  }
+}
