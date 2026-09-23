@@ -62,6 +62,19 @@ class Partition:
     first_timestamp: str
     last_timestamp: str
     reused_verified: bool
+    month: int | None = None
+
+
+class DukascopyAcquisitionError(ProviderError):
+    """Fail-closed provider error that carries resumability evidence."""
+
+    def __init__(self, message: str, *, evidence: dict[str, object]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
+
+
+class DukascopyPermanentError(ProviderError):
+    """A request failure that deferred sweeps must not retry."""
 
 
 def discover_routes() -> list[Historical15mRoute]:
@@ -141,7 +154,9 @@ def _request_bytes(
                 return b""
             retryable = exc.code in _TRANSIENT_HTTP_STATUS
             http_failures += 1
-            if not retryable or http_failures >= http_budget:
+            if not retryable:
+                raise DukascopyPermanentError(f"historical data HTTP {exc.code}") from exc
+            if http_failures >= http_budget:
                 raise ProviderError(f"historical data HTTP {exc.code}") from exc
             retry_number = http_failures
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -348,26 +363,74 @@ def fetch_dukascopy_15m(
 ) -> list[Candle]:
     minutes: dict[datetime, Candle] = {}
     final_day = (end - timedelta(microseconds=1)).date()
-    for day in _date_range(start.date(), final_day):
-        try:
-            compressed = _request_bytes(_dukascopy_url(route, day))
-        except ProviderError as exc:
-            raise ProviderError(
-                f"Dukascopy {route.base_asset}/{route.symbol} failed on {day.isoformat()}: {exc}"
-            ) from exc
-        _pace_dukascopy_request()
-        daily = parse_dukascopy_day(compressed, route, day, quality=quality)
-        if not daily:
-            quality["source_days_without_rows"] += 1
-        for candle in daily:
-            if candle.timestamp < start or candle.timestamp >= end:
+    pending = list(_date_range(start.date(), final_day))
+    failures: dict[date, str] = {}
+    sweeps = _positive_env_int("DUKASCOPY_DEFERRED_RETRY_SWEEPS", 3)
+    cooldown = _positive_env_float("DUKASCOPY_DEFERRED_RETRY_COOLDOWN_SECONDS", 60.0)
+    recovered = 0
+
+    for sweep in range(1, sweeps + 1):
+        if sweep > 1 and cooldown:
+            time.sleep(cooldown)
+        retry_days: list[date] = []
+        for day in pending:
+            try:
+                compressed = _request_bytes(_dukascopy_url(route, day))
+            except DukascopyPermanentError as exc:
+                raise DukascopyAcquisitionError(
+                    f"Dukascopy {route.base_asset}/{route.symbol} failed on "
+                    f"{day.isoformat()}: {exc}",
+                    evidence={
+                        "failed_date": day.isoformat(),
+                        "pending_days": [day.isoformat()],
+                        "pending_day_errors": {day.isoformat(): str(exc)},
+                        "deferred_retry_sweeps": sweep,
+                        "pending_days_recovered": recovered,
+                        "failure_class": "non_retryable_http",
+                    },
+                ) from exc
+            except ProviderError as exc:
+                failures[day] = str(exc)
+                retry_days.append(day)
                 continue
-            prior = minutes.get(candle.timestamp)
-            if prior is not None and prior != candle:
-                raise ProviderError(
-                    f"Dukascopy conflicting duplicate at {candle.timestamp.isoformat()}"
-                )
-            minutes[candle.timestamp] = candle
+            _pace_dukascopy_request()
+            daily = parse_dukascopy_day(compressed, route, day, quality=quality)
+            if not daily:
+                quality["source_days_without_rows"] += 1
+            if day in failures:
+                recovered += 1
+                failures.pop(day, None)
+            for candle in daily:
+                if candle.timestamp < start or candle.timestamp >= end:
+                    continue
+                prior = minutes.get(candle.timestamp)
+                if prior is not None and prior != candle:
+                    raise ProviderError(
+                        f"Dukascopy conflicting duplicate at {candle.timestamp.isoformat()}"
+                    )
+                minutes[candle.timestamp] = candle
+        pending = retry_days
+        if not pending:
+            break
+
+    if pending:
+        failed_days = [item.isoformat() for item in pending]
+        first = pending[0]
+        message = (
+            f"Dukascopy {route.base_asset}/{route.symbol} failed on {first.isoformat()}: "
+            f"{failures[first]}"
+        )
+        raise DukascopyAcquisitionError(
+            message,
+            evidence={
+                "failed_date": first.isoformat(),
+                "pending_days": failed_days,
+                "pending_day_errors": {item.isoformat(): failures[item] for item in pending},
+                "deferred_retry_sweeps": sweeps,
+                "pending_days_recovered": recovered,
+            },
+        )
+    quality["pending_days_recovered"] = quality.get("pending_days_recovered", 0) + recovered
     return aggregate_candles(list(minutes.values()), "15m", session="utc")
 
 
@@ -454,11 +517,21 @@ def _write_parquet(
     pq.write_table(table, path, compression="zstd", version="2.6")
 
 
-def _partition_key(route: Historical15mRoute, timeframe: str, year: int) -> str:
-    return (
+def _partition_key(
+    route: Historical15mRoute,
+    timeframe: str,
+    year: int,
+    month: int | None = None,
+) -> str:
+    prefix = (
         f"{_NAMESPACE}/provider={storage._slug(route.provider)}/"
         f"canonical={storage._slug(route.base_asset)}/market={storage._slug(route.symbol)}/"
-        f"timeframe={timeframe}/year={year:04d}/part-000.parquet"
+        f"timeframe={timeframe}/year={year:04d}/"
+    )
+    return (
+        f"{prefix}month={month:02d}/part-000.parquet"
+        if month is not None
+        else f"{prefix}part-000.parquet"
     )
 
 
@@ -469,8 +542,9 @@ def _store_partition(
     rows: list[Candle],
     *,
     force: bool,
+    month: int | None = None,
 ) -> Partition:
-    key = _partition_key(route, timeframe, year)
+    key = _partition_key(route, timeframe, year, month)
     with tempfile.TemporaryDirectory(prefix="historical-15m-repair-") as temp_dir:
         path = Path(temp_dir) / "part-000.parquet"
         _write_parquet(path, route, timeframe, rows)
@@ -488,6 +562,7 @@ def _store_partition(
         first_timestamp=rows[0].timestamp.isoformat(),
         last_timestamp=rows[-1].timestamp.isoformat(),
         reused_verified=reused,
+        month=month,
     )
 
 
@@ -509,6 +584,14 @@ def _checkpoint_key(route: Historical15mRoute, year: int) -> str:
         f"{_MANIFEST_NAMESPACE}/checkpoints/provider={storage._slug(route.provider)}/"
         f"canonical={storage._slug(route.base_asset)}/market={storage._slug(route.symbol)}/"
         f"year={year:04d}.json"
+    )
+
+
+def _month_checkpoint_key(route: Historical15mRoute, year: int, month: int) -> str:
+    return (
+        f"{_MANIFEST_NAMESPACE}/checkpoints/provider={storage._slug(route.provider)}/"
+        f"canonical={storage._slug(route.base_asset)}/market={storage._slug(route.symbol)}/"
+        f"year={year:04d}/month={month:02d}.json"
     )
 
 
@@ -545,6 +628,7 @@ def _partition_from_checkpoint(raw: object) -> Partition:
         first_timestamp=str(raw["first_timestamp"]),
         last_timestamp=str(raw["last_timestamp"]),
         reused_verified=True,
+        month=int(raw["month"]) if raw.get("month") is not None else None,
     )
 
 
@@ -627,12 +711,86 @@ def _write_year_checkpoint(
     return key
 
 
+def _load_valid_month_checkpoint(
+    route: Historical15mRoute,
+    *,
+    year: int,
+    month: int,
+    start: datetime,
+    end: datetime,
+    force: bool,
+) -> tuple[list[Partition], dict[str, int]] | None:
+    if force:
+        return None
+    checkpoint = _load_remote_json(_month_checkpoint_key(route, year, month))
+    if checkpoint is None:
+        return None
+    if (
+        checkpoint.get("status") != "COMPLETE_MONTH_CHECKPOINT"
+        or checkpoint.get("route") != _route_identity(route)
+        or checkpoint.get("range_start") != start.isoformat()
+        or checkpoint.get("range_end") != end.isoformat()
+        or checkpoint.get("year") != year
+        or checkpoint.get("month") != month
+    ):
+        return None
+    try:
+        partitions = [_partition_from_checkpoint(item) for item in checkpoint.get("partitions", [])]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        len(partitions) != 4
+        or {item.timeframe for item in partitions} != {"15m", "1h", "4h", "1d"}
+        or any(item.year != year or item.month != month or item.rows <= 0 for item in partitions)
+    ):
+        return None
+    for partition in partitions:
+        if len(partition.sha256) != 64:
+            return None
+        if storage._remote_sha256(partition.object_key) != partition.sha256:
+            return None
+    raw_quality = checkpoint.get("quality")
+    if not isinstance(raw_quality, dict):
+        return None
+    quality = {name: int(raw_quality.get(name) or 0) for name in _empty_quality()}
+    return partitions, quality
+
+
+def _write_month_checkpoint(
+    route: Historical15mRoute,
+    *,
+    year: int,
+    month: int,
+    start: datetime,
+    end: datetime,
+    quality: dict[str, int],
+    partitions: list[Partition],
+) -> str:
+    key = _month_checkpoint_key(route, year, month)
+    payload = {
+        "schema_version": _SCHEMA_VERSION,
+        "status": "COMPLETE_MONTH_CHECKPOINT",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "route": _route_identity(route),
+        "year": year,
+        "month": month,
+        "range_start": start.isoformat(),
+        "range_end": end.isoformat(),
+        "quality": quality,
+        "integrity_policy": "all_partition_sha256_read_back_verified_before_checkpoint",
+        "partitions": [asdict(item) for item in partitions],
+    }
+    storage._put_json(payload, key)
+    return key
+
+
 def _empty_quality() -> dict[str, int]:
     return {
         "invalid_rows_dropped": 0,
         "ohlc_invariant_rows_dropped": 0,
         "out_of_session_rows_dropped": 0,
         "source_days_without_rows": 0,
+        "pending_days_recovered": 0,
     }
 
 
@@ -665,6 +823,21 @@ def _year_ranges(start: datetime, end: datetime) -> Iterable[tuple[int, datetime
         if chunk_start < chunk_end:
             yield year, chunk_start, chunk_end
         year += 1
+
+
+def _month_ranges(start: datetime, end: datetime) -> Iterable[tuple[int, int, datetime, datetime]]:
+    cursor = datetime(start.year, start.month, 1, tzinfo=timezone.utc)
+    while cursor < end:
+        next_month = (
+            datetime(cursor.year + 1, 1, 1, tzinfo=timezone.utc)
+            if cursor.month == 12
+            else datetime(cursor.year, cursor.month + 1, 1, tzinfo=timezone.utc)
+        )
+        chunk_start = max(start, cursor)
+        chunk_end = min(end, next_month)
+        if chunk_start < chunk_end:
+            yield cursor.year, cursor.month, chunk_start, chunk_end
+        cursor = next_month
 
 
 def _validate_coverage(
@@ -733,8 +906,9 @@ def _sync_dukascopy_incremental(
     quality = _empty_quality()
     partitions: list[Partition] = []
     checkpoint_keys: list[str] = []
-    checkpoint_years_reused = 0
-    checkpoint_years_written = 0
+    legacy_years_reused: list[int] = []
+    months_reused: list[str] = []
+    months_written: list[str] = []
 
     for year, chunk_start, chunk_end in _year_ranges(start, end):
         cached = _load_valid_year_checkpoint(
@@ -745,34 +919,85 @@ def _sync_dukascopy_incremental(
             partitions.extend(year_partitions)
             _add_quality(quality, year_quality)
             checkpoint_keys.append(_checkpoint_key(route, year))
-            checkpoint_years_reused += 1
+            legacy_years_reused.append(year)
             continue
 
-        year_quality = _empty_quality()
-        fifteen = fetch_dukascopy_15m(route, start=chunk_start, end=chunk_end, quality=year_quality)
-        if not fifteen:
-            raise ProviderError(
-                f"Dukascopy {route.base_asset}/{route.symbol} returned no valid rows "
-                f"for {chunk_start.date()}..{chunk_end.date()}"
-            )
-        datasets = _datasets_from_fifteen(route, fifteen)
-        year_partitions = [
-            _store_partition(route, timeframe, year, rows, force=force)
-            for timeframe, rows in datasets.items()
-        ]
-        checkpoint_keys.append(
-            _write_year_checkpoint(
+        for month_year, month, month_start, month_end in _month_ranges(chunk_start, chunk_end):
+            month_label = f"{month_year:04d}-{month:02d}"
+            cached_month = _load_valid_month_checkpoint(
                 route,
-                year=year,
-                start=chunk_start,
-                end=chunk_end,
-                quality=year_quality,
-                partitions=year_partitions,
+                year=month_year,
+                month=month,
+                start=month_start,
+                end=month_end,
+                force=force,
             )
-        )
-        checkpoint_years_written += 1
-        partitions.extend(year_partitions)
-        _add_quality(quality, year_quality)
+            if cached_month is not None:
+                month_partitions, month_quality = cached_month
+                partitions.extend(month_partitions)
+                _add_quality(quality, month_quality)
+                checkpoint_keys.append(_month_checkpoint_key(route, month_year, month))
+                months_reused.append(month_label)
+                continue
+
+            month_quality = _empty_quality()
+            try:
+                fifteen = fetch_dukascopy_15m(
+                    route,
+                    start=month_start,
+                    end=month_end,
+                    quality=month_quality,
+                )
+            except DukascopyAcquisitionError as exc:
+                evidence = {
+                    "checkpoint_policy": "legacy_year_then_month_sha256_verified_resume",
+                    "legacy_years_reused": legacy_years_reused,
+                    "months_reused": months_reused,
+                    "months_written": months_written,
+                    "failed_month": month_label,
+                    **exc.evidence,
+                }
+                raise DukascopyAcquisitionError(str(exc), evidence=evidence) from exc
+            if not fifteen:
+                evidence = {
+                    "checkpoint_policy": "legacy_year_then_month_sha256_verified_resume",
+                    "legacy_years_reused": legacy_years_reused,
+                    "months_reused": months_reused,
+                    "months_written": months_written,
+                    "failed_month": month_label,
+                    "pending_days": [],
+                }
+                raise DukascopyAcquisitionError(
+                    f"Dukascopy {route.base_asset}/{route.symbol} returned no valid rows "
+                    f"for {month_start.date()}..{month_end.date()}",
+                    evidence=evidence,
+                )
+            datasets = _datasets_from_fifteen(route, fifteen)
+            month_partitions = [
+                _store_partition(
+                    route,
+                    timeframe,
+                    month_year,
+                    rows,
+                    force=force,
+                    month=month,
+                )
+                for timeframe, rows in datasets.items()
+            ]
+            checkpoint_keys.append(
+                _write_month_checkpoint(
+                    route,
+                    year=month_year,
+                    month=month,
+                    start=month_start,
+                    end=month_end,
+                    quality=month_quality,
+                    partitions=month_partitions,
+                )
+            )
+            months_written.append(month_label)
+            partitions.extend(month_partitions)
+            _add_quality(quality, month_quality)
 
     _validate_partition_coverage(route, partitions, start=start)
     manifest: dict[str, object] = {
@@ -801,9 +1026,13 @@ def _sync_dukascopy_incremental(
             not item.reused_verified for item in partitions
         ),
         "integrity_policy": "sha256_manifest_compare_upload_verify_downloaded_bytes",
-        "checkpoint_policy": "per_year_sha256_verified_resume",
-        "checkpoint_years_reused": checkpoint_years_reused,
-        "checkpoint_years_written": checkpoint_years_written,
+        "checkpoint_policy": "legacy_year_then_month_sha256_verified_resume",
+        "legacy_years_reused": legacy_years_reused,
+        "months_reused": months_reused,
+        "months_written": months_written,
+        "checkpoint_years_reused": len(legacy_years_reused),
+        "checkpoint_months_reused": len(months_reused),
+        "checkpoint_months_written": len(months_written),
         "checkpoint_manifest_keys": checkpoint_keys,
         "partitions": [asdict(item) for item in partitions],
     }
@@ -949,6 +1178,9 @@ def main() -> int:
             "error": str(exc),
             "partitions": [],
         }
+        evidence = getattr(exc, "evidence", None)
+        if isinstance(evidence, dict):
+            payload["resume_evidence"] = evidence
         output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         raise
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
