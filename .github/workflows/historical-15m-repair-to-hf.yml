@@ -19,7 +19,7 @@ on:
         default: ""
         type: string
       force:
-        description: "Replace yearly objects even when SHA-256 matches"
+        description: "Replace checkpointed objects even when SHA-256 matches"
         required: false
         default: false
         type: boolean
@@ -49,6 +49,8 @@ env:
   DUKASCOPY_RETRY_MAX_SECONDS: "60"
   DUKASCOPY_RETRY_JITTER_SECONDS: "1"
   DUKASCOPY_REQUEST_INTERVAL_SECONDS: "0.2"
+  DUKASCOPY_DEFERRED_RETRY_SWEEPS: "3"
+  DUKASCOPY_DEFERRED_RETRY_COOLDOWN_SECONDS: "60"
 
 jobs:
   discover:

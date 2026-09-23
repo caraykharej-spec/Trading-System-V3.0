@@ -76,18 +76,31 @@ valid `Retry-After` header is honored when it requests a longer wait. HTTP `404`
 remains an expected empty source day; other 4xx responses fail immediately.
 Errors identify the exact failed source date.
 
+An exhausted daily request is deferred instead of immediately aborting its
+month. The downloader finishes the other days and makes three total sweeps of
+the unresolved dates, with a 60-second cooldown between sweeps. A day that is
+still unresolved remains a hard failure; an HTTP/provider error is never
+silently treated as a market holiday.
+
 ## Dukascopy checkpoint and resume policy
 
-Dukascopy acquisition is committed one calendar year at a time. A yearly
+Dukascopy acquisition is committed one calendar month at a time. A monthly
 checkpoint is written only after all four derived partitions (`15m`, `1h`,
 `4h`, and `1d`) have been uploaded and SHA-256 verified. On a later
-`force=false` run, each checkpoint's route, exact requested year range, four
-partition records, and remote object hashes are verified before that year is
-skipped. An invalid or stale checkpoint is ignored and the year is rebuilt.
+`force=false` run, each checkpoint's route, exact requested month range, four
+partition records, and remote object hashes are verified before that month is
+skipped. An invalid or stale checkpoint is ignored and the month is rebuilt.
 
-This makes a later-year provider failure resumable without accepting a partial
+Backward compatibility is deliberate: the downloader first checks the yearly
+checkpoints created by the previous implementation. A valid legacy year is
+reused as a whole; monthly checkpoints are considered only when no valid yearly
+checkpoint covers that range. Existing completed work is therefore not lost
+during migration.
+
+This makes a mid-month provider failure resumable without accepting a partial
 route as complete. The final route manifest remains fail-closed and is written
-only after every requested year is complete. `force=true` deliberately bypasses
-checkpoint reuse. The current partial calendar year is reusable only when its
+only after every requested month is complete. `force=true` deliberately
+bypasses checkpoint reuse. A partial current month is reusable only when its
 requested end timestamp exactly matches, preventing a stale checkpoint from
-hiding newly available data.
+hiding newly available data. Error summaries include reused legacy years,
+reused/written months, the failed month, and unresolved source dates.
