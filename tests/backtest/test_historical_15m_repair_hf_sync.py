@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import lzma
 import struct
+import urllib.error
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from email.message import Message
 from urllib.parse import parse_qs, urlparse
+
+import pytest
 
 from app.data.historical_15m_registry import Historical15mRegistry
 from scripts.backtest import sync_historical_15m_repair_to_hf as subject
@@ -51,6 +55,117 @@ def test_parse_dukascopy_bi5_and_apply_reviewed_scale() -> None:
     assert rows[0].high == Decimal("1.10020")
     assert rows[0].low == Decimal("1.09990")
     assert rows[0].close == Decimal("1.10010")
+
+
+class _ByteResponse:
+    status = 200
+
+    def __init__(self, payload: bytes) -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.payload
+
+
+def _http_error(status: int, retry_after: str | None = None) -> urllib.error.HTTPError:
+    headers = Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        "https://example.test/file.bi5", status, "failure", headers, None
+    )
+
+
+def test_dukascopy_503_retries_with_retry_after_backoff_and_jitter(monkeypatch) -> None:
+    responses = iter(
+        [
+            _http_error(503, "5"),
+            _http_error(503),
+            _ByteResponse(b"payload"),
+        ]
+    )
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        result = next(responses)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(subject.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+    monkeypatch.setattr(subject.random, "uniform", lambda start, end: 0.25)
+
+    result = subject._request_bytes("https://example.test/file.bi5", attempts=3)
+
+    assert result == b"payload"
+    assert calls == 3
+    assert sleeps == [5.25, 4.25]
+
+
+def test_dukascopy_non_transient_http_error_is_not_retried(monkeypatch) -> None:
+    calls = 0
+    sleeps: list[float] = []
+
+    def fake_urlopen(request, timeout):
+        nonlocal calls
+        calls += 1
+        raise _http_error(403)
+
+    monkeypatch.setattr(subject.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+
+    with pytest.raises(subject.ProviderError, match="historical data HTTP 403"):
+        subject._request_bytes("https://example.test/file.bi5", attempts=7)
+
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_dukascopy_404_remains_an_expected_empty_market_day(monkeypatch) -> None:
+    monkeypatch.setattr(
+        subject.urllib.request,
+        "urlopen",
+        lambda request, timeout: (_ for _ in ()).throw(_http_error(404)),
+    )
+    assert subject._request_bytes("https://example.test/file.bi5", attempts=7) == b""
+
+
+def test_dukascopy_timeout_retries_then_succeeds(monkeypatch) -> None:
+    responses = iter([TimeoutError("timed out"), _ByteResponse(b"payload")])
+    sleeps: list[float] = []
+
+    def fake_urlopen(request, timeout):
+        result = next(responses)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(subject.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+    monkeypatch.setattr(subject.random, "uniform", lambda start, end: 0.0)
+
+    assert subject._request_bytes("https://example.test/file.bi5", attempts=2) == b"payload"
+    assert sleeps == [2.0]
+
+
+def test_dukascopy_request_pacing_is_configurable(monkeypatch) -> None:
+    sleeps: list[float] = []
+    monkeypatch.setenv("DUKASCOPY_REQUEST_INTERVAL_SECONDS", "0.125")
+    monkeypatch.setattr(subject.time, "sleep", sleeps.append)
+
+    subject._pace_dukascopy_request()
+
+    assert sleeps == [0.125]
 
 
 def test_alpaca_is_fail_closed_to_sip_and_filters_extended_hours(monkeypatch) -> None:
