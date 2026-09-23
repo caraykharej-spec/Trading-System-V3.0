@@ -12,6 +12,7 @@ import json
 import lzma
 import math
 import os
+import random
 import struct
 import tempfile
 import time
@@ -21,6 +22,7 @@ import urllib.request
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as wall_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Iterable
 from zoneinfo import ZoneInfo
@@ -37,6 +39,7 @@ _MANIFEST_NAMESPACE = "manifests/historical-15m-repair/v1"
 _SCHEMA_VERSION = 1
 _DUKASCOPY_RECORD = struct.Struct(">5If")
 _US_EASTERN = ZoneInfo("America/New_York")
+_TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -65,9 +68,53 @@ def discover_routes() -> list[Historical15mRoute]:
     return list(Historical15mRegistry.load().all())
 
 
-def _request_bytes(url: str, *, attempts: int = 5) -> bytes:
-    delay = 1.0
+def _positive_env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    value = float(raw) if raw else default
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    value = int(raw) if raw else default
+    if value < 1:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+def _retry_after_seconds(exc: urllib.error.HTTPError, *, now: datetime | None = None) -> float:
+    value = exc.headers.get("Retry-After") if exc.headers is not None else None
+    if not value:
+        return 0.0
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(text)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        current = now or datetime.now(timezone.utc)
+        return max(0.0, (parsed.astimezone(timezone.utc) - current).total_seconds())
+
+
+def _retry_delay(attempt: int, exc: BaseException | None = None) -> float:
+    base = _positive_env_float("DUKASCOPY_RETRY_BASE_SECONDS", 2.0)
+    maximum = _positive_env_float("DUKASCOPY_RETRY_MAX_SECONDS", 60.0)
+    jitter_cap = _positive_env_float("DUKASCOPY_RETRY_JITTER_SECONDS", 1.0)
+    exponential = min(maximum, base * (2 ** (attempt - 1)))
+    retry_after = _retry_after_seconds(exc) if isinstance(exc, urllib.error.HTTPError) else 0.0
+    return max(exponential, retry_after) + random.uniform(0.0, jitter_cap)
+
+
+def _request_bytes(url: str, *, attempts: int | None = None) -> bytes:
+    attempts = attempts or _positive_env_int("DUKASCOPY_HTTP_ATTEMPTS", 7)
     for attempt in range(1, attempts + 1):
+        failure: BaseException | None = None
         request = urllib.request.Request(
             url,
             headers={"User-Agent": "Trading-System-V3 historical-15m-repair/1.0"},
@@ -78,17 +125,24 @@ def _request_bytes(url: str, *, attempts: int = 5) -> bytes:
                     raise ProviderError(f"historical data HTTP {response.status}")
                 return response.read()
         except urllib.error.HTTPError as exc:
+            failure = exc
             if exc.code == 404:
                 return b""
-            retryable = exc.code in {408, 429} or 500 <= exc.code < 600
+            retryable = exc.code in _TRANSIENT_HTTP_STATUS
             if not retryable or attempt == attempts:
                 raise ProviderError(f"historical data HTTP {exc.code}") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            failure = exc
             if attempt == attempts:
                 raise ProviderError("historical data request failed") from exc
-        time.sleep(delay)
-        delay = min(delay * 2, 20.0)
+        time.sleep(_retry_delay(attempt, failure))
     raise AssertionError("unreachable")
+
+
+def _pace_dukascopy_request() -> None:
+    delay = _positive_env_float("DUKASCOPY_REQUEST_INTERVAL_SECONDS", 0.2)
+    if delay:
+        time.sleep(delay)
 
 
 def _request_alpaca_json(url: str, *, attempts: int = 6) -> dict[str, object]:
@@ -282,6 +336,7 @@ def fetch_dukascopy_15m(
     final_day = (end - timedelta(microseconds=1)).date()
     for day in _date_range(start.date(), final_day):
         compressed = _request_bytes(_dukascopy_url(route, day))
+        _pace_dukascopy_request()
         daily = parse_dukascopy_day(compressed, route, day, quality=quality)
         if not daily:
             quality["source_days_without_rows"] += 1

@@ -65,3 +65,13 @@ large matrix and robustness workflows only after reviewing that smaller result.
 - Yearly Parquet objects are SHA-256 verified and safely reused on rerun.
 - A targeted run is diagnostic evidence only, never a complete global source
   manifest.
+
+## Dukascopy transient-failure policy
+
+Daily Dukascopy requests are paced at 0.2 seconds. HTTP `408`, `429`, `500`,
+`502`, `503` and `504`, plus network timeouts, are retried up to seven total
+attempts with exponential delays of 2, 4, 8, 16, 32 and 60 seconds plus bounded
+jitter. A valid `Retry-After` header is honored when it requests a longer wait.
+HTTP `404` remains an expected empty source day; other 4xx responses fail
+immediately. These values are explicit in the workflow environment and may be
+tuned only through a reviewed code change.
