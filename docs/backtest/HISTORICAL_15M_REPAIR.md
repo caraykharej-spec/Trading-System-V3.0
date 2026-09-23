@@ -69,9 +69,25 @@ large matrix and robustness workflows only after reviewing that smaller result.
 ## Dukascopy transient-failure policy
 
 Daily Dukascopy requests are paced at 0.2 seconds. HTTP `408`, `429`, `500`,
-`502`, `503` and `504`, plus network timeouts, are retried up to seven total
-attempts with exponential delays of 2, 4, 8, 16, 32 and 60 seconds plus bounded
-jitter. A valid `Retry-After` header is honored when it requests a longer wait.
-HTTP `404` remains an expected empty source day; other 4xx responses fail
-immediately. These values are explicit in the workflow environment and may be
-tuned only through a reviewed code change.
+`502`, `503` and `504` are retried up to seven total attempts. Transport errors
+such as connection resets and timeouts use a separate ten-attempt budget. Both
+use exponential delays of 2, 4, 8, 16, 32 and 60 seconds plus bounded jitter. A
+valid `Retry-After` header is honored when it requests a longer wait. HTTP `404`
+remains an expected empty source day; other 4xx responses fail immediately.
+Errors identify the exact failed source date.
+
+## Dukascopy checkpoint and resume policy
+
+Dukascopy acquisition is committed one calendar year at a time. A yearly
+checkpoint is written only after all four derived partitions (`15m`, `1h`,
+`4h`, and `1d`) have been uploaded and SHA-256 verified. On a later
+`force=false` run, each checkpoint's route, exact requested year range, four
+partition records, and remote object hashes are verified before that year is
+skipped. An invalid or stale checkpoint is ignored and the year is rebuilt.
+
+This makes a later-year provider failure resumable without accepting a partial
+route as complete. The final route manifest remains fail-closed and is written
+only after every requested year is complete. `force=true` deliberately bypasses
+checkpoint reuse. The current partial calendar year is reusable only when its
+requested end timestamp exactly matches, preventing a stale checkpoint from
+hiding newly available data.

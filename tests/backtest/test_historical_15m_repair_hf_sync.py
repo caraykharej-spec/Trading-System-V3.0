@@ -77,9 +77,7 @@ def _http_error(status: int, retry_after: str | None = None) -> urllib.error.HTT
     headers = Message()
     if retry_after is not None:
         headers["Retry-After"] = retry_after
-    return urllib.error.HTTPError(
-        "https://example.test/file.bi5", status, "failure", headers, None
-    )
+    return urllib.error.HTTPError("https://example.test/file.bi5", status, "failure", headers, None)
 
 
 def test_dukascopy_503_retries_with_retry_after_backoff_and_jitter(monkeypatch) -> None:
@@ -158,6 +156,44 @@ def test_dukascopy_timeout_retries_then_succeeds(monkeypatch) -> None:
     assert sleeps == [2.0]
 
 
+def test_dukascopy_transport_retry_budget_is_independent(monkeypatch) -> None:
+    responses = iter([ConnectionResetError("reset"), _ByteResponse(b"payload")])
+    monkeypatch.setattr(subject.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(subject.random, "uniform", lambda start, end: 0.0)
+
+    def fake_urlopen(request, timeout):
+        result = next(responses)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(subject.urllib.request, "urlopen", fake_urlopen)
+
+    assert (
+        subject._request_bytes("https://example.test/file.bi5", attempts=1, transport_attempts=2)
+        == b"payload"
+    )
+
+
+def test_dukascopy_failure_reports_exact_source_day(monkeypatch) -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    monkeypatch.setattr(
+        subject,
+        "_request_bytes",
+        lambda url: (_ for _ in ()).throw(subject.ProviderError("historical data request failed")),
+    )
+    monkeypatch.setattr(subject, "_pace_dukascopy_request", lambda: None)
+
+    with pytest.raises(subject.ProviderError, match=r"EUR/EURUSD failed on 2022-01-01"):
+        subject.fetch_dukascopy_15m(
+            route,
+            start=datetime(2022, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2022, 1, 2, tzinfo=timezone.utc),
+            quality=subject._empty_quality(),
+        )
+
+
 def test_dukascopy_request_pacing_is_configurable(monkeypatch) -> None:
     sleeps: list[float] = []
     monkeypatch.setenv("DUKASCOPY_REQUEST_INTERVAL_SECONDS", "0.125")
@@ -200,9 +236,7 @@ def test_alpaca_is_fail_closed_to_sip_and_filters_extended_hours(monkeypatch) ->
     query = parse_qs(urlparse(observed[0]).query)
     assert query["feed"] == ["sip"]
     assert query["adjustment"] == ["all"]
-    assert [row.timestamp for row in rows] == [
-        datetime(2026, 9, 1, 13, 30, tzinfo=timezone.utc)
-    ]
+    assert [row.timestamp for row in rows] == [datetime(2026, 9, 1, 13, 30, tzinfo=timezone.utc)]
     assert quality["out_of_session_rows_dropped"] == 1
 
 
@@ -263,6 +297,136 @@ def test_sync_builds_all_required_timeframes_without_network_or_storage(monkeypa
     assert set(payload["coverage"]) == {"15m", "1h", "4h", "1d"}
     assert payload["qualification_scope"] == "research_backtest_only_live_route_order_unchanged"
     assert {item[0] for item in stored} == {"15m", "1h", "4h", "1d"}
+
+
+def _fake_partition(
+    timeframe: str, year: int, start: datetime, *, reused: bool
+) -> subject.Partition:
+    return subject.Partition(
+        timeframe=timeframe,
+        year=year,
+        rows=1,
+        object_key=f"{timeframe}/{year}",
+        sha256="a" * 64,
+        first_timestamp=start.isoformat(),
+        last_timestamp=(start + timedelta(hours=1)).isoformat(),
+        reused_verified=reused,
+    )
+
+
+def test_dukascopy_writes_completed_year_before_later_year_fails(monkeypatch) -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    route = replace(route, minimum_history_days=0)
+    written: list[int] = []
+
+    monkeypatch.setattr(subject, "_load_valid_year_checkpoint", lambda *args, **kwargs: None)
+
+    def fake_fetch(route, *, start, end, quality):
+        if start.year == 2023:
+            raise subject.ProviderError("reset on 2023-02-01")
+        return [_candle(start), _candle(start + timedelta(hours=4))]
+
+    monkeypatch.setattr(subject, "fetch_dukascopy_15m", fake_fetch)
+    monkeypatch.setattr(
+        subject,
+        "_store_partition",
+        lambda route, timeframe, year, rows, *, force: _fake_partition(
+            timeframe, year, rows[0].timestamp, reused=False
+        ),
+    )
+
+    def fake_checkpoint(route, *, year, start, end, quality, partitions):
+        written.append(year)
+        return f"checkpoint/{year}.json"
+
+    monkeypatch.setattr(subject, "_write_year_checkpoint", fake_checkpoint)
+
+    with pytest.raises(subject.ProviderError, match="reset on 2023"):
+        subject._sync_dukascopy_incremental(
+            route,
+            start=datetime(2022, 1, 1, tzinfo=timezone.utc),
+            end=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            force=False,
+        )
+
+    assert written == [2022]
+
+
+def test_dukascopy_resume_skips_verified_completed_year(monkeypatch) -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    route = replace(route, minimum_history_days=0)
+    fetched: list[int] = []
+    written: list[int] = []
+    timeframes = ("15m", "1h", "4h", "1d")
+
+    def fake_load(route, *, year, start, end, force):
+        if year != 2022:
+            return None
+        return (
+            [_fake_partition(item, year, start, reused=True) for item in timeframes],
+            subject._empty_quality(),
+        )
+
+    def fake_fetch(route, *, start, end, quality):
+        fetched.append(start.year)
+        return [_candle(start), _candle(start + timedelta(hours=4))]
+
+    monkeypatch.setattr(subject, "_load_valid_year_checkpoint", fake_load)
+    monkeypatch.setattr(subject, "fetch_dukascopy_15m", fake_fetch)
+    monkeypatch.setattr(
+        subject,
+        "_store_partition",
+        lambda route, timeframe, year, rows, *, force: _fake_partition(
+            timeframe, year, rows[0].timestamp, reused=False
+        ),
+    )
+
+    def fake_checkpoint(route, *, year, start, end, quality, partitions):
+        written.append(year)
+        return f"checkpoint/{year}.json"
+
+    monkeypatch.setattr(subject, "_write_year_checkpoint", fake_checkpoint)
+    monkeypatch.setattr(subject.storage, "_put_json", lambda payload, key: None)
+
+    result = subject._sync_dukascopy_incremental(
+        route,
+        start=datetime(2022, 1, 1, tzinfo=timezone.utc),
+        end=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        force=False,
+    )
+
+    assert fetched == [2023]
+    assert written == [2023]
+    assert result["checkpoint_years_reused"] == 1
+    assert result["checkpoint_years_written"] == 1
+    assert result["status"] == "COMPLETE"
+
+
+def test_year_checkpoint_requires_remote_partition_sha_match(monkeypatch) -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    start = datetime(2022, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    partitions = [
+        _fake_partition(item, 2022, start, reused=False) for item in ("15m", "1h", "4h", "1d")
+    ]
+    checkpoint = {
+        "status": "COMPLETE_YEAR_CHECKPOINT",
+        "route": subject._route_identity(route),
+        "range_start": start.isoformat(),
+        "range_end": end.isoformat(),
+        "quality": subject._empty_quality(),
+        "partitions": [subject.asdict(item) for item in partitions],
+    }
+    monkeypatch.setattr(subject, "_load_remote_json", lambda key: checkpoint)
+    monkeypatch.setattr(subject.storage, "_remote_sha256", lambda key: "b" * 64)
+
+    assert (
+        subject._load_valid_year_checkpoint(route, year=2022, start=start, end=end, force=False)
+        is None
+    )
 
 
 def test_discovery_payload_is_json_serializable(tmp_path, monkeypatch) -> None:

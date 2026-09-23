@@ -111,10 +111,21 @@ def _retry_delay(attempt: int, exc: BaseException | None = None) -> float:
     return max(exponential, retry_after) + random.uniform(0.0, jitter_cap)
 
 
-def _request_bytes(url: str, *, attempts: int | None = None) -> bytes:
-    attempts = attempts or _positive_env_int("DUKASCOPY_HTTP_ATTEMPTS", 7)
-    for attempt in range(1, attempts + 1):
+def _request_bytes(
+    url: str,
+    *,
+    attempts: int | None = None,
+    transport_attempts: int | None = None,
+) -> bytes:
+    http_budget = attempts or _positive_env_int("DUKASCOPY_HTTP_ATTEMPTS", 7)
+    transport_budget = transport_attempts or (
+        attempts or _positive_env_int("DUKASCOPY_TRANSPORT_ATTEMPTS", 10)
+    )
+    http_failures = 0
+    transport_failures = 0
+    while True:
         failure: BaseException | None = None
+        retry_number = 0
         request = urllib.request.Request(
             url,
             headers={"User-Agent": "Trading-System-V3 historical-15m-repair/1.0"},
@@ -129,14 +140,17 @@ def _request_bytes(url: str, *, attempts: int | None = None) -> bytes:
             if exc.code == 404:
                 return b""
             retryable = exc.code in _TRANSIENT_HTTP_STATUS
-            if not retryable or attempt == attempts:
+            http_failures += 1
+            if not retryable or http_failures >= http_budget:
                 raise ProviderError(f"historical data HTTP {exc.code}") from exc
+            retry_number = http_failures
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             failure = exc
-            if attempt == attempts:
+            transport_failures += 1
+            if transport_failures >= transport_budget:
                 raise ProviderError("historical data request failed") from exc
-        time.sleep(_retry_delay(attempt, failure))
-    raise AssertionError("unreachable")
+            retry_number = transport_failures
+        time.sleep(_retry_delay(retry_number, failure))
 
 
 def _pace_dukascopy_request() -> None:
@@ -296,8 +310,8 @@ def parse_dukascopy_day(
     start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
     output: list[Candle] = []
     for offset in range(0, len(raw), _DUKASCOPY_RECORD.size):
-        seconds, open_raw, high_raw, low_raw, close_raw, volume_raw = (
-            _DUKASCOPY_RECORD.unpack_from(raw, offset)
+        seconds, open_raw, high_raw, low_raw, close_raw, volume_raw = _DUKASCOPY_RECORD.unpack_from(
+            raw, offset
         )
         if seconds >= 86_400 or not math.isfinite(volume_raw):
             quality["invalid_rows_dropped"] += 1
@@ -335,7 +349,12 @@ def fetch_dukascopy_15m(
     minutes: dict[datetime, Candle] = {}
     final_day = (end - timedelta(microseconds=1)).date()
     for day in _date_range(start.date(), final_day):
-        compressed = _request_bytes(_dukascopy_url(route, day))
+        try:
+            compressed = _request_bytes(_dukascopy_url(route, day))
+        except ProviderError as exc:
+            raise ProviderError(
+                f"Dukascopy {route.base_asset}/{route.symbol} failed on {day.isoformat()}: {exc}"
+            ) from exc
         _pace_dukascopy_request()
         daily = parse_dukascopy_day(compressed, route, day, quality=quality)
         if not daily:
@@ -472,6 +491,182 @@ def _store_partition(
     )
 
 
+def _route_identity(route: Historical15mRoute) -> dict[str, object]:
+    return {
+        "canonical_symbol": route.base_asset,
+        "base_asset": route.base_asset,
+        "asset_class": route.asset_class,
+        "provider": route.provider,
+        "provider_symbol": route.symbol,
+        "price_multiplier": str(route.price_multiplier),
+        "requires_volume": route.asset_class == "equity",
+        "route_origin": "historical_15m_repair_registry",
+    }
+
+
+def _checkpoint_key(route: Historical15mRoute, year: int) -> str:
+    return (
+        f"{_MANIFEST_NAMESPACE}/checkpoints/provider={storage._slug(route.provider)}/"
+        f"canonical={storage._slug(route.base_asset)}/market={storage._slug(route.symbol)}/"
+        f"year={year:04d}.json"
+    )
+
+
+def _load_remote_json(key: str) -> dict[str, object] | None:
+    with tempfile.TemporaryDirectory(prefix="historical-15m-checkpoint-") as temp_dir:
+        target = Path(temp_dir) / "checkpoint.json"
+        result = storage._aws(
+            "s3api",
+            "get-object",
+            "--bucket",
+            storage._bucket(),
+            "--key",
+            key,
+            str(target),
+            check=False,
+        )
+        if storage._missing(result):
+            return None
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ProviderError(f"checkpoint is not a JSON object: {key}")
+    return payload
+
+
+def _partition_from_checkpoint(raw: object) -> Partition:
+    if not isinstance(raw, dict):
+        raise ValueError("checkpoint partition must be an object")
+    return Partition(
+        timeframe=str(raw["timeframe"]),
+        year=int(raw["year"]),
+        rows=int(raw["rows"]),
+        object_key=str(raw["object_key"]),
+        sha256=str(raw["sha256"]),
+        first_timestamp=str(raw["first_timestamp"]),
+        last_timestamp=str(raw["last_timestamp"]),
+        reused_verified=True,
+    )
+
+
+def _load_valid_year_checkpoint(
+    route: Historical15mRoute,
+    *,
+    year: int,
+    start: datetime,
+    end: datetime,
+    force: bool,
+) -> tuple[list[Partition], dict[str, int]] | None:
+    if force:
+        return None
+    key = _checkpoint_key(route, year)
+    checkpoint = _load_remote_json(key)
+    if checkpoint is None:
+        return None
+    expected = _route_identity(route)
+    actual_route = checkpoint.get("route")
+    if (
+        checkpoint.get("status") != "COMPLETE_YEAR_CHECKPOINT"
+        or actual_route != expected
+        or checkpoint.get("range_start") != start.isoformat()
+        or checkpoint.get("range_end") != end.isoformat()
+    ):
+        return None
+    try:
+        partitions = [_partition_from_checkpoint(item) for item in checkpoint.get("partitions", [])]
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (
+        len(partitions) != 4
+        or {item.timeframe for item in partitions} != {"15m", "1h", "4h", "1d"}
+        or any(item.year != year or item.rows <= 0 for item in partitions)
+    ):
+        return None
+    for partition in partitions:
+        if len(partition.sha256) != 64:
+            return None
+        if storage._remote_sha256(partition.object_key) != partition.sha256:
+            return None
+    raw_quality = checkpoint.get("quality")
+    if not isinstance(raw_quality, dict):
+        return None
+    quality = {
+        name: int(raw_quality.get(name) or 0)
+        for name in (
+            "invalid_rows_dropped",
+            "ohlc_invariant_rows_dropped",
+            "out_of_session_rows_dropped",
+            "source_days_without_rows",
+        )
+    }
+    return partitions, quality
+
+
+def _write_year_checkpoint(
+    route: Historical15mRoute,
+    *,
+    year: int,
+    start: datetime,
+    end: datetime,
+    quality: dict[str, int],
+    partitions: list[Partition],
+) -> str:
+    key = _checkpoint_key(route, year)
+    payload = {
+        "schema_version": _SCHEMA_VERSION,
+        "status": "COMPLETE_YEAR_CHECKPOINT",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "route": _route_identity(route),
+        "year": year,
+        "range_start": start.isoformat(),
+        "range_end": end.isoformat(),
+        "quality": quality,
+        "integrity_policy": "all_partition_sha256_read_back_verified_before_checkpoint",
+        "partitions": [asdict(item) for item in partitions],
+    }
+    storage._put_json(payload, key)
+    return key
+
+
+def _empty_quality() -> dict[str, int]:
+    return {
+        "invalid_rows_dropped": 0,
+        "ohlc_invariant_rows_dropped": 0,
+        "out_of_session_rows_dropped": 0,
+        "source_days_without_rows": 0,
+    }
+
+
+def _add_quality(target: dict[str, int], source: dict[str, int]) -> None:
+    for name in target:
+        target[name] += int(source.get(name, 0))
+
+
+def _coverage_from_partitions(partitions: list[Partition]) -> dict[str, object]:
+    coverage: dict[str, object] = {}
+    for timeframe in ("15m", "1h", "4h", "1d"):
+        selected = [item for item in partitions if item.timeframe == timeframe]
+        if not selected:
+            continue
+        coverage[timeframe] = {
+            "rows": sum(item.rows for item in selected),
+            "first_timestamp": min(item.first_timestamp for item in selected),
+            "last_timestamp": max(item.last_timestamp for item in selected),
+        }
+    return coverage
+
+
+def _year_ranges(start: datetime, end: datetime) -> Iterable[tuple[int, datetime, datetime]]:
+    year = start.year
+    while year <= (end - timedelta(microseconds=1)).year:
+        year_start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        next_year = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        chunk_start = max(start, year_start)
+        chunk_end = min(end, next_year)
+        if chunk_start < chunk_end:
+            yield year, chunk_start, chunk_end
+        year += 1
+
+
 def _validate_coverage(
     route: Historical15mRoute,
     rows: list[Candle],
@@ -491,6 +686,136 @@ def _validate_coverage(
         raise ProviderError("15m history begins materially after the reviewed requested start")
 
 
+def _datasets_from_fifteen(
+    route: Historical15mRoute, fifteen: list[Candle]
+) -> dict[str, list[Candle]]:
+    datasets = {
+        "15m": fifteen,
+        "1h": aggregate_candles(fifteen, "1h", session=route.session),
+        "4h": aggregate_candles(fifteen, "4h", session=route.session),
+        "1d": aggregate_candles(fifteen, "1d", session=route.session),
+    }
+    missing = [timeframe for timeframe, rows in datasets.items() if not rows]
+    if missing:
+        raise ProviderError(f"derived history is empty for: {','.join(missing)}")
+    return datasets
+
+
+def _validate_partition_coverage(
+    route: Historical15mRoute, partitions: list[Partition], *, start: datetime
+) -> None:
+    fifteen = sorted(
+        (item for item in partitions if item.timeframe == "15m"),
+        key=lambda item: item.first_timestamp,
+    )
+    if not fifteen:
+        raise ProviderError("source returned no valid 15m history")
+    if route.listing_limited:
+        return
+    first = datetime.fromisoformat(fifteen[0].first_timestamp)
+    last = datetime.fromisoformat(fifteen[-1].last_timestamp)
+    span_days = (last - first).days
+    if span_days < route.minimum_history_days:
+        raise ProviderError(
+            f"15m history span is {span_days} days; required {route.minimum_history_days}"
+        )
+    if first > start + timedelta(days=14):
+        raise ProviderError("15m history begins materially after the reviewed requested start")
+
+
+def _sync_dukascopy_incremental(
+    route: Historical15mRoute,
+    *,
+    start: datetime,
+    end: datetime,
+    force: bool,
+) -> dict[str, object]:
+    quality = _empty_quality()
+    partitions: list[Partition] = []
+    checkpoint_keys: list[str] = []
+    checkpoint_years_reused = 0
+    checkpoint_years_written = 0
+
+    for year, chunk_start, chunk_end in _year_ranges(start, end):
+        cached = _load_valid_year_checkpoint(
+            route, year=year, start=chunk_start, end=chunk_end, force=force
+        )
+        if cached is not None:
+            year_partitions, year_quality = cached
+            partitions.extend(year_partitions)
+            _add_quality(quality, year_quality)
+            checkpoint_keys.append(_checkpoint_key(route, year))
+            checkpoint_years_reused += 1
+            continue
+
+        year_quality = _empty_quality()
+        fifteen = fetch_dukascopy_15m(route, start=chunk_start, end=chunk_end, quality=year_quality)
+        if not fifteen:
+            raise ProviderError(
+                f"Dukascopy {route.base_asset}/{route.symbol} returned no valid rows "
+                f"for {chunk_start.date()}..{chunk_end.date()}"
+            )
+        datasets = _datasets_from_fifteen(route, fifteen)
+        year_partitions = [
+            _store_partition(route, timeframe, year, rows, force=force)
+            for timeframe, rows in datasets.items()
+        ]
+        checkpoint_keys.append(
+            _write_year_checkpoint(
+                route,
+                year=year,
+                start=chunk_start,
+                end=chunk_end,
+                quality=year_quality,
+                partitions=year_partitions,
+            )
+        )
+        checkpoint_years_written += 1
+        partitions.extend(year_partitions)
+        _add_quality(quality, year_quality)
+
+    _validate_partition_coverage(route, partitions, start=start)
+    manifest: dict[str, object] = {
+        "schema_version": _SCHEMA_VERSION,
+        "status": "COMPLETE",
+        "route": _route_identity(route),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "requested_start": start.isoformat(),
+        "requested_end": end.isoformat(),
+        "source_kind": _source_kind(route),
+        "qualification_scope": "research_backtest_only_live_route_order_unchanged",
+        "history_policy": "provider_backed_15m_with_1h_4h_1d_deterministically_derived",
+        "session_policy": route.session,
+        "adjustment_policy": "dukascopy_bid_m1_source_no_forward_fill",
+        "proxy_for": route.proxy_for,
+        "listing_limited": route.listing_limited,
+        "gap_policy": "preserve_source_market_sessions_no_fill",
+        "invalid_source_row_policy": "drop_and_record_never_clamp",
+        "quality": quality,
+        "source_ohlc_invariant_rows_dropped": quality["ohlc_invariant_rows_dropped"],
+        "coverage": _coverage_from_partitions(partitions),
+        "total_rows": sum(item.rows for item in partitions),
+        "partition_objects_recorded": len(partitions),
+        "reused_verified_partition_objects": sum(item.reused_verified for item in partitions),
+        "uploaded_or_replaced_partition_objects": sum(
+            not item.reused_verified for item in partitions
+        ),
+        "integrity_policy": "sha256_manifest_compare_upload_verify_downloaded_bytes",
+        "checkpoint_policy": "per_year_sha256_verified_resume",
+        "checkpoint_years_reused": checkpoint_years_reused,
+        "checkpoint_years_written": checkpoint_years_written,
+        "checkpoint_manifest_keys": checkpoint_keys,
+        "partitions": [asdict(item) for item in partitions],
+    }
+    manifest_key = (
+        f"{_MANIFEST_NAMESPACE}/routes/provider={storage._slug(route.provider)}/"
+        f"canonical={storage._slug(route.base_asset)}/market={storage._slug(route.symbol)}.json"
+    )
+    storage._put_json(manifest, manifest_key)
+    manifest["manifest_object_key"] = manifest_key
+    return manifest
+
+
 def sync_route(
     route: Historical15mRoute,
     *,
@@ -502,28 +827,16 @@ def sync_route(
         raise ValueError("start/end must be timezone-aware and end must be later than start")
     start = start.astimezone(timezone.utc)
     end = end.astimezone(timezone.utc)
-    quality = {
-        "invalid_rows_dropped": 0,
-        "ohlc_invariant_rows_dropped": 0,
-        "out_of_session_rows_dropped": 0,
-        "source_days_without_rows": 0,
-    }
+    if route.provider == "dukascopy":
+        return _sync_dukascopy_incremental(route, start=start, end=end, force=force)
+
+    quality = _empty_quality()
     if route.provider == "alpaca_sip":
         fifteen = fetch_alpaca_15m(route, start=start, end=end, quality=quality)
-    elif route.provider == "dukascopy":
-        fifteen = fetch_dukascopy_15m(route, start=start, end=end, quality=quality)
     else:
         raise ValueError(f"unsupported provider: {route.provider}")
     _validate_coverage(route, fifteen, start=start)
-    datasets = {
-        "15m": fifteen,
-        "1h": aggregate_candles(fifteen, "1h", session=route.session),
-        "4h": aggregate_candles(fifteen, "4h", session=route.session),
-        "1d": aggregate_candles(fifteen, "1d", session=route.session),
-    }
-    if any(not rows for rows in datasets.values()):
-        missing = [timeframe for timeframe, rows in datasets.items() if not rows]
-        raise ProviderError(f"derived history is empty for: {','.join(missing)}")
+    datasets = _datasets_from_fifteen(route, fifteen)
 
     partitions: list[Partition] = []
     coverage: dict[str, object] = {}
@@ -534,23 +847,12 @@ def sync_route(
             "last_timestamp": rows[-1].timestamp.isoformat(),
         }
         for year, year_rows in _year_groups(rows):
-            partitions.append(
-                _store_partition(route, timeframe, year, year_rows, force=force)
-            )
+            partitions.append(_store_partition(route, timeframe, year, year_rows, force=force))
 
     manifest: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": "COMPLETE",
-        "route": {
-            "canonical_symbol": route.base_asset,
-            "base_asset": route.base_asset,
-            "asset_class": route.asset_class,
-            "provider": route.provider,
-            "provider_symbol": route.symbol,
-            "price_multiplier": str(route.price_multiplier),
-            "requires_volume": route.asset_class == "equity",
-            "route_origin": "historical_15m_repair_registry",
-        },
+        "route": _route_identity(route),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
@@ -647,13 +949,9 @@ def main() -> int:
             "error": str(exc),
             "partitions": [],
         }
-        output.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
+        output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         raise
-    output.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return 0
 
 
