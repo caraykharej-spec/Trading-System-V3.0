@@ -130,6 +130,7 @@ jobs:
       INPUT_START: ${{ inputs.start }}
       INPUT_END: ${{ inputs.end }}
       INPUT_FORCE: ${{ inputs.force }}
+      INPUT_VALIDATION_SCOPE: ${{ needs.discover.outputs.scope }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -149,7 +150,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          args=(--base-asset '${{ matrix.route.base_asset }}' --output artifacts/route-summary.json)
+          args=(--base-asset '${{ matrix.route.base_asset }}' --validation-scope "$INPUT_VALIDATION_SCOPE" --output artifacts/route-summary.json)
           if [ -n "${INPUT_START:-}" ]; then args+=(--start "$INPUT_START"); fi
           if [ -n "${INPUT_END:-}" ]; then args+=(--end "$INPUT_END"); fi
           if [ "${INPUT_FORCE:-false}" = "true" ]; then args+=(--force); fi

@@ -1074,18 +1074,26 @@ def _validate_coverage(
     rows: list[Candle],
     *,
     start: datetime,
+    end: datetime,
+    validation_scope: str,
 ) -> None:
     if not rows:
         raise ProviderError("source returned no valid 15m history")
-    if route.listing_limited:
-        return
+    if validation_scope not in {"targeted", "full"}:
+        raise ValueError(f"unsupported validation scope: {validation_scope}")
     span_days = (rows[-1].timestamp - rows[0].timestamp).days
-    if span_days < route.minimum_history_days:
+    if (
+        validation_scope == "full"
+        and not route.listing_limited
+        and span_days < route.minimum_history_days
+    ):
         raise ProviderError(
             f"15m history span is {span_days} days; required {route.minimum_history_days}"
         )
-    if rows[0].timestamp > start + timedelta(days=14):
+    if not route.listing_limited and rows[0].timestamp > start + timedelta(days=14):
         raise ProviderError("15m history begins materially after the reviewed requested start")
+    if rows[-1].timestamp < end - timedelta(days=14):
+        raise ProviderError("15m history ends materially before the reviewed requested end")
 
 
 def _datasets_from_fifteen(
@@ -1104,7 +1112,12 @@ def _datasets_from_fifteen(
 
 
 def _validate_partition_coverage(
-    route: Historical15mRoute, partitions: list[Partition], *, start: datetime
+    route: Historical15mRoute,
+    partitions: list[Partition],
+    *,
+    start: datetime,
+    end: datetime,
+    validation_scope: str,
 ) -> None:
     fifteen = sorted(
         (item for item in partitions if item.timeframe == "15m"),
@@ -1112,17 +1125,23 @@ def _validate_partition_coverage(
     )
     if not fifteen:
         raise ProviderError("source returned no valid 15m history")
-    if route.listing_limited:
-        return
+    if validation_scope not in {"targeted", "full"}:
+        raise ValueError(f"unsupported validation scope: {validation_scope}")
     first = datetime.fromisoformat(fifteen[0].first_timestamp)
     last = datetime.fromisoformat(fifteen[-1].last_timestamp)
     span_days = (last - first).days
-    if span_days < route.minimum_history_days:
+    if (
+        validation_scope == "full"
+        and not route.listing_limited
+        and span_days < route.minimum_history_days
+    ):
         raise ProviderError(
             f"15m history span is {span_days} days; required {route.minimum_history_days}"
         )
-    if first > start + timedelta(days=14):
+    if not route.listing_limited and first > start + timedelta(days=14):
         raise ProviderError("15m history begins materially after the reviewed requested start")
+    if last < end - timedelta(days=14):
+        raise ProviderError("15m history ends materially before the reviewed requested end")
 
 
 def _sync_dukascopy_incremental(
@@ -1131,6 +1150,7 @@ def _sync_dukascopy_incremental(
     start: datetime,
     end: datetime,
     force: bool,
+    validation_scope: str,
 ) -> dict[str, object]:
     quality = _empty_quality()
     partitions: list[Partition] = []
@@ -1228,7 +1248,13 @@ def _sync_dukascopy_incremental(
             partitions.extend(month_partitions)
             _add_quality(quality, month_quality)
 
-    _validate_partition_coverage(route, partitions, start=start)
+    _validate_partition_coverage(
+        route,
+        partitions,
+        start=start,
+        end=end,
+        validation_scope=validation_scope,
+    )
     manifest: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": "COMPLETE",
@@ -1236,6 +1262,8 @@ def _sync_dukascopy_incremental(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
+        "validation_scope": validation_scope,
+        "minimum_history_days_enforced": validation_scope == "full",
         "source_kind": _source_kind(route),
         "qualification_scope": "research_backtest_only_live_route_order_unchanged",
         "history_policy": "provider_backed_15m_with_1h_4h_1d_deterministically_derived",
@@ -1294,6 +1322,7 @@ def _sync_histdata_incremental(
     start: datetime,
     end: datetime,
     force: bool,
+    validation_scope: str,
 ) -> dict[str, object]:
     quality = _empty_quality()
     partitions: list[Partition] = []
@@ -1412,7 +1441,13 @@ def _sync_histdata_incremental(
             if scope == keep_prefix or scope.startswith(f"{keep_prefix}-")
         }
 
-    _validate_partition_coverage(route, partitions, start=start)
+    _validate_partition_coverage(
+        route,
+        partitions,
+        start=start,
+        end=end,
+        validation_scope=validation_scope,
+    )
     manifest: dict[str, object] = {
         "schema_version": _SCHEMA_VERSION,
         "status": "COMPLETE",
@@ -1420,6 +1455,8 @@ def _sync_histdata_incremental(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
+        "validation_scope": validation_scope,
+        "minimum_history_days_enforced": validation_scope == "full",
         "source_kind": _source_kind(route),
         "qualification_scope": "research_backtest_only_live_route_order_unchanged",
         "history_policy": "provider_backed_15m_with_1h_4h_1d_deterministically_derived",
@@ -1465,22 +1502,43 @@ def sync_route(
     start: datetime,
     end: datetime,
     force: bool = False,
+    validation_scope: str = "full",
 ) -> dict[str, object]:
     if start.tzinfo is None or end.tzinfo is None or end <= start:
         raise ValueError("start/end must be timezone-aware and end must be later than start")
     start = start.astimezone(timezone.utc)
     end = end.astimezone(timezone.utc)
+    if validation_scope not in {"targeted", "full"}:
+        raise ValueError(f"unsupported validation scope: {validation_scope}")
     if route.provider == "dukascopy":
-        return _sync_dukascopy_incremental(route, start=start, end=end, force=force)
+        return _sync_dukascopy_incremental(
+            route,
+            start=start,
+            end=end,
+            force=force,
+            validation_scope=validation_scope,
+        )
     if route.provider == "histdata":
-        return _sync_histdata_incremental(route, start=start, end=end, force=force)
+        return _sync_histdata_incremental(
+            route,
+            start=start,
+            end=end,
+            force=force,
+            validation_scope=validation_scope,
+        )
 
     quality = _empty_quality()
     if route.provider == "alpaca_sip":
         fifteen = fetch_alpaca_15m(route, start=start, end=end, quality=quality)
     else:
         raise ValueError(f"unsupported provider: {route.provider}")
-    _validate_coverage(route, fifteen, start=start)
+    _validate_coverage(
+        route,
+        fifteen,
+        start=start,
+        end=end,
+        validation_scope=validation_scope,
+    )
     datasets = _datasets_from_fifteen(route, fifteen)
 
     partitions: list[Partition] = []
@@ -1501,6 +1559,8 @@ def sync_route(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "requested_start": start.isoformat(),
         "requested_end": end.isoformat(),
+        "validation_scope": validation_scope,
+        "minimum_history_days_enforced": validation_scope == "full",
         "source_kind": _source_kind(route),
         "qualification_scope": "research_backtest_only_live_route_order_unchanged",
         "history_policy": "provider_backed_15m_with_1h_4h_1d_deterministically_derived",
@@ -1545,12 +1605,18 @@ def _parse_datetime(value: str) -> datetime:
 def main() -> int:
     storage._aws = hf_s3.aws
     parser = argparse.ArgumentParser(
-        description="Repair non-crypto 15m backtest history using Alpaca SIP and Dukascopy"
+        description="Repair non-crypto 15m backtest history using Alpaca SIP and HistData"
     )
     parser.add_argument("--discover-only", action="store_true")
     parser.add_argument("--base-asset")
     parser.add_argument("--start")
     parser.add_argument("--end")
+    parser.add_argument(
+        "--validation-scope",
+        choices=("targeted", "full"),
+        default="full",
+        help="Targeted validates requested-range edges; full also enforces minimum history",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -1577,7 +1643,13 @@ def main() -> int:
     start = _parse_datetime(args.start) if args.start else route.start
     end = _parse_datetime(args.end) if args.end else datetime.now(timezone.utc)
     try:
-        payload = sync_route(route, start=start, end=end, force=args.force)
+        payload = sync_route(
+            route,
+            start=start,
+            end=end,
+            force=args.force,
+            validation_scope=args.validation_scope,
+        )
     except Exception as exc:
         payload = {
             "schema_version": _SCHEMA_VERSION,
@@ -1592,6 +1664,7 @@ def main() -> int:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "error_type": type(exc).__name__,
             "error": str(exc),
+            "validation_scope": args.validation_scope,
             "partitions": [],
         }
         evidence = getattr(exc, "evidence", None)

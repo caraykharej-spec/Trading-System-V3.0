@@ -473,7 +473,10 @@ def test_dukascopy_writes_completed_month_before_later_month_fails(monkeypatch) 
         subject,
         "_store_partition",
         lambda route, timeframe, year, rows, *, force, month=None: replace(
-            _fake_partition(timeframe, year, rows[0].timestamp, reused=False), month=month
+            _fake_partition(timeframe, year, rows[0].timestamp, reused=False),
+            rows=len(rows),
+            last_timestamp=rows[-1].timestamp.isoformat(),
+            month=month,
         ),
     )
 
@@ -489,6 +492,7 @@ def test_dukascopy_writes_completed_month_before_later_month_fails(monkeypatch) 
             start=datetime(2022, 1, 1, tzinfo=timezone.utc),
             end=datetime(2022, 3, 1, tzinfo=timezone.utc),
             force=False,
+            validation_scope="full",
         )
 
     assert written == ["2022-01"]
@@ -524,7 +528,7 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
 
     def fake_fetch(route, *, start, end, quality):
         fetched.append(f"{start.year:04d}-{start.month:02d}")
-        return [_candle(start), _candle(start + timedelta(hours=4))]
+        return [_candle(start), _candle(end - timedelta(days=1))]
 
     monkeypatch.setattr(subject, "_load_valid_year_checkpoint", fake_load)
     monkeypatch.setattr(subject, "_load_valid_month_checkpoint", fake_month_load)
@@ -533,7 +537,10 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
         subject,
         "_store_partition",
         lambda route, timeframe, year, rows, *, force, month=None: replace(
-            _fake_partition(timeframe, year, rows[0].timestamp, reused=False), month=month
+            _fake_partition(timeframe, year, rows[0].timestamp, reused=False),
+            rows=len(rows),
+            last_timestamp=rows[-1].timestamp.isoformat(),
+            month=month,
         ),
     )
 
@@ -549,6 +556,7 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
         start=datetime(2022, 1, 1, tzinfo=timezone.utc),
         end=datetime(2023, 3, 1, tzinfo=timezone.utc),
         force=False,
+        validation_scope="full",
     )
 
     assert fetched == ["2023-02"]
@@ -562,7 +570,6 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
 def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, capsys) -> None:
     route = Historical15mRegistry.load().get("EUR")
     assert route is not None
-    route = replace(route, minimum_history_days=0)
     start = datetime(2024, 11, 1, tzinfo=timezone.utc)
     written: list[str] = []
 
@@ -571,7 +578,7 @@ def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, caps
         subject,
         "fetch_histdata_15m",
         lambda route, *, start, end, quality, archive_cache: (
-            [_candle(start), _candle(start + timedelta(hours=4))],
+            [_candle(start), _candle(end - timedelta(days=1))],
             ["2024"],
         ),
     )
@@ -579,7 +586,10 @@ def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, caps
         subject,
         "_store_partition",
         lambda route, timeframe, year, rows, *, force, month=None: replace(
-            _fake_partition(timeframe, year, rows[0].timestamp, reused=False), month=month
+            _fake_partition(timeframe, year, rows[0].timestamp, reused=False),
+            rows=len(rows),
+            last_timestamp=rows[-1].timestamp.isoformat(),
+            month=month,
         ),
     )
 
@@ -594,13 +604,76 @@ def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, caps
         route,
         start=start,
         end=datetime(2024, 12, 1, tzinfo=timezone.utc),
+        validation_scope="targeted",
     )
 
     assert written == ["2024-11"]
     assert result["route"]["provider"] == "histdata"
     assert result["months_written"] == ["2024-11"]
+    assert result["validation_scope"] == "targeted"
+    assert result["minimum_history_days_enforced"] is False
     assert result["archive_scopes_downloaded"] == ["2024"]
     assert '"event": "histdata_month_complete"' in capsys.readouterr().out
+
+
+def test_targeted_validation_accepts_requested_month_without_three_year_history() -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    start = datetime(2024, 11, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 12, 1, tzinfo=timezone.utc)
+    partition = replace(
+        _fake_partition("15m", 2024, start, reused=True),
+        rows=2004,
+        last_timestamp=(end - timedelta(days=2)).isoformat(),
+        month=11,
+    )
+
+    subject._validate_partition_coverage(
+        route,
+        [partition],
+        start=start,
+        end=end,
+        validation_scope="targeted",
+    )
+
+
+def test_full_validation_still_requires_minimum_history() -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    start = datetime(2024, 11, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 12, 1, tzinfo=timezone.utc)
+    partition = replace(
+        _fake_partition("15m", 2024, start, reused=True),
+        rows=2004,
+        last_timestamp=(end - timedelta(days=2)).isoformat(),
+        month=11,
+    )
+
+    with pytest.raises(subject.ProviderError, match="required 1095"):
+        subject._validate_partition_coverage(
+            route,
+            [partition],
+            start=start,
+            end=end,
+            validation_scope="full",
+        )
+
+
+def test_targeted_validation_rejects_materially_incomplete_requested_end() -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    start = datetime(2024, 11, 1, tzinfo=timezone.utc)
+    end = datetime(2024, 12, 1, tzinfo=timezone.utc)
+    partition = _fake_partition("15m", 2024, start, reused=True)
+
+    with pytest.raises(subject.ProviderError, match="ends materially before"):
+        subject._validate_partition_coverage(
+            route,
+            [partition],
+            start=start,
+            end=end,
+            validation_scope="targeted",
+        )
 
 
 def test_year_checkpoint_requires_remote_partition_sha_match(monkeypatch) -> None:
@@ -669,6 +742,7 @@ def test_error_artifact_includes_resume_evidence(tmp_path, monkeypatch) -> None:
             start="2022-01-01T00:00:00+00:00",
             end="2022-02-01T00:00:00+00:00",
             force=False,
+            validation_scope="targeted",
             output=str(output),
         ),
     )
@@ -707,6 +781,7 @@ def test_discovery_payload_is_json_serializable(tmp_path, monkeypatch) -> None:
             start=None,
             end=None,
             force=False,
+            validation_scope="full",
             output=str(output),
         ),
     )
