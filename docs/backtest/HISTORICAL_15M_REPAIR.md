@@ -108,3 +108,17 @@ requested end timestamp exactly matches, preventing a stale checkpoint from
 hiding newly available data. Structured log events record month start, reuse or
 completion, elapsed seconds, archive scopes and produced rows. Error summaries
 record the failed month, completed/reused months and failed archive scope.
+
+## Validation scopes
+
+The workflow passes an explicit validation scope to every route job. A
+`targeted` run validates non-empty data, OHLC/duplicate/SHA policies and both
+edges of the requested interval, allowing normal market-closure gaps of up to
+14 days. It does not enforce the route's 1,095-day qualification minimum and
+can produce only `PASS_TARGETED_15M_REPAIR`.
+
+A `full` run applies the same requested-range checks and additionally enforces
+the minimum history span for every non-listing-limited route. Only a successful
+26-route full run can produce `PASS_COMPLETE_15M_REPAIR` and be supplied to
+global qualification. The command-line default remains `full` so a missing
+scope cannot accidentally weaken qualification.
