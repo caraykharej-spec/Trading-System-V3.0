@@ -109,9 +109,21 @@ hiding newly available data. Structured log events record month start, reuse or
 completion, elapsed seconds, archive scopes and produced rows. Error summaries
 record the failed month, completed/reused months and failed archive scope.
 
+Conflicting valid M1 rows at the same timestamp are never resolved by choosing
+the first/last row or by synthesizing a price. The complete UTC 15-minute
+bucket is quarantined, leaving an explicit source gap. Every raw variant and
+its SHA-256 are stored in the monthly checkpoint and final route manifest. Up
+to three conflicting buckets per month are tolerated by default; exceeding
+`HISTDATA_MAX_CONFLICT_BUCKETS_PER_MONTH` fails the month closed. Byte-equivalent
+candles are deduplicated and counted separately.
+
 ## Validation scopes
 
-The workflow passes an explicit validation scope to every route job. A
+The workflow passes an explicit validation scope to every route job. The
+`validation_scope` workflow input defaults to `auto`, which follows discovery
+scope. Selecting `full` explicitly permits full-history validation of one
+targeted route (for example EUR) without representing it as a successful
+26-route global repair. A
 `targeted` run validates non-empty data, OHLC/duplicate/SHA policies and both
 edges of the requested interval, allowing normal market-closure gaps of up to
 14 days. It does not enforce the route's 1,095-day qualification minimum and
