@@ -23,6 +23,15 @@ on:
         required: false
         default: false
         type: boolean
+      validation_scope:
+        description: "Route validation policy; auto follows discovery scope"
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - targeted
+          - full
 
 permissions:
   contents: read
@@ -54,6 +63,7 @@ env:
   HISTDATA_HTTP_ATTEMPTS: "5"
   HISTDATA_RETRY_BASE_SECONDS: "2"
   HISTDATA_RETRY_MAX_SECONDS: "30"
+  HISTDATA_MAX_CONFLICT_BUCKETS_PER_MONTH: "3"
 
 jobs:
   discover:
@@ -130,7 +140,8 @@ jobs:
       INPUT_START: ${{ inputs.start }}
       INPUT_END: ${{ inputs.end }}
       INPUT_FORCE: ${{ inputs.force }}
-      INPUT_VALIDATION_SCOPE: ${{ needs.discover.outputs.scope }}
+      INPUT_DISCOVERY_SCOPE: ${{ needs.discover.outputs.scope }}
+      INPUT_VALIDATION_SCOPE: ${{ inputs.validation_scope }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -150,7 +161,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          args=(--base-asset '${{ matrix.route.base_asset }}' --validation-scope "$INPUT_VALIDATION_SCOPE" --output artifacts/route-summary.json)
+          validation_scope="$INPUT_VALIDATION_SCOPE"
+          if [ "$validation_scope" = "auto" ]; then validation_scope="$INPUT_DISCOVERY_SCOPE"; fi
+          args=(--base-asset '${{ matrix.route.base_asset }}' --validation-scope "$validation_scope" --output artifacts/route-summary.json)
           if [ -n "${INPUT_START:-}" ]; then args+=(--start "$INPUT_START"); fi
           if [ -n "${INPUT_END:-}" ]; then args+=(--end "$INPUT_END"); fi
           if [ "${INPUT_FORCE:-false}" = "true" ]; then args+=(--force); fi

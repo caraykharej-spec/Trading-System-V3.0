@@ -107,6 +107,44 @@ def test_parse_histdata_ascii_converts_fixed_est_to_utc() -> None:
     assert quality["invalid_rows_dropped"] == 1
 
 
+def test_histdata_conflict_quarantines_entire_bucket_with_audit_evidence() -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    quality = subject._empty_quality()
+    anomalies: list[dict[str, object]] = []
+    archive = _histdata_zip(
+        "20260705 173000;1.10;1.10;1.10;1.10;0\n"
+        "20260705 173100;1.11;1.11;1.11;1.11;0\n"
+        "20260705 173100;1.12;1.12;1.12;1.12;0\n"
+        "20260705 174500;1.20;1.20;1.20;1.20;0\n"
+    )
+
+    rows = subject.parse_histdata_archive(archive, route, quality=quality, anomalies=anomalies)
+
+    assert [row.timestamp for row in rows] == [datetime(2026, 7, 5, 22, 45, tzinfo=timezone.utc)]
+    assert quality["conflicting_duplicate_timestamps"] == 1
+    assert quality["quarantined_15m_buckets"] == 1
+    assert quality["quarantined_source_rows"] == 2
+    assert anomalies[0]["timestamp"] == "2026-07-05T22:31:00+00:00"
+    assert anomalies[0]["bucket_15m_start"] == "2026-07-05T22:30:00+00:00"
+    variants = anomalies[0]["variants"]
+    assert isinstance(variants, list) and len(variants) == 2
+    assert all(len(item["raw_sha256"]) == 64 for item in variants)
+
+
+def test_histdata_identical_duplicate_is_deduplicated() -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    quality = subject._empty_quality()
+    line = "20241101 000000;1.1;1.1;1.1;1.1;0\n"
+
+    rows = subject.parse_histdata_archive(_histdata_zip(line + line), route, quality=quality)
+
+    assert len(rows) == 1
+    assert quality["identical_duplicate_rows_dropped"] == 1
+    assert quality["quarantined_15m_buckets"] == 0
+
+
 def test_histdata_past_year_archive_is_downloaded_once_for_utc_month(monkeypatch) -> None:
     route = Historical15mRegistry.load().get("EUR")
     assert route is not None
@@ -523,6 +561,7 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
                     for item in timeframes
                 ],
                 subject._empty_quality(),
+                [],
             )
         return None
 
@@ -544,7 +583,9 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
         ),
     )
 
-    def fake_checkpoint(route, *, year, month, start, end, quality, partitions):
+    def fake_checkpoint(
+        route, *, year, month, start, end, quality, partitions, source_anomalies=None
+    ):
         written.append(f"{year:04d}-{month:02d}")
         return f"checkpoint/{year}/{month}.json"
 
@@ -577,7 +618,7 @@ def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, caps
     monkeypatch.setattr(
         subject,
         "fetch_histdata_15m",
-        lambda route, *, start, end, quality, archive_cache: (
+        lambda route, *, start, end, quality, archive_cache, anomalies=None: (
             [_candle(start), _candle(end - timedelta(days=1))],
             ["2024"],
         ),
@@ -593,7 +634,9 @@ def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, caps
         ),
     )
 
-    def fake_checkpoint(route, *, year, month, start, end, quality, partitions):
+    def fake_checkpoint(
+        route, *, year, month, start, end, quality, partitions, source_anomalies=None
+    ):
         written.append(f"{year:04d}-{month:02d}")
         return f"checkpoint/{year}/{month}.json"
 
@@ -614,6 +657,37 @@ def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, caps
     assert result["minimum_history_days_enforced"] is False
     assert result["archive_scopes_downloaded"] == ["2024"]
     assert '"event": "histdata_month_complete"' in capsys.readouterr().out
+
+
+def test_histdata_sync_fails_closed_above_monthly_conflict_limit(monkeypatch) -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    start = datetime(2024, 11, 1, tzinfo=timezone.utc)
+    monkeypatch.setenv("HISTDATA_MAX_CONFLICT_BUCKETS_PER_MONTH", "1")
+    monkeypatch.setattr(subject, "_load_valid_month_checkpoint", lambda *args, **kwargs: None)
+
+    def fake_fetch(route, *, start, end, quality, archive_cache, anomalies):
+        anomalies.extend(
+            [
+                {"bucket_15m_start": "2024-11-03T10:00:00+00:00"},
+                {"bucket_15m_start": "2024-11-04T10:00:00+00:00"},
+            ]
+        )
+        return [_candle(start), _candle(end - timedelta(days=1))], ["2024"]
+
+    monkeypatch.setattr(subject, "fetch_histdata_15m", fake_fetch)
+
+    with pytest.raises(subject.HistDataAcquisitionError, match="maximum is 1") as error:
+        subject._sync_histdata_incremental(
+            route,
+            start=start,
+            end=datetime(2024, 12, 1, tzinfo=timezone.utc),
+            force=False,
+            validation_scope="targeted",
+        )
+
+    assert error.value.evidence["failed_month"] == "2024-11"
+    assert len(error.value.evidence["source_anomalies"]) == 2
 
 
 def test_targeted_validation_accepts_requested_month_without_three_year_history() -> None:
@@ -729,6 +803,7 @@ def test_month_checkpoint_reuses_only_sha_verified_partitions(monkeypatch) -> No
     assert loaded is not None
     assert {item.month for item in loaded[0]} == {11}
     assert all(item.reused_verified for item in loaded[0])
+    assert loaded[2] == []
 
 
 def test_error_artifact_includes_resume_evidence(tmp_path, monkeypatch) -> None:
