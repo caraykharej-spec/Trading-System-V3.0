@@ -112,10 +112,17 @@ record the failed month, completed/reused months and failed archive scope.
 Conflicting valid M1 rows at the same timestamp are never resolved by choosing
 the first/last row or by synthesizing a price. The complete UTC 15-minute
 bucket is quarantined, leaving an explicit source gap. Every raw variant and
-its SHA-256 are stored in the monthly checkpoint and final route manifest. Up
-to three conflicting buckets per month are tolerated by default; exceeding
-`HISTDATA_MAX_CONFLICT_BUCKETS_PER_MONTH` fails the month closed. Byte-equivalent
-candles are deduplicated and counted separately.
+its SHA-256 and archive scope are stored in the monthly checkpoint and final
+route manifest. This applies both to conflicts inside one archive and to
+conflicting overlaps between adjacent archives.
+Acceptance uses both an absolute cap and a ratio calculated against unique
+15-minute buckets observed before quarantine. The defaults allow at most 20
+conflicting buckets and at most 1% per UTC month; exceeding either
+`HISTDATA_MAX_CONFLICT_BUCKETS_ABSOLUTE_PER_MONTH` or
+`HISTDATA_MAX_CONFLICT_BUCKET_RATIO` fails the month closed. The checkpoint,
+progress event and route manifest record the numerator, denominator, ratio,
+limits and policy decision. Byte-equivalent candles are deduplicated and
+counted separately.
 
 ## Validation scopes
 

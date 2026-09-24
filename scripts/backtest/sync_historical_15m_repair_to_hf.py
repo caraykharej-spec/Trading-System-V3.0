@@ -76,6 +76,14 @@ class Partition:
     month: int | None = None
 
 
+@dataclass(frozen=True)
+class HistDataArchive:
+    rows: list[Candle]
+    anomalies: list[dict[str, object]]
+    raw_by_timestamp: dict[datetime, list[str]]
+    archive_scope: str
+
+
 class DukascopyAcquisitionError(ProviderError):
     """Fail-closed provider error that carries resumability evidence."""
 
@@ -312,6 +320,8 @@ def parse_histdata_archive(
     *,
     quality: dict[str, int],
     anomalies: list[dict[str, object]] | None = None,
+    raw_by_timestamp_out: dict[datetime, list[str]] | None = None,
+    archive_scope: str | None = None,
 ) -> list[Candle]:
     output: dict[datetime, Candle] = {}
     raw_by_timestamp: dict[datetime, list[str]] = {}
@@ -389,6 +399,7 @@ def parse_histdata_archive(
                     "variants": [
                         {
                             "raw_fields": variant,
+                            "archive_scope": archive_scope,
                             "raw_sha256": hashlib.sha256(
                                 ";".join(variant).encode("ascii")
                             ).hexdigest(),
@@ -397,6 +408,8 @@ def parse_histdata_archive(
                     ],
                 }
             )
+    if raw_by_timestamp_out is not None:
+        raw_by_timestamp_out.update(raw_by_timestamp)
     return [output[key] for key in sorted(output)]
 
 
@@ -406,8 +419,9 @@ def fetch_histdata_15m(
     start: datetime,
     end: datetime,
     quality: dict[str, int],
-    archive_cache: dict[str, tuple[list[Candle], list[dict[str, object]]]],
+    archive_cache: dict[str, HistDataArchive],
     anomalies: list[dict[str, object]] | None = None,
+    metrics: dict[str, object] | None = None,
 ) -> tuple[list[Candle], list[str]]:
     local_start = start.astimezone(_HISTDATA_EST)
     local_end = (end - timedelta(microseconds=1)).astimezone(_HISTDATA_EST)
@@ -424,34 +438,105 @@ def fetch_histdata_15m(
 
     scopes: list[str] = []
     combined: dict[datetime, Candle] = {}
+    combined_raw: dict[datetime, list[str]] = {}
+    combined_scope: dict[datetime, str] = {}
+    overlap_quarantined_buckets: set[datetime] = set()
     for year, month in requested:
         archive_scope, _ = _histdata_archive_scope(year, month)
         cached_archive = archive_cache.get(archive_scope)
         if cached_archive is None:
             archive, archive_scope = _request_histdata_archive(route, year=year, month=month)
             archive_anomalies: list[dict[str, object]] = []
+            archive_raw: dict[datetime, list[str]] = {}
             source = parse_histdata_archive(
-                archive, route, quality=quality, anomalies=archive_anomalies
+                archive,
+                route,
+                quality=quality,
+                anomalies=archive_anomalies,
+                raw_by_timestamp_out=archive_raw,
+                archive_scope=archive_scope,
             )
-            archive_cache[archive_scope] = (source, archive_anomalies)
+            cached_archive = HistDataArchive(
+                rows=source,
+                anomalies=archive_anomalies,
+                raw_by_timestamp=archive_raw,
+                archive_scope=archive_scope,
+            )
+            archive_cache[archive_scope] = cached_archive
         else:
-            source, archive_anomalies = cached_archive
+            source = cached_archive.rows
+            archive_anomalies = cached_archive.anomalies
+            archive_raw = cached_archive.raw_by_timestamp
         if archive_scope not in scopes:
             scopes.append(archive_scope)
         for row in source:
             if start <= row.timestamp < end:
                 prior = combined.get(row.timestamp)
                 if prior is not None and prior != row:
-                    raise ProviderError(
-                        f"HistData conflicting archive overlap at {row.timestamp.isoformat()}"
-                    )
+                    bucket = _bucket_start(row.timestamp, "15m", "utc")
+                    overlap_quarantined_buckets.add(bucket)
+                    prior_fields = combined_raw[row.timestamp]
+                    current_fields = archive_raw[row.timestamp]
+                    overlap_anomaly = {
+                        "kind": "conflicting_archive_overlap_m1",
+                        "timestamp": row.timestamp.isoformat(),
+                        "bucket_15m_start": bucket.isoformat(),
+                        "action": "quarantine_entire_utc_15m_bucket_no_price_selection",
+                        "variants": [
+                            {
+                                "raw_fields": prior_fields,
+                                "archive_scope": combined_scope[row.timestamp],
+                                "raw_sha256": hashlib.sha256(
+                                    ";".join(prior_fields).encode("ascii")
+                                ).hexdigest(),
+                            },
+                            {
+                                "raw_fields": current_fields,
+                                "archive_scope": cached_archive.archive_scope,
+                                "raw_sha256": hashlib.sha256(
+                                    ";".join(current_fields).encode("ascii")
+                                ).hexdigest(),
+                            },
+                        ],
+                    }
+                    if anomalies is not None and overlap_anomaly not in anomalies:
+                        anomalies.append(overlap_anomaly)
+                    continue
+                if prior is None:
+                    combined_raw[row.timestamp] = archive_raw[row.timestamp]
+                    combined_scope[row.timestamp] = cached_archive.archive_scope
                 combined[row.timestamp] = row
         if anomalies is not None:
             for anomaly in archive_anomalies:
                 bucket = datetime.fromisoformat(str(anomaly["bucket_15m_start"]))
                 if start <= bucket < end and anomaly not in anomalies:
                     anomalies.append(anomaly)
+    if overlap_quarantined_buckets:
+        for timestamp in list(combined):
+            if _bucket_start(timestamp, "15m", "utc") in overlap_quarantined_buckets:
+                combined.pop(timestamp)
+                quality["quarantined_source_rows"] += 1
+        quality["quarantined_15m_buckets"] += len(overlap_quarantined_buckets)
     selected = [combined[key] for key in sorted(combined)]
+    conflict_buckets = {
+        str(item["bucket_15m_start"])
+        for item in (anomalies or [])
+        if start <= datetime.fromisoformat(str(item["bucket_15m_start"])) < end
+    }
+    observed_buckets = {
+        _bucket_start(row.timestamp, "15m", "utc").isoformat() for row in selected
+    } | conflict_buckets
+    if metrics is not None:
+        metrics.update(
+            {
+                "observed_15m_buckets_before_quarantine": len(observed_buckets),
+                "conflicting_15m_buckets": len(conflict_buckets),
+                "conflict_ratio": (
+                    len(conflict_buckets) / len(observed_buckets) if observed_buckets else 0.0
+                ),
+                "archive_scopes": list(scopes),
+            }
+        )
     return aggregate_candles(selected, "15m", session="utc"), scopes
 
 
@@ -1002,7 +1087,7 @@ def _load_valid_month_checkpoint(
     start: datetime,
     end: datetime,
     force: bool,
-) -> tuple[list[Partition], dict[str, int], list[dict[str, object]]] | None:
+) -> tuple[list[Partition], dict[str, int], list[dict[str, object]], dict[str, object]] | None:
     if force:
         return None
     checkpoint = _load_remote_json(_month_checkpoint_key(route, year, month))
@@ -1041,7 +1126,25 @@ def _load_valid_month_checkpoint(
         isinstance(item, dict) for item in raw_anomalies
     ):
         return None
-    return partitions, quality, raw_anomalies
+    raw_metrics = checkpoint.get("source_quality_metrics", {})
+    if not isinstance(raw_metrics, dict):
+        return None
+    if not raw_metrics:
+        fifteen_rows = next(item.rows for item in partitions if item.timeframe == "15m")
+        conflict_buckets = {
+            str(item.get("bucket_15m_start"))
+            for item in raw_anomalies
+            if item.get("bucket_15m_start")
+        }
+        observed = fifteen_rows + len(conflict_buckets)
+        raw_metrics = {
+            "observed_15m_buckets_before_quarantine": observed,
+            "conflicting_15m_buckets": len(conflict_buckets),
+            "conflict_ratio": len(conflict_buckets) / observed if observed else 0.0,
+            "archive_scopes": [],
+            "derived_from_legacy_checkpoint": True,
+        }
+    return partitions, quality, raw_anomalies, raw_metrics
 
 
 def _write_month_checkpoint(
@@ -1054,6 +1157,7 @@ def _write_month_checkpoint(
     quality: dict[str, int],
     partitions: list[Partition],
     source_anomalies: list[dict[str, object]] | None = None,
+    source_quality_metrics: dict[str, object] | None = None,
 ) -> str:
     key = _month_checkpoint_key(route, year, month)
     payload = {
@@ -1067,6 +1171,7 @@ def _write_month_checkpoint(
         "range_end": end.isoformat(),
         "quality": quality,
         "source_anomalies": source_anomalies or [],
+        "source_quality_metrics": source_quality_metrics or {},
         "integrity_policy": "all_partition_sha256_read_back_verified_before_checkpoint",
         "partitions": [asdict(item) for item in partitions],
     }
@@ -1247,7 +1352,7 @@ def _sync_dukascopy_incremental(
                 force=force,
             )
             if cached_month is not None:
-                month_partitions, month_quality, _ = cached_month
+                month_partitions, month_quality, _, _ = cached_month
                 partitions.extend(month_partitions)
                 _add_quality(quality, month_quality)
                 checkpoint_keys.append(_month_checkpoint_key(route, month_year, month))
@@ -1381,6 +1486,29 @@ def _progress_event(event: str, **fields: object) -> None:
     )
 
 
+def _apply_histdata_conflict_policy(
+    metrics: dict[str, object], *, absolute_limit: int, ratio_limit: float
+) -> tuple[bool, bool]:
+    absolute_exceeded = int(metrics["conflicting_15m_buckets"]) > absolute_limit
+    ratio_exceeded = float(metrics["conflict_ratio"]) > ratio_limit
+    metrics.update(
+        {
+            "absolute_limit": absolute_limit,
+            "ratio_limit": ratio_limit,
+            "policy_decision": "FAIL" if absolute_exceeded or ratio_exceeded else "PASS",
+            "policy_reasons": [
+                reason
+                for exceeded, reason in (
+                    (absolute_exceeded, "absolute_limit_exceeded"),
+                    (ratio_exceeded, "ratio_limit_exceeded"),
+                )
+                if exceeded
+            ],
+        }
+    )
+    return absolute_exceeded, ratio_exceeded
+
+
 def _sync_histdata_incremental(
     route: Historical15mRoute,
     *,
@@ -1395,9 +1523,11 @@ def _sync_histdata_incremental(
     months_reused: list[str] = []
     months_written: list[str] = []
     archive_scopes: set[str] = set()
-    archive_cache: dict[str, tuple[list[Candle], list[dict[str, object]]]] = {}
+    archive_cache: dict[str, HistDataArchive] = {}
     source_anomalies: list[dict[str, object]] = []
-    max_conflict_buckets = _positive_env_int("HISTDATA_MAX_CONFLICT_BUCKETS_PER_MONTH", 3)
+    monthly_source_quality: list[dict[str, object]] = []
+    max_conflict_buckets = _positive_env_int("HISTDATA_MAX_CONFLICT_BUCKETS_ABSOLUTE_PER_MONTH", 20)
+    max_conflict_ratio = _positive_env_float("HISTDATA_MAX_CONFLICT_BUCKET_RATIO", 0.01)
     route_started = time.monotonic()
 
     for year, chunk_start, chunk_end in _year_ranges(start, end):
@@ -1420,10 +1550,27 @@ def _sync_histdata_incremental(
                 force=force,
             )
             if cached is not None:
-                month_partitions, month_quality, month_anomalies = cached
+                month_partitions, month_quality, month_anomalies, month_metrics = cached
+                absolute_exceeded, ratio_exceeded = _apply_histdata_conflict_policy(
+                    month_metrics,
+                    absolute_limit=max_conflict_buckets,
+                    ratio_limit=max_conflict_ratio,
+                )
+                if absolute_exceeded or ratio_exceeded:
+                    raise HistDataAcquisitionError(
+                        f"HistData cached {route.base_asset}/{route.symbol} month "
+                        f"{month_label} violates current conflict policy",
+                        evidence={
+                            "failed_month": month_label,
+                            "checkpoint_reused": True,
+                            "source_anomalies": month_anomalies,
+                            "source_quality_metrics": month_metrics,
+                        },
+                    )
                 partitions.extend(month_partitions)
                 _add_quality(quality, month_quality)
                 source_anomalies.extend(month_anomalies)
+                monthly_source_quality.append({"month": month_label, **month_metrics})
                 checkpoint_keys.append(_month_checkpoint_key(route, month_year, month))
                 months_reused.append(month_label)
                 _progress_event(
@@ -1437,6 +1584,7 @@ def _sync_histdata_incremental(
 
             month_quality = _empty_quality()
             month_anomalies: list[dict[str, object]] = []
+            month_metrics: dict[str, object] = {}
             try:
                 fifteen, used_scopes = fetch_histdata_15m(
                     route,
@@ -1445,6 +1593,7 @@ def _sync_histdata_incremental(
                     quality=month_quality,
                     archive_cache=archive_cache,
                     anomalies=month_anomalies,
+                    metrics=month_metrics,
                 )
             except HistDataAcquisitionError as exc:
                 evidence = {
@@ -1458,18 +1607,28 @@ def _sync_histdata_incremental(
                 raise HistDataAcquisitionError(str(exc), evidence=evidence) from exc
             archive_scopes.update(used_scopes)
             conflict_buckets = {str(item["bucket_15m_start"]) for item in month_anomalies}
-            if len(conflict_buckets) > max_conflict_buckets:
+            conflict_ratio = float(month_metrics["conflict_ratio"])
+            absolute_exceeded, ratio_exceeded = _apply_histdata_conflict_policy(
+                month_metrics,
+                absolute_limit=max_conflict_buckets,
+                ratio_limit=max_conflict_ratio,
+            )
+            if absolute_exceeded or ratio_exceeded:
                 raise HistDataAcquisitionError(
                     f"HistData {route.base_asset}/{route.symbol} has "
-                    f"{len(conflict_buckets)} conflicting 15m buckets in {month_label}; "
-                    f"maximum is {max_conflict_buckets}",
+                    f"{len(conflict_buckets)} conflicting 15m buckets "
+                    f"({conflict_ratio:.6%}) in {month_label}; limits are "
+                    f"{max_conflict_buckets} and {max_conflict_ratio:.6%}",
                     evidence={
                         "failed_month": month_label,
+                        "months_reused": months_reused,
+                        "months_written": months_written,
+                        "archive_scopes": used_scopes,
                         "source_anomaly_policy": (
                             "quarantine_entire_utc_15m_bucket_no_price_selection"
                         ),
                         "source_anomalies": month_anomalies,
-                        "max_conflict_buckets_per_month": max_conflict_buckets,
+                        "source_quality_metrics": month_metrics,
                     },
                 )
             if not fifteen:
@@ -1506,9 +1665,11 @@ def _sync_histdata_incremental(
                     quality=month_quality,
                     partitions=month_partitions,
                     source_anomalies=month_anomalies,
+                    source_quality_metrics=month_metrics,
                 )
             )
             source_anomalies.extend(month_anomalies)
+            monthly_source_quality.append({"month": month_label, **month_metrics})
             months_written.append(month_label)
             partitions.extend(month_partitions)
             _add_quality(quality, month_quality)
@@ -1521,6 +1682,8 @@ def _sync_histdata_incremental(
                 rows_15m=len(fifteen),
                 rows_total=sum(len(rows) for rows in datasets.values()),
                 quarantined_15m_buckets=len(conflict_buckets),
+                conflict_ratio=conflict_ratio,
+                conflict_policy_decision=month_metrics["policy_decision"],
             )
         keep_prefix = f"{year:04d}"
         archive_cache = {
@@ -1556,7 +1719,9 @@ def _sync_histdata_incremental(
         "invalid_source_row_policy": "drop_and_record_never_clamp",
         "source_anomaly_policy": "quarantine_entire_utc_15m_bucket_no_price_selection",
         "source_anomalies": source_anomalies,
-        "max_conflict_buckets_per_month": max_conflict_buckets,
+        "monthly_source_quality": monthly_source_quality,
+        "max_conflict_buckets_absolute_per_month": max_conflict_buckets,
+        "max_conflict_bucket_ratio": max_conflict_ratio,
         "quality": quality,
         "source_ohlc_invariant_rows_dropped": quality["ohlc_invariant_rows_dropped"],
         "coverage": _coverage_from_partitions(partitions),
