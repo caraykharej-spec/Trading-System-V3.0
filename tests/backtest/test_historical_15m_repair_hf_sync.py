@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import io
 import lzma
 import struct
 import urllib.error
+import zipfile
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -21,6 +23,25 @@ def _candle(timestamp: datetime, value: str = "100") -> subject.Candle:
     return subject.Candle(timestamp, price, price + 1, price - 1, price, Decimal("1"))
 
 
+def _dukascopy_route():
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    return replace(
+        route,
+        provider="dukascopy",
+        symbol="EURUSD",
+        price_divisor=Decimal("100000"),
+    )
+
+
+def _histdata_zip(rows: str, *, symbol: str = "EURUSD", scope: str = "202411") -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr(f"DAT_ASCII_{symbol}_M1_{scope}.csv", rows)
+        bundle.writestr(f"STATUS_{symbol}_{scope}.txt", "OK\n")
+    return output.getvalue()
+
+
 def test_registry_is_the_26_non_crypto_yahoo_intraday_repairs() -> None:
     routes = Historical15mRegistry.load().all()
     counts: dict[str, int] = {}
@@ -29,14 +50,26 @@ def test_registry_is_the_26_non_crypto_yahoo_intraday_repairs() -> None:
 
     assert len(routes) == 26
     assert counts == {"commodity": 3, "equity": 16, "forex": 6, "index": 1}
-    assert {route.provider for route in routes} == {"alpaca_sip", "dukascopy"}
+    assert {route.provider for route in routes} == {"alpaca_sip", "histdata"}
+    histdata = {route.base_asset: route.symbol for route in routes if route.provider == "histdata"}
+    assert histdata == {
+        "AUD": "AUDUSD",
+        "EUR": "EURUSD",
+        "GBP": "GBPUSD",
+        "NZD": "NZDUSD",
+        "SPX": "SPXUSD",
+        "UKOIL": "BCOUSD",
+        "USDCAD": "USDCAD",
+        "USDCHF": "USDCHF",
+        "XAG": "XAGUSD",
+        "XAU": "XAUUSD",
+    }
     assert Historical15mRegistry.load().get("NFLX").price_multiplier == Decimal("10")
     assert Historical15mRegistry.load().get("SPX").proxy_for == "SPX"
 
 
 def test_parse_dukascopy_bi5_and_apply_reviewed_scale() -> None:
-    route = Historical15mRegistry.load().get("EUR")
-    assert route is not None
+    route = _dukascopy_route()
     record = struct.pack(">5If", 60, 110000, 110020, 109990, 110010, 12.5)
     quality = {
         "invalid_rows_dropped": 0,
@@ -55,6 +88,53 @@ def test_parse_dukascopy_bi5_and_apply_reviewed_scale() -> None:
     assert rows[0].high == Decimal("1.10020")
     assert rows[0].low == Decimal("1.09990")
     assert rows[0].close == Decimal("1.10010")
+
+
+def test_parse_histdata_ascii_converts_fixed_est_to_utc() -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    quality = subject._empty_quality()
+    archive = _histdata_zip(
+        "20241101 000000;1.10000;1.10020;1.09990;1.10010;0\n20241101 000100;broken\n"
+    )
+
+    rows = subject.parse_histdata_archive(archive, route, quality=quality)
+
+    assert len(rows) == 1
+    assert rows[0].timestamp == datetime(2024, 11, 1, 5, 0, tzinfo=timezone.utc)
+    assert rows[0].open == Decimal("1.10000")
+    assert rows[0].close == Decimal("1.10010")
+    assert quality["invalid_rows_dropped"] == 1
+
+
+def test_histdata_past_year_archive_is_downloaded_once_for_utc_month(monkeypatch) -> None:
+    route = Historical15mRegistry.load().get("EUR")
+    assert route is not None
+    calls: list[tuple[int, int]] = []
+    archive = _histdata_zip(
+        "20241031 190000;1.1;1.1;1.1;1.1;0\n20241101 000000;1.2;1.2;1.2;1.2;0\n",
+        scope="2024",
+    )
+
+    def fake_request(route, *, year, month):
+        calls.append((year, month))
+        return archive, "2024"
+
+    monkeypatch.setattr(subject, "_request_histdata_archive", fake_request)
+    rows, scopes = subject.fetch_histdata_15m(
+        route,
+        start=datetime(2024, 11, 1, tzinfo=timezone.utc),
+        end=datetime(2024, 12, 1, tzinfo=timezone.utc),
+        quality=subject._empty_quality(),
+        archive_cache={},
+    )
+
+    assert calls == [(2024, 10)]
+    assert scopes == ["2024"]
+    assert [row.timestamp for row in rows] == [
+        datetime(2024, 11, 1, 0, 0, tzinfo=timezone.utc),
+        datetime(2024, 11, 1, 5, 0, tzinfo=timezone.utc),
+    ]
 
 
 class _ByteResponse:
@@ -176,8 +256,7 @@ def test_dukascopy_transport_retry_budget_is_independent(monkeypatch) -> None:
 
 
 def test_dukascopy_failure_reports_exact_source_day(monkeypatch) -> None:
-    route = Historical15mRegistry.load().get("EUR")
-    assert route is not None
+    route = _dukascopy_route()
     monkeypatch.setattr(
         subject,
         "_request_bytes",
@@ -196,8 +275,7 @@ def test_dukascopy_failure_reports_exact_source_day(monkeypatch) -> None:
 
 
 def test_dukascopy_defers_failed_day_and_recovers_after_other_days(monkeypatch) -> None:
-    route = Historical15mRegistry.load().get("EUR")
-    assert route is not None
+    route = _dukascopy_route()
     calls: list[str] = []
     first_day_failed = False
 
@@ -233,8 +311,7 @@ def test_dukascopy_defers_failed_day_and_recovers_after_other_days(monkeypatch) 
 
 
 def test_dukascopy_unresolved_days_are_reported_fail_closed(monkeypatch) -> None:
-    route = Historical15mRegistry.load().get("EUR")
-    assert route is not None
+    route = _dukascopy_route()
     monkeypatch.setattr(
         subject,
         "_request_bytes",
@@ -376,8 +453,7 @@ def _fake_partition(
 
 
 def test_dukascopy_writes_completed_month_before_later_month_fails(monkeypatch) -> None:
-    route = Historical15mRegistry.load().get("EUR")
-    assert route is not None
+    route = _dukascopy_route()
     route = replace(route, minimum_history_days=0)
     written: list[str] = []
 
@@ -421,8 +497,7 @@ def test_dukascopy_writes_completed_month_before_later_month_fails(monkeypatch) 
 
 
 def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch) -> None:
-    route = Historical15mRegistry.load().get("EUR")
-    assert route is not None
+    route = _dukascopy_route()
     route = replace(route, minimum_history_days=0)
     fetched: list[str] = []
     written: list[str] = []
@@ -484,9 +559,52 @@ def test_dukascopy_resume_prefers_legacy_year_then_month_checkpoint(monkeypatch)
     assert result["status"] == "COMPLETE"
 
 
-def test_year_checkpoint_requires_remote_partition_sha_match(monkeypatch) -> None:
+def test_histdata_sync_writes_monthly_checkpoint_with_progress(monkeypatch, capsys) -> None:
     route = Historical15mRegistry.load().get("EUR")
     assert route is not None
+    route = replace(route, minimum_history_days=0)
+    start = datetime(2024, 11, 1, tzinfo=timezone.utc)
+    written: list[str] = []
+
+    monkeypatch.setattr(subject, "_load_valid_month_checkpoint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        subject,
+        "fetch_histdata_15m",
+        lambda route, *, start, end, quality, archive_cache: (
+            [_candle(start), _candle(start + timedelta(hours=4))],
+            ["2024"],
+        ),
+    )
+    monkeypatch.setattr(
+        subject,
+        "_store_partition",
+        lambda route, timeframe, year, rows, *, force, month=None: replace(
+            _fake_partition(timeframe, year, rows[0].timestamp, reused=False), month=month
+        ),
+    )
+
+    def fake_checkpoint(route, *, year, month, start, end, quality, partitions):
+        written.append(f"{year:04d}-{month:02d}")
+        return f"checkpoint/{year}/{month}.json"
+
+    monkeypatch.setattr(subject, "_write_month_checkpoint", fake_checkpoint)
+    monkeypatch.setattr(subject.storage, "_put_json", lambda payload, key: None)
+
+    result = subject.sync_route(
+        route,
+        start=start,
+        end=datetime(2024, 12, 1, tzinfo=timezone.utc),
+    )
+
+    assert written == ["2024-11"]
+    assert result["route"]["provider"] == "histdata"
+    assert result["months_written"] == ["2024-11"]
+    assert result["archive_scopes_downloaded"] == ["2024"]
+    assert '"event": "histdata_month_complete"' in capsys.readouterr().out
+
+
+def test_year_checkpoint_requires_remote_partition_sha_match(monkeypatch) -> None:
+    route = _dukascopy_route()
     start = datetime(2022, 1, 1, tzinfo=timezone.utc)
     end = datetime(2023, 1, 1, tzinfo=timezone.utc)
     partitions = [
