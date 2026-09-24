@@ -193,13 +193,13 @@ def test_ready_reviewed_15m_repair_replaces_short_yahoo_history(monkeypatch) -> 
         registry,
         [],
         [_yahoo("SPX", "^GSPC", rows=100)],
-        [_extended("SPX", "dukascopy", "USA500IDXUSD")],
+        [_extended("SPX", "histdata", "SPXUSD")],
     )
 
     asset = payload["assets"][0]
     assert payload["status"] == "PASS_GLOBAL_HISTORY_QUALIFICATION"
-    assert asset["historical_source"]["provider"] == "dukascopy"
-    assert asset["historical_source"]["provider_symbol"] == "USA500IDXUSD"
+    assert asset["historical_source"]["provider"] == "histdata"
+    assert asset["historical_source"]["provider_symbol"] == "SPXUSD"
     assert asset["identity_policy"] == "historical_15m_repair_backtest_ready"
 
 
@@ -280,9 +280,7 @@ def test_listing_limited_policy_fails_closed_when_history_start_does_not_match()
         "insufficient_history_asset_count": 1,
         "status": "FAIL_GLOBAL_HISTORY_QUALIFICATION",
         "backtest_history_policy": {},
-        "assets": [
-            _listing_asset("SKY", "SKY_USDT", "2025-10-01T00:00:00+00:00")
-        ],
+        "assets": [_listing_asset("SKY", "SKY_USDT", "2025-10-01T00:00:00+00:00")],
     }
     policy = {
         "SKY": {

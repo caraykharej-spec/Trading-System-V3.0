@@ -1,4 +1,5 @@
 """Shared loaders for fail-closed HF-qualified research backtests."""
+
 from __future__ import annotations
 
 import hashlib
@@ -17,7 +18,7 @@ from scripts.backtest import hf_s3
 
 REQUIRED_TIMEFRAMES = ("15m", "1h", "4h", "1d")
 COMPLETE_GATE = {"COMPLETE", "COMPLETE_WITH_RECORDED_GAPS"}
-COMPLETE_RESEARCH_PROVIDERS = {"yahoo", "alpaca_sip", "dukascopy"}
+COMPLETE_RESEARCH_PROVIDERS = {"yahoo", "alpaca_sip", "dukascopy", "histdata"}
 QUALIFIED_STATUSES = {"QUALIFIED", "QUALIFIED_LISTING_LIMITED_HISTORY"}
 
 
@@ -59,13 +60,21 @@ def asset_execution_status(asset: dict[str, Any]) -> str:
 def find_asset(qualification: dict[str, Any], base_asset: str) -> dict[str, Any]:
     if qualification.get("status") != "PASS_GLOBAL_HISTORY_QUALIFICATION":
         raise ValueError("global historical qualification is not PASS")
-    if qualification.get("storm_asset_count") != 81 or qualification.get("qualified_asset_count") != 81:
+    if (
+        qualification.get("storm_asset_count") != 81
+        or qualification.get("qualified_asset_count") != 81
+    ):
         raise ValueError("qualification is not the locked 81/81 universe")
     assets = qualification.get("assets")
     if not isinstance(assets, list):
         raise ValueError("qualification contract is missing assets")
     selected = next(
-        (item for item in assets if isinstance(item, dict) and str(item.get("base_asset") or "").upper() == base_asset.upper()),
+        (
+            item
+            for item in assets
+            if isinstance(item, dict)
+            and str(item.get("base_asset") or "").upper() == base_asset.upper()
+        ),
         None,
     )
     if selected is None:
@@ -139,7 +148,9 @@ def load_candles(
     raw_partitions = summary.get("partitions")
     if not isinstance(raw_partitions, list):
         raise ValueError("qualified source summary is missing partitions")
-    candles: dict[str, dict[datetime, Candle]] = {timeframe: {} for timeframe in REQUIRED_TIMEFRAMES}
+    candles: dict[str, dict[datetime, Candle]] = {
+        timeframe: {} for timeframe in REQUIRED_TIMEFRAMES
+    }
     evidence: list[dict[str, Any]] = []
     with tempfile.TemporaryDirectory(prefix="hf-qualified-candles-") as temp_dir:
         root = Path(temp_dir)

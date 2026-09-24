@@ -37,9 +37,7 @@ class Historical15mRegistry:
         self._routes = {route.base_asset: route for route in routes}
 
     @classmethod
-    def load(
-        cls, path: Path = DEFAULT_HISTORICAL_15M_REGISTRY
-    ) -> Historical15mRegistry:
+    def load(cls, path: Path = DEFAULT_HISTORICAL_15M_REGISTRY) -> Historical15mRegistry:
         payload = json.loads(path.read_text(encoding="utf-8"))
         default_start = _parse_aware_datetime(payload["default_start"])
         default_minimum_days = int(payload.get("minimum_history_days", 1095))
@@ -47,7 +45,7 @@ class Historical15mRegistry:
         for raw_base, raw in payload["routes"].items():
             base = str(raw_base).upper()
             provider = str(raw["provider"]).lower()
-            if provider not in {"alpaca_sip", "dukascopy"}:
+            if provider not in {"alpaca_sip", "dukascopy", "histdata"}:
                 raise ValueError(f"unsupported historical 15m provider for {base}: {provider}")
             divisor = Decimal(str(raw.get("price_divisor", "1")))
             multiplier = Decimal(str(raw.get("price_multiplier", "1")))
@@ -60,9 +58,7 @@ class Historical15mRegistry:
                     provider=provider,
                     symbol=str(raw["symbol"]).upper(),
                     start=_parse_aware_datetime(raw.get("start", default_start.isoformat())),
-                    minimum_history_days=int(
-                        raw.get("minimum_history_days", default_minimum_days)
-                    ),
+                    minimum_history_days=int(raw.get("minimum_history_days", default_minimum_days)),
                     price_multiplier=multiplier,
                     price_divisor=divisor,
                     session=str(raw.get("session", "utc")),

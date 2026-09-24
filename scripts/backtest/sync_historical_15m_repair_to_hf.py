@@ -1,24 +1,29 @@
 """Repair source-limited non-crypto 15m history in the private research store.
 
 US equities use delayed historical Alpaca SIP bars. Forex, metals, Brent and
-the reviewed SPX CFD proxy use Dukascopy BID minute candles aggregated without
-forward filling. The live market-data route order is intentionally unchanged.
+the reviewed SPX proxy use HistData Generic ASCII BID minute archives,
+normalized from fixed EST to UTC and aggregated without forward filling. The
+live market-data route order is intentionally unchanged.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
+import io
 import json
 import lzma
 import math
 import os
 import random
+import re
 import struct
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time as wall_time, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -34,6 +39,11 @@ from scripts.backtest import sync_yahoo_history_to_hf as storage
 
 _ALPACA_BASE = "https://data.alpaca.markets/v2/stocks"
 _DUKASCOPY_BASE = "https://datafeed.dukascopy.com/datafeed"
+_HISTDATA_REFERER_BASE = (
+    "https://www.histdata.com/download-free-forex-historical-data/?/ascii/1-minute-bar-quotes"
+)
+_HISTDATA_DOWNLOAD_URL = "https://www.histdata.com/get.php"
+_HISTDATA_EST = timezone(timedelta(hours=-5), name="EST")
 _NAMESPACE = "bronze/historical-15m-repair/v1"
 _MANIFEST_NAMESPACE = "manifests/historical-15m-repair/v1"
 _SCHEMA_VERSION = 1
@@ -75,6 +85,14 @@ class DukascopyAcquisitionError(ProviderError):
 
 class DukascopyPermanentError(ProviderError):
     """A request failure that deferred sweeps must not retry."""
+
+
+class HistDataAcquisitionError(ProviderError):
+    """Fail-closed HistData error with archive-level diagnostics."""
+
+    def __init__(self, message: str, *, evidence: dict[str, object]) -> None:
+        super().__init__(message)
+        self.evidence = evidence
 
 
 def discover_routes() -> list[Historical15mRoute]:
@@ -172,6 +190,215 @@ def _pace_dukascopy_request() -> None:
     delay = _positive_env_float("DUKASCOPY_REQUEST_INTERVAL_SECONDS", 0.2)
     if delay:
         time.sleep(delay)
+
+
+def _histdata_archive_scope(
+    year: int, month: int, *, current_year: int | None = None
+) -> tuple[str, str]:
+    active_year = current_year or datetime.now(timezone.utc).year
+    if year > active_year:
+        raise ValueError("HistData archive year cannot be in the future")
+    if year < active_year:
+        return str(year), str(year)
+    return f"{year:04d}-{month:02d}", f"{year:04d}{month:02d}"
+
+
+def _histdata_referer(symbol: str, year: int, month: int) -> str:
+    scope, _ = _histdata_archive_scope(year, month)
+    suffix = str(year) if len(scope) == 4 else f"{year}/{month}"
+    return f"{_HISTDATA_REFERER_BASE}/{symbol.lower()}/{suffix}"
+
+
+def _histdata_token(page: bytes) -> str:
+    text = page.decode("utf-8", errors="replace")
+    match = re.search(r"<input\b[^>]*\bid=[\"']tk[\"'][^>]*>", text, re.IGNORECASE)
+    if match is None:
+        raise ProviderError("HistData download token is missing")
+    value = re.search(r"\bvalue=[\"']([^\"']+)[\"']", match.group(0), re.IGNORECASE)
+    if value is None or not value.group(1).strip():
+        raise ProviderError("HistData download token is empty")
+    return value.group(1).strip()
+
+
+def _histdata_http_bytes(request: urllib.request.Request, *, attempts: int) -> bytes:
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                if response.status != 200:
+                    raise ProviderError(f"HistData HTTP {response.status}")
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            retryable = exc.code in _TRANSIENT_HTTP_STATUS
+            if not retryable or attempt == attempts:
+                raise ProviderError(f"HistData HTTP {exc.code}") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            if attempt == attempts:
+                raise ProviderError("HistData request failed") from exc
+        delay = min(
+            _positive_env_float("HISTDATA_RETRY_MAX_SECONDS", 30.0),
+            _positive_env_float("HISTDATA_RETRY_BASE_SECONDS", 2.0) * (2 ** (attempt - 1)),
+        )
+        time.sleep(delay)
+    raise AssertionError("unreachable")
+
+
+def _request_histdata_archive(
+    route: Historical15mRoute,
+    *,
+    year: int,
+    month: int,
+) -> tuple[bytes, str]:
+    attempts = _positive_env_int("HISTDATA_HTTP_ATTEMPTS", 5)
+    archive_scope, datemonth = _histdata_archive_scope(year, month)
+    referer = _histdata_referer(route.symbol, year, month)
+    common_headers = {
+        "User-Agent": "Trading-System-V3 historical-15m-repair/1.0",
+        "Accept": "text/html,application/xhtml+xml,application/zip,*/*;q=0.8",
+    }
+    try:
+        page = _histdata_http_bytes(
+            urllib.request.Request(referer, headers=common_headers), attempts=attempts
+        )
+        token = _histdata_token(page)
+        form = urllib.parse.urlencode(
+            {
+                "tk": token,
+                "date": str(year),
+                "datemonth": datemonth,
+                "platform": "ASCII",
+                "timeframe": "M1",
+                "fxpair": route.symbol,
+            }
+        ).encode("ascii")
+        archive = _histdata_http_bytes(
+            urllib.request.Request(
+                _HISTDATA_DOWNLOAD_URL,
+                data=form,
+                headers={
+                    **common_headers,
+                    "Origin": "https://www.histdata.com",
+                    "Referer": referer,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                method="POST",
+            ),
+            attempts=attempts,
+        )
+    except ProviderError as exc:
+        raise HistDataAcquisitionError(
+            f"HistData {route.base_asset}/{route.symbol} archive {archive_scope} failed: {exc}",
+            evidence={
+                "archive_scope": archive_scope,
+                "provider_symbol": route.symbol,
+                "request_kind": "annual" if len(archive_scope) == 4 else "monthly",
+            },
+        ) from exc
+    if not zipfile.is_zipfile(io.BytesIO(archive)):
+        raise HistDataAcquisitionError(
+            f"HistData {route.base_asset}/{route.symbol} archive {archive_scope} is not ZIP",
+            evidence={
+                "archive_scope": archive_scope,
+                "provider_symbol": route.symbol,
+                "response_bytes": len(archive),
+            },
+        )
+    return archive, archive_scope
+
+
+def parse_histdata_archive(
+    archive: bytes,
+    route: Historical15mRoute,
+    *,
+    quality: dict[str, int],
+) -> list[Candle]:
+    output: dict[datetime, Candle] = {}
+    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
+        csv_names = [name for name in bundle.namelist() if name.lower().endswith(".csv")]
+        if len(csv_names) != 1:
+            raise ProviderError(
+                f"HistData archive must contain exactly one CSV; found {len(csv_names)}"
+            )
+        with bundle.open(csv_names[0]) as raw:
+            text = io.TextIOWrapper(raw, encoding="ascii", errors="strict", newline="")
+            for fields in csv.reader(text, delimiter=";"):
+                if not fields or all(not item.strip() for item in fields):
+                    continue
+                if len(fields) < 5:
+                    quality["invalid_rows_dropped"] += 1
+                    continue
+                try:
+                    naive = datetime.strptime(fields[0].strip(), "%Y%m%d %H%M%S")
+                    timestamp = naive.replace(tzinfo=_HISTDATA_EST).astimezone(timezone.utc)
+                    scale = route.price_multiplier / route.price_divisor
+                    candle = Candle(
+                        timestamp=timestamp,
+                        open=_parse_decimal(fields[1], "open") * scale,
+                        high=_parse_decimal(fields[2], "high") * scale,
+                        low=_parse_decimal(fields[3], "low") * scale,
+                        close=_parse_decimal(fields[4], "close") * scale,
+                        volume=(
+                            _parse_decimal(fields[5], "volume")
+                            if len(fields) > 5 and fields[5].strip()
+                            else None
+                        ),
+                    )
+                except (ProviderError, ValueError):
+                    quality["invalid_rows_dropped"] += 1
+                    continue
+                if not _valid_candle(candle):
+                    quality["ohlc_invariant_rows_dropped"] += 1
+                    continue
+                prior = output.get(timestamp)
+                if prior is not None and prior != candle:
+                    raise ProviderError(
+                        f"HistData conflicting duplicate at {timestamp.isoformat()}"
+                    )
+                output[timestamp] = candle
+    return [output[key] for key in sorted(output)]
+
+
+def fetch_histdata_15m(
+    route: Historical15mRoute,
+    *,
+    start: datetime,
+    end: datetime,
+    quality: dict[str, int],
+    archive_cache: dict[str, list[Candle]],
+) -> tuple[list[Candle], list[str]]:
+    local_start = start.astimezone(_HISTDATA_EST)
+    local_end = (end - timedelta(microseconds=1)).astimezone(_HISTDATA_EST)
+    cursor = date(local_start.year, local_start.month, 1)
+    final = date(local_end.year, local_end.month, 1)
+    requested: list[tuple[int, int]] = []
+    while cursor <= final:
+        requested.append((cursor.year, cursor.month))
+        cursor = (
+            date(cursor.year + 1, 1, 1)
+            if cursor.month == 12
+            else date(cursor.year, cursor.month + 1, 1)
+        )
+
+    scopes: list[str] = []
+    combined: dict[datetime, Candle] = {}
+    for year, month in requested:
+        archive_scope, _ = _histdata_archive_scope(year, month)
+        source = archive_cache.get(archive_scope)
+        if source is None:
+            archive, archive_scope = _request_histdata_archive(route, year=year, month=month)
+            source = parse_histdata_archive(archive, route, quality=quality)
+            archive_cache[archive_scope] = source
+        if archive_scope not in scopes:
+            scopes.append(archive_scope)
+        for row in source:
+            if start <= row.timestamp < end:
+                prior = combined.get(row.timestamp)
+                if prior is not None and prior != row:
+                    raise ProviderError(
+                        f"HistData conflicting archive overlap at {row.timestamp.isoformat()}"
+                    )
+                combined[row.timestamp] = row
+    selected = [combined[key] for key in sorted(combined)]
+    return aggregate_candles(selected, "15m", session="utc"), scopes
 
 
 def _request_alpaca_json(url: str, *, attempts: int = 6) -> dict[str, object]:
@@ -482,6 +709,8 @@ def _year_groups(rows: list[Candle]) -> Iterable[tuple[int, list[Candle]]]:
 def _source_kind(route: Historical15mRoute) -> str:
     if route.provider == "alpaca_sip":
         return "alpaca_historical_sip_adjusted_all_us_rth"
+    if route.provider == "histdata":
+        return "histdata_generic_ascii_bid_m1_aggregated_no_fill"
     return "dukascopy_public_bid_m1_aggregated_no_fill"
 
 
@@ -1045,6 +1274,191 @@ def _sync_dukascopy_incremental(
     return manifest
 
 
+def _progress_event(event: str, **fields: object) -> None:
+    print(
+        json.dumps(
+            {
+                "event": event,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                **fields,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+
+
+def _sync_histdata_incremental(
+    route: Historical15mRoute,
+    *,
+    start: datetime,
+    end: datetime,
+    force: bool,
+) -> dict[str, object]:
+    quality = _empty_quality()
+    partitions: list[Partition] = []
+    checkpoint_keys: list[str] = []
+    months_reused: list[str] = []
+    months_written: list[str] = []
+    archive_scopes: set[str] = set()
+    archive_cache: dict[str, list[Candle]] = {}
+    route_started = time.monotonic()
+
+    for year, chunk_start, chunk_end in _year_ranges(start, end):
+        for month_year, month, month_start, month_end in _month_ranges(chunk_start, chunk_end):
+            month_started = time.monotonic()
+            month_label = f"{month_year:04d}-{month:02d}"
+            _progress_event(
+                "histdata_month_start",
+                base_asset=route.base_asset,
+                month=month_label,
+                range_start=month_start.isoformat(),
+                range_end=month_end.isoformat(),
+            )
+            cached = _load_valid_month_checkpoint(
+                route,
+                year=month_year,
+                month=month,
+                start=month_start,
+                end=month_end,
+                force=force,
+            )
+            if cached is not None:
+                month_partitions, month_quality = cached
+                partitions.extend(month_partitions)
+                _add_quality(quality, month_quality)
+                checkpoint_keys.append(_month_checkpoint_key(route, month_year, month))
+                months_reused.append(month_label)
+                _progress_event(
+                    "histdata_month_reused",
+                    base_asset=route.base_asset,
+                    month=month_label,
+                    elapsed_seconds=round(time.monotonic() - month_started, 3),
+                    rows=sum(item.rows for item in month_partitions),
+                )
+                continue
+
+            month_quality = _empty_quality()
+            try:
+                fifteen, used_scopes = fetch_histdata_15m(
+                    route,
+                    start=month_start,
+                    end=month_end,
+                    quality=month_quality,
+                    archive_cache=archive_cache,
+                )
+            except HistDataAcquisitionError as exc:
+                evidence = {
+                    "checkpoint_policy": "histdata_month_sha256_verified_resume",
+                    "months_reused": months_reused,
+                    "months_written": months_written,
+                    "failed_month": month_label,
+                    "archive_scopes_downloaded": sorted(archive_scopes),
+                    **exc.evidence,
+                }
+                raise HistDataAcquisitionError(str(exc), evidence=evidence) from exc
+            archive_scopes.update(used_scopes)
+            if not fifteen:
+                raise HistDataAcquisitionError(
+                    f"HistData {route.base_asset}/{route.symbol} returned no valid rows "
+                    f"for {month_start.date()}..{month_end.date()}",
+                    evidence={
+                        "checkpoint_policy": "histdata_month_sha256_verified_resume",
+                        "months_reused": months_reused,
+                        "months_written": months_written,
+                        "failed_month": month_label,
+                        "archive_scopes": used_scopes,
+                    },
+                )
+            datasets = _datasets_from_fifteen(route, fifteen)
+            month_partitions = [
+                _store_partition(
+                    route,
+                    timeframe,
+                    month_year,
+                    rows,
+                    force=force,
+                    month=month,
+                )
+                for timeframe, rows in datasets.items()
+            ]
+            checkpoint_keys.append(
+                _write_month_checkpoint(
+                    route,
+                    year=month_year,
+                    month=month,
+                    start=month_start,
+                    end=month_end,
+                    quality=month_quality,
+                    partitions=month_partitions,
+                )
+            )
+            months_written.append(month_label)
+            partitions.extend(month_partitions)
+            _add_quality(quality, month_quality)
+            _progress_event(
+                "histdata_month_complete",
+                base_asset=route.base_asset,
+                month=month_label,
+                elapsed_seconds=round(time.monotonic() - month_started, 3),
+                archive_scopes=used_scopes,
+                rows_15m=len(fifteen),
+                rows_total=sum(len(rows) for rows in datasets.values()),
+            )
+        keep_prefix = f"{year:04d}"
+        archive_cache = {
+            scope: rows
+            for scope, rows in archive_cache.items()
+            if scope == keep_prefix or scope.startswith(f"{keep_prefix}-")
+        }
+
+    _validate_partition_coverage(route, partitions, start=start)
+    manifest: dict[str, object] = {
+        "schema_version": _SCHEMA_VERSION,
+        "status": "COMPLETE",
+        "route": _route_identity(route),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "requested_start": start.isoformat(),
+        "requested_end": end.isoformat(),
+        "source_kind": _source_kind(route),
+        "qualification_scope": "research_backtest_only_live_route_order_unchanged",
+        "history_policy": "provider_backed_15m_with_1h_4h_1d_deterministically_derived",
+        "session_policy": route.session,
+        "adjustment_policy": "histdata_bid_m1_fixed_est_to_utc_no_forward_fill",
+        "proxy_for": route.proxy_for,
+        "listing_limited": route.listing_limited,
+        "gap_policy": "preserve_source_market_sessions_no_fill",
+        "invalid_source_row_policy": "drop_and_record_never_clamp",
+        "quality": quality,
+        "source_ohlc_invariant_rows_dropped": quality["ohlc_invariant_rows_dropped"],
+        "coverage": _coverage_from_partitions(partitions),
+        "total_rows": sum(item.rows for item in partitions),
+        "partition_objects_recorded": len(partitions),
+        "reused_verified_partition_objects": sum(item.reused_verified for item in partitions),
+        "uploaded_or_replaced_partition_objects": sum(
+            not item.reused_verified for item in partitions
+        ),
+        "integrity_policy": "sha256_manifest_compare_upload_verify_downloaded_bytes",
+        "checkpoint_policy": "histdata_month_sha256_verified_resume",
+        "provider_migration_policy": "clean_histdata_namespace_no_cross_provider_reuse",
+        "months_reused": months_reused,
+        "months_written": months_written,
+        "checkpoint_months_reused": len(months_reused),
+        "checkpoint_months_written": len(months_written),
+        "checkpoint_manifest_keys": checkpoint_keys,
+        "archive_scopes_downloaded": sorted(archive_scopes),
+        "elapsed_seconds": round(time.monotonic() - route_started, 3),
+        "partitions": [asdict(item) for item in partitions],
+    }
+    manifest_key = (
+        f"{_MANIFEST_NAMESPACE}/routes/provider={storage._slug(route.provider)}/"
+        f"canonical={storage._slug(route.base_asset)}/market={storage._slug(route.symbol)}.json"
+    )
+    storage._put_json(manifest, manifest_key)
+    manifest["manifest_object_key"] = manifest_key
+    return manifest
+
+
 def sync_route(
     route: Historical15mRoute,
     *,
@@ -1058,6 +1472,8 @@ def sync_route(
     end = end.astimezone(timezone.utc)
     if route.provider == "dukascopy":
         return _sync_dukascopy_incremental(route, start=start, end=end, force=force)
+    if route.provider == "histdata":
+        return _sync_histdata_incremental(route, start=start, end=end, force=force)
 
     quality = _empty_quality()
     if route.provider == "alpaca_sip":

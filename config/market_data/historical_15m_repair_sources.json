@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "purpose": "research-only replacement for source-limited Yahoo 15m history",
   "default_start": "2022-01-01T00:00:00Z",
   "minimum_history_days": 1095,
@@ -21,15 +21,15 @@
     "PLTR": {"asset_class":"equity","provider":"alpaca_sip","symbol":"PLTR","session":"us_rth"},
     "TSLA": {"asset_class":"equity","provider":"alpaca_sip","symbol":"TSLA","session":"us_rth"},
 
-    "AUD": {"asset_class":"forex","provider":"dukascopy","symbol":"AUDUSD","price_divisor":"100000"},
-    "EUR": {"asset_class":"forex","provider":"dukascopy","symbol":"EURUSD","price_divisor":"100000"},
-    "GBP": {"asset_class":"forex","provider":"dukascopy","symbol":"GBPUSD","price_divisor":"100000"},
-    "NZD": {"asset_class":"forex","provider":"dukascopy","symbol":"NZDUSD","price_divisor":"100000"},
-    "USDCAD": {"asset_class":"forex","provider":"dukascopy","symbol":"USDCAD","price_divisor":"100000"},
-    "USDCHF": {"asset_class":"forex","provider":"dukascopy","symbol":"USDCHF","price_divisor":"100000"},
-    "UKOIL": {"asset_class":"commodity","provider":"dukascopy","symbol":"BRENTCMDUSD","price_divisor":"1000"},
-    "XAG": {"asset_class":"commodity","provider":"dukascopy","symbol":"XAGUSD","price_divisor":"1000"},
-    "XAU": {"asset_class":"commodity","provider":"dukascopy","symbol":"XAUUSD","price_divisor":"1000"},
-    "SPX": {"asset_class":"index","provider":"dukascopy","symbol":"USA500IDXUSD","price_divisor":"1000","proxy_for":"SPX"}
+    "AUD": {"asset_class":"forex","provider":"histdata","symbol":"AUDUSD"},
+    "EUR": {"asset_class":"forex","provider":"histdata","symbol":"EURUSD"},
+    "GBP": {"asset_class":"forex","provider":"histdata","symbol":"GBPUSD"},
+    "NZD": {"asset_class":"forex","provider":"histdata","symbol":"NZDUSD"},
+    "USDCAD": {"asset_class":"forex","provider":"histdata","symbol":"USDCAD"},
+    "USDCHF": {"asset_class":"forex","provider":"histdata","symbol":"USDCHF"},
+    "UKOIL": {"asset_class":"commodity","provider":"histdata","symbol":"BCOUSD"},
+    "XAG": {"asset_class":"commodity","provider":"histdata","symbol":"XAGUSD"},
+    "XAU": {"asset_class":"commodity","provider":"histdata","symbol":"XAUUSD"},
+    "SPX": {"asset_class":"index","provider":"histdata","symbol":"SPXUSD","proxy_for":"SPX"}
   }
 }
